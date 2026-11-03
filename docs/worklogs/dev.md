@@ -2825,3 +2825,23 @@ Assigned after 8b2 merged (fd3f05f). The lead asked for a section stepped at bot
   (c2m1); renamed to c2m1, since in the real c3m1 the Clanners kill the
   bases before a second repair. A discoveries.md line for players.
 - The aim cone (Weapon::aim 0x4b36e0, cos 0.89) is next, as Owen decided.
+
+## Pirate's Moon zSound, pm-map step 7a (2026-11-03, mac4/pm-sound)
+
+- From mac5/pm (dfaf157e). PM's sounds.zrd reader is a rewrite (sets by
+  name in std::lists, INCLUDE_SETS, COMPILE_FORMAT, QPRIORITY, a 3-item step
+  over keywords), sets load by count and are found in any case, the queue
+  plays oldest first, unpause resumes only what played (MW3's FIX), 4
+  duplicates, 345 m/s, the range scale (0.5 at low object detail), CD mode
+  3 loops. Forked through zgame::Table (its own block); the rest of zSound
+  pairs with MW3's (sound.md, Pirate's Moon has the table and the 16 gone).
+- Shared changes, MW3's behaviour unmoved: Set::sounds a deque, State's PM
+  fields, the by-name wrappers skip a missing set, mw3_ names behind
+  dispatchers, resume_voice / path_find / load_from_archive /
+  clear_position out of their anonymous namespaces.
+- test_pm_sound.py: test_sound's harness on PM's exe at its own addresses
+  (a PmCpu with the map only for the import slots), sounds.zrd's tree built
+  in the emulator, MW3's probe in pmprobe with PM's table and the fixes
+  off; variants through a temporary v2 reader.zbd mounted before the
+  install. run_exit.py prints nothing for a SystemExit message, so the
+  break runs used a runner that prints it.

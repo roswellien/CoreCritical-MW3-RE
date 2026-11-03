@@ -11,12 +11,17 @@
 #include "pm/gamez/zeffect/zeff_anim_init.h"
 #include "pm/gamez/zreader/zrdr_main.h"
 #include "pm/gamez/zutil/zutl_zar.h"
+#include "pm/gamez/zsound/zsnd.h"
 
 namespace pm {
 namespace {
 const zgame::Table kPm = {"Pirate's Moon", "Pirate's Moon 1.0", zar::read_table, zar::write_table, zar::span,
                          zrdr::parse_text, zcls::read_zbd, zcls::node_alloc, zcls::node_set_active,
-                         zcls::light_create, zeff::anim_read_zbd};
+                         zcls::light_create, zeff::anim_read_zbd,
+                         // zsound (pm-map step 7a)
+                         zsnd::load, zsnd::shutdown, zsnd::load_set, zsnd::unload_set, zsnd::find_set,
+                         zsnd::unload_all, zsnd::free_sets, zsnd::queue_push, zsnd::cd_notify,
+                         zsnd::resume_snapshot};
 }  // namespace
 
 const zgame::Table& table() { return kPm; }

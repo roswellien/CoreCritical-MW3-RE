@@ -4,6 +4,7 @@
 
 #include "crt/msvc_rand.h"
 #include "gamez/zerror/zerr.h"
+#include "gamez/zgame/zgame_table.h"
 #include "gamez/zreader/zreader.h"
 #include "platform/platform.h"
 
@@ -12,7 +13,6 @@ namespace zsnd_cd {
 namespace {
 const char kFile[] = "C:\\zipper\\GameZMech3\\zSound\\zsnd_cd.cpp";
 constexpr uint32_t kOpen = 2;
-constexpr int kNotifySuccessful = 1;  // MCI_NOTIFY_SUCCESSFUL
 
 State g_state;
 platform::Files* g_files = nullptr;
@@ -20,14 +20,6 @@ platform::MusicOutput* g_output = nullptr;
 std::string g_dir = "music";
 
 bool is_open() { return (g_state.flags & kOpen) != 0; }
-
-// 0x005728b0: forget the position. (The original also clears the paused
-// minute/second, which the rebuild leaves to MusicOutput.)
-void clear_position() {
-  g_state.last_track = 0;
-  g_state.track = 0;
-  g_state.end_track = 0;
-}
 
 // Every MCI failure in the original goes through 0x00574660 with its line number.
 bool fail(int line, const char* what) {
@@ -43,6 +35,14 @@ bool start(int track) {
 }  // namespace
 
 State& state() { return g_state; }
+
+// Mech3.exe 1.2 @ 0x005728b0: forget the position. (The original also clears
+// the paused minute/second, which the rebuild leaves to MusicOutput.)
+void clear_position() {
+  g_state.last_track = 0;
+  g_state.track = 0;
+  g_state.end_track = 0;
+}
 
 // Mech3.exe 1.2 @ 0x00572450 (the loop after the MCI setup). The original builds
 // each cue with operator new/_strdup and appends it to the list at 0x0072c4fc.
@@ -167,9 +167,11 @@ bool resume(int mode) {
   return true;
 }
 
+void notify(int status) { zgame::game().zsnd_cd_notify(status); }
+
 // Mech3.exe 1.2 @ 0x00572bf0. When a looping track's range finishes, play it again.
 // (The original also checks the notifying device is the CD.)
-void notify(int status) {
+void mw3_notify(int status) {
   if (!is_open()) return;
   if (g_state.mode != Loop && g_state.mode != Restart) return;
   if (status != kNotifySuccessful) return;

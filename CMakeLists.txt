@@ -577,6 +577,11 @@ if(MW3_BUILD_PM)
     src/pm/gamez/zimage/zimg_texture.cpp
     src/pm/gamez/zmodel/gmod_matl.cpp
     src/pm/gamez/zmodel/gmod_const.cpp
+    # zsound (pm-map step 7a)
+    src/pm/gamez/zsound/zsnd_init.cpp
+    src/pm/gamez/zsound/zsnd_parm.cpp
+    src/pm/gamez/zsound/zsnd_play.cpp
+    src/pm/gamez/zsound/zsnd_cd.cpp
   )
   target_link_libraries(pmcore PUBLIC mw3core)
   if(NOT MSVC)
@@ -598,6 +603,8 @@ if(MW3_BUILD_PM)
   set_target_properties(pmcore PROPERTIES POSITION_INDEPENDENT_CODE ON)
   add_library(pmprobe SHARED tests/probe_pm.cpp)
   target_link_libraries(pmprobe PRIVATE pmcore mw3core)
+  # zsound (pm-map step 7a): MW3's sound probe on PM's table (test_pm_sound.py)
+  target_sources(pmprobe PRIVATE tests/probe_sound.cpp tests/probe_pm_sound.cpp)
 endif()
 
 # The SDL3 front end and the programs on it.

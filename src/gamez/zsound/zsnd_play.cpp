@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "gamez/zerror/zerr.h"
+#include "gamez/zgame/zgame_table.h"
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zutil/zfix.h"
 #include "gamez/zutil/ztimer.h"
@@ -38,7 +39,7 @@ Voice* free_voice(Sound* s) {
     out()->get_status(v->buffer, &st);
     if (!(st & SO::kStatusPlaying)) return v;
   }
-  if (static_cast<int>(s->dups.size()) >= kMaxDuplicates) return nullptr;
+  if (static_cast<int>(s->dups.size()) >= state().max_duplicates) return nullptr;
   auto* v = new Voice;
   if (out()->duplicate_buffer(s->voice.buffer, &v->buffer) != 0) {
     delete v;
@@ -84,9 +85,15 @@ Voice* play_raw(Sound* s, const float* pos, float volume, const float* vel, uint
   return play_ds(s, volume_db(volume), pos, vel, start);
 }
 
-// 0x0056e750 (ECX sound, EDX position, volume, velocity, start): a QUEUE line
-// waits, newest first, until its QUEUE seconds run out.
+}  // namespace
+
 void queue_push(Sound* s, const float* pos, float volume, const float* vel, uint32_t start) {
+  zgame::game().zsnd_queue_push(s, pos, volume, vel, start);
+}
+
+// Mech3.exe 1.2 @ 0x0056e750 (ECX sound, EDX position, volume, velocity,
+// start): a QUEUE line waits, newest first, until its QUEUE seconds run out.
+void mw3_queue_push(Sound* s, const float* pos, float volume, const float* vel, uint32_t start) {
   State& st = state();
   auto* q = new Queued;
   q->volume = volume;
@@ -99,6 +106,8 @@ void queue_push(Sound* s, const float* pos, float volume, const float* vel, uint
   q->expires = s->queue_life + st.queue_clock;
   st.queue->push_front(q);  // 0x00555ec0
 }
+
+namespace {
 
 // 0x0056ee20 (ECX the record, EDX voice): fills the record only for a sound's
 // voice; the record keeps what it held otherwise.
@@ -115,6 +124,8 @@ void record_voice(Record& r, Voice* v) {
   }
 }
 
+}  // namespace
+
 // 0x0056f010 (ECX sound + 4, EDX voice, restart, volume change).
 void resume_voice(Sound* s, Voice* v, int32_t restart, int32_t delta) {
   int32_t hr;
@@ -130,6 +141,8 @@ void resume_voice(Sound* s, Voice* v, int32_t restart, int32_t delta) {
   hr = out()->play(v->buffer, s->flags & kLooped);
   if (hr != 0) ds_error(hr, kFile, 0x59d);
 }
+
+namespace {
 
 // 0x0056eea0 (ECX sound, EDX restart, the master volume's change): plays the
 // sound's own voice again and every duplicate not at 0 dB, whether they were
@@ -329,7 +342,9 @@ int32_t stop_snapshot(Snapshot* l) {
 // change since added to each.
 // FIX (bug): only the voices that were playing resume, each once and from where
 // it stopped (the exe replays every voice of the sound, finished ones from the start).
-int32_t resume_snapshot(Snapshot* l) {
+int32_t resume_snapshot(Snapshot* l) { return zgame::game().zsnd_resume_snapshot(l); }
+
+int32_t mw3_resume_snapshot(Snapshot* l) {
   const float delta = state().master() - l->front().master;
   if (zfix::options().bugs) {
     std::vector<Voice*> done;

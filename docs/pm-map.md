@@ -585,6 +585,31 @@ functions PM changed, and PM's new ones.
    briefing screens; no movies (zFMV's 21 ported functions are gone).
 7. **Sound and the HUD**: the sound syntax reader (rewritten smaller), the
    HUD objectives, spot and headlights.
+   - **zSound (7a): done** (2026-11-03, `src/pm/gamez/zsound`, through PM's
+     `zgame::Table`; docs/sound.md, Pirate's Moon):
+     - Forked: of the port's 22 changed, 6 (the load 0x005705e0 and the
+       reader 0x00570af0, PM's 0x00591840 / 0x00591900 / 0x005920e0 /
+       0x00592170; shutdown 0x00570510; load_set 0x0056fbf0, counted;
+       free_sets 0x0056f5c0; the CD notify 0x00572bf0, mode 3 loops the
+       disc); of the 5 with other offsets, unload_all 0x0056f540; of the 16
+       gone, the twins of 0x0056f130 (unpause: only what played), 0x0056f680
+       (find a set in any case) and 0x0056fe00 (unload by count); the queue
+       0x0056e750 (oldest first, by QPRIORITY; a helper in the port before);
+       and PM's own make-a-set 0x00590ae0, range scale 0x00591830 and
+       statics (345 m/s, 4 duplicates).
+     - The other 16 changed are the same logic: the A3D branch, cdecl for
+       MW3's ECX and EDX, the error reports' lines, std::list where MW3 had
+       a vector; the other 4 with other offsets read PM's larger set; the
+       other 13 gone are in sound.md.
+     - Shared types: `Set::sounds` a deque (PM adds sounds to a set already
+       made), `State`'s PM fields (range scale, default queue priority,
+       COMPILE_FORMAT, duplicates), `kQPriority`.
+     - Test: `test_pm_sound.py` (PM's exe at its own addresses, MW3's probe
+       in pmprobe with PM's table), with breaks; MW3's test_sound,
+       test_sound_extra and test_cockpit_sound unchanged.
+     - Left: mw3pm's start calls `pm::zsnd::statics()` after
+       `zgame::set_game` when it opens sound; the game's callers of the range
+       scale (0x00482ca0, 0x00408120) come with the mission and options.
 8. **Multiplayer**: PM's game types (Mw3 dev has multiplayer).
 
 The `mw3pm` program, its own mount of PM's install and its own settings

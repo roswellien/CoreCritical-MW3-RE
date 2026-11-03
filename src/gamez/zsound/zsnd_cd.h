@@ -55,7 +55,11 @@ bool play(int mode);                // 0x00572b40
 bool stop();                        // 0x00572c30
 bool pause();                       // 0x00572c90
 bool resume(int mode);              // 0x00572d70
-void notify(int status);            // 0x00572bf0, MM_MCINOTIFY
+// MM_MCINOTIFY: the running game's (zgame::Table); PM's loops mode 3 too.
+void notify(int status);
+void mw3_notify(int status);        // 0x00572bf0
+void clear_position();              // 0x005728b0
+constexpr int kNotifySuccessful = 1;  // MCI_NOTIFY_SUCCESSFUL
 int cue_track(const std::string& name);  // 0x00572a30
 void set_volume(uint16_t left, uint16_t right);  // 0x00572f80
 

@@ -4,6 +4,7 @@
 // list, load and unload, find) have no string of their own and are kept here.
 #include <cstring>
 
+#include "gamez/zgame/zgame_table.h"
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zutil/zutl_zar.h"
@@ -13,6 +14,8 @@ namespace zsnd {
 namespace {
 const char kFile[] = "C:\\zipper\\GameZMech3\\zSound\\zsnd_parm.cpp";
 platform::SoundOutput* out() { return hooks().output; }
+WaveAliasHook g_alias = nullptr;
+}  // namespace
 
 // 0x005762b0 on the SOUND_PATH list (0x00576100): the file part of `name` in
 // the first directory that has it. The list is LIFO, so the last directory of
@@ -42,8 +45,7 @@ std::string path_find(const char* name) {
   return "";
 }
 
-WaveAliasHook g_alias = nullptr;
-
+namespace {
 // The alias hook's sound for `name`, when the archive lacks it and no loose
 // file has it (ours; set_wave_alias_hook).
 void read_alias(Wave& w, zutl_zar::Archive& a, const char* name) {
@@ -59,6 +61,7 @@ void read_alias(Wave& w, zutl_zar::Archive& a, const char* name) {
   src.path = name;
   w = std::move(src);
 }
+}  // namespace
 
 // 0x0056ffc0: every sound of the set not loaded yet, from the open archive.
 int32_t load_from_archive(Set* set, zutl_zar::Archive& a) {
@@ -73,7 +76,6 @@ int32_t load_from_archive(Set* set, zutl_zar::Archive& a) {
   }
   return 1;
 }
-}  // namespace
 
 // Mech3.exe 1.2 @ 0x0056f280 (ECX voice): pitch between the sound's
 // frequency range, t from 0 to 1.
@@ -134,21 +136,32 @@ void* user_data(Object* obj) {
 // Mech3.exe 1.2 @ 0x0056f4b0: 0 skips the archives (loose files only).
 void set_archives(int32_t on) { state().archives_on = on; }
 
-// Mech3.exe 1.2 @ 0x0056f520
-void load_set(const char* name) { load_set(find_set(name)); }
+// Mech3.exe 1.2 @ 0x0056f520 (PM's 0x005908f0). A name no set has does
+// nothing: MW3's load_set takes the null, PM's (no null check) is not called.
+void load_set(const char* name) {
+  if (Set* s = find_set(name)) load_set(s);
+}
 
-// Mech3.exe 1.2 @ 0x0056f530
-void unload_set(const char* name) { unload_set(find_set(name)); }
+// Mech3.exe 1.2 @ 0x0056f530 (PM's 0x00590920)
+void unload_set(const char* name) {
+  if (Set* s = find_set(name)) unload_set(s);
+}
+
+int32_t unload_all() { return zgame::game().zsnd_unload_all(); }
+void free_sets(FreeFn fn) { zgame::game().zsnd_free_sets(fn); }
+Set* find_set(const char* name) { return zgame::game().zsnd_find_set(name); }
+int32_t load_set(Set* set) { return zgame::game().zsnd_load_set(set); }
+int32_t unload_set(Set* set) { return zgame::game().zsnd_unload_set(set); }
 
 // Mech3.exe 1.2 @ 0x0056f540
-int32_t unload_all() {
+int32_t mw3_unload_all() {
   for (Set* s : state().sets) unload_set(s);
   return 1;
 }
 
 // Mech3.exe 1.2 @ 0x0056f5c0 (ECX function for each sound's user data),
 // with 0x005700a0 and 0x0056f990.
-void free_sets(FreeFn fn) {
+void mw3_free_sets(FreeFn fn) {
   State& st = state();
   unload_all();
   for (Set* set : st.sets) {
@@ -175,7 +188,7 @@ Set* set_at(int32_t i) {
 int32_t set_count() { return static_cast<int32_t>(state().sets.size()); }
 
 // Mech3.exe 1.2 @ 0x0056f680
-Set* find_set(const char* name) {
+Set* mw3_find_set(const char* name) {
   for (Set* s : state().sets)
     if (s->name == name) return s;
   return nullptr;
@@ -204,7 +217,7 @@ void set_wave_alias_hook(WaveAliasHook hook) { g_alias = hook; }
 // or the next one that opens: soundsM.zbd is not shipped, so medium loads
 // soundsL.zbd. The primary buffer takes that archive's playback format. Sounds
 // still missing are looked for as loose files, then the subsets load.
-int32_t load_set(Set* set) {
+int32_t mw3_load_set(Set* set) {
   static const char* const kArchives[3] = {"soundsH.zbd", "soundsM.zbd", "soundsL.zbd"};
   State& st = state();
   zutl_zar::Archive a;
@@ -254,7 +267,7 @@ int32_t load_set(Set* set) {
 
 // Mech3.exe 1.2 @ 0x0056fe00. Unloads the subsets too, even when another
 // loaded set shares them.
-int32_t unload_set(Set* set) {
+int32_t mw3_unload_set(Set* set) {
   if (!set || !set->loaded) return 0;
   for (Sound& s : set->sounds) {
     drop_queued(&s);

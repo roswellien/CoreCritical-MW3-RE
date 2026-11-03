@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <list>
 #include <string>
 #include <vector>
@@ -63,6 +64,7 @@ struct Format {
 enum : uint32_t {
   kLooped = 0x1, kPurgeable = 0x2, k3D = 0x4, kLoaded = 0x8, kVoice = 0x10, kFrequency = 0x20,
   kHardware = 0x40, kCreated = 0x80, kStream = 0x100, kQueue = 0x200,
+  kQPriority = 0x1c00,  // PM only: QPRIORITY 0..7 (bits 10-12), the queue's order
 };
 
 using CueFn = void (*)(uint32_t index, Sound* sound);  // ECX index, EDX sound
@@ -88,17 +90,19 @@ struct Sound : Object {
   std::vector<float> cue_at;        // +0x44  game time of each, set by play
   std::vector<uint32_t> cue_bytes;  // +0x48  byte offset of each (8-byte slots)
   Voice voice;                 // +0x4c
-  std::vector<Voice*> dups;    // +0x94 count, +0x98  duplicates, at most kMaxDuplicates
+  std::vector<Voice*> dups;    // +0x94 count, +0x98  duplicates, at most State::max_duplicates
   Format formats[3];           // +0x9c  HIGH, MED, LOW
   void* user = nullptr;        // +0xcc  the load callback's result
 };
 
-// A named set of sounds (0x18 bytes), loaded and unloaded together.
+// A named set of sounds (0x18 bytes; PM's 0x20, its sounds and subsets in
+// std::lists), loaded and unloaded together. A deque: PM's reader adds sounds
+// to a set already made, and their addresses must stay (docs/sound.md, PM).
 struct Set {
-  std::string name;            // +0x00
-  std::vector<Sound> sounds;   // +0x04 count, +0x08
-  int32_t loaded = 0;          // +0x0c
-  std::vector<Set*> subsets;   // +0x10 count, +0x14  SUB_SET, null when not found
+  std::string name;            // +0x00  (PM +0x0c)
+  std::deque<Sound> sounds;    // +0x04 count, +0x08  (PM +0x04 list, +0x08 count)
+  int32_t loaded = 0;          // +0x0c  MW3 0 or 1; PM a count of loads (+0x10)
+  std::vector<Set*> subsets;   // +0x10 count, +0x14  SUB_SET, null when not found (PM +0x18 list, +0x1c)
 };
 
 // One step of a group (0x1c bytes): a sound, possibly followed by more (+0x18).
@@ -174,7 +178,6 @@ using Snapshot = std::list<Record>;
 using LoadFn = void* (*)(Object* obj, zrdr::Node* node);  // ECX object, EDX its data
 using FreeFn = void (*)(Object* obj, void* user);         // ECX object, EDX what LoadFn made
 
-constexpr int kMaxDuplicates = 7;  // [0x005efba8]: 8 voices per sound
 
 struct State {
   int32_t initialized = 0;     // 0x0072c2c0
@@ -212,7 +215,7 @@ struct State {
   uint32_t cue_index = 0;      // 0x0072c4b4
   uint32_t cue_limit = 999;    // 0x0072c4b8
   float queue_clock = 0.0f;    // 0x0072c4bc
-  std::list<Queued*>* queue = nullptr;  // 0x0072c4c0  newest first
+  std::list<Queued*>* queue = nullptr;  // 0x0072c4c0  MW3 newest first; PM oldest first, by QPRIORITY
   Voice* queued = nullptr;     // 0x0072c4c4  the queued line playing
   float queue_next = 0.0f;     // 0x0072c4c8  no queued line before this
   void* (*subtitle_hook)(zrdr::Node* node) = nullptr;  // 0x0072c4cc, never set
@@ -227,8 +230,15 @@ struct State {
   int32_t finished_count = 0;  // 0x0072c518
   std::vector<Set*> sets;      // 0x0072c2ac
   int32_t archives_on = 1;     // 0x005efc2c  0x0056f4b0
+  int32_t max_duplicates = 7;  // [0x005efba8]: 8 voices per sound (PM's [0x00613188]: 4, 5 voices)
   float speed_of_sound = 343.0f;      // 0x005efd98
   float inv_speed_of_sound = 1.0f / 343.0f;  // 0x005efd9c
+  // PM only (docs/sound.md, Pirate's Moon):
+  float range_scale = 1.0f;    // 0x00613488  RANGE times this; 0.5 at the lowest object detail
+  int32_t default_qpriority = 0;  // 0x008c1af0  DEFAULT_QUEUE_PRIORITY
+  // 0x0061324c  COMPILE_FORMAT: each sound's HIGH, MED, LOW to start with;
+  // the image's values are MW3's built-in ones (0x00570af0).
+  Format compile[3] = {{"", 44100, 16, 2}, {"", 22050, 16, 1}, {"", 11025, 8, 1}};
 };
 
 State& state();
@@ -252,8 +262,11 @@ int32_t quality(int32_t lod);                        // 0x00570280
 int32_t set_primary_format(const int32_t* quality);  // 0x005702a0
 void stop_queue(int32_t stop_playing);               // 0x00570410
 void drop_queued(Sound* sound);                      // 0x00570490
-int32_t shutdown();                                  // 0x00570510
-int32_t load(uint32_t window, const char* name, LoadFn fn, int32_t demo);  // 0x005705e0
+// shutdown, load: the running game's (zgame::Table); mw3_ is MW3's.
+int32_t shutdown();
+int32_t mw3_shutdown();                              // 0x00570510
+int32_t load(uint32_t window, const char* name, LoadFn fn, int32_t demo);  // PM: no demo
+int32_t mw3_load(uint32_t window, const char* name, LoadFn fn, int32_t demo);  // 0x005705e0
 int32_t read_syntax2(zrdr::Node* root, LoadFn fn, int32_t demo);  // 0x00570af0
 int32_t open_device();                               // 0x00571460
 
@@ -272,6 +285,10 @@ void set_speed_of_sound(float v);                    // 0x00572370
 
 // zsnd_play.cpp
 void frame(int32_t a3d_flush, int32_t advance);      // 0x0056dfb0
+// A QUEUE line waits (ECX sound, EDX position, volume, velocity, start): the
+// running game's; MW3's puts it first.
+void queue_push(Sound* s, const float* pos, float volume, const float* vel, uint32_t start);
+void mw3_queue_push(Sound* s, const float* pos, float volume, const float* vel, uint32_t start);  // 0x0056e750
 VoiceBase* play(Object* obj, float volume);          // 0x0056e3d0
 int32_t volume_db(float linear);                     // 0x0056e410
 VoiceBase* play_at(Object* obj, const float* pos, float volume, const float* vel);  // 0x0056e7e0
@@ -279,7 +296,10 @@ int32_t status(VoiceBase* voice);                    // 0x0056e8e0  1 playing, 0
 int32_t stop(VoiceBase* voice);                      // 0x0056e9f0
 Snapshot* snapshot();                                // 0x0056eb10
 int32_t stop_snapshot(Snapshot* s);                  // 0x0056f0a0
-int32_t resume_snapshot(Snapshot* s);                // 0x0056f130
+int32_t resume_snapshot(Snapshot* s);                // the running game's (zgame::Table)
+int32_t mw3_resume_snapshot(Snapshot* s);            // 0x0056f130
+// 0x0056f010 (ECX sound + 4, EDX voice, restart, the volume's change in dB/100).
+void resume_voice(Sound* s, Voice* v, int32_t restart, int32_t delta);
 int32_t free_snapshot(Snapshot* s);                  // 0x0056f190
 bool muted();                                        // 0x0056f210
 float set_volume(float v);                           // 0x0056f260  the master volume
@@ -292,19 +312,29 @@ int32_t lock(VoiceBase* voice);                      // 0x0056f3f0
 int32_t unlock(VoiceBase* voice);                    // 0x0056f410
 void* user_data(Object* obj);                        // 0x0056f430
 void set_archives(int32_t on);                       // 0x0056f4b0
+// The sets: unload_all, free_sets, find_set, load_set and unload_set (of a
+// Set) are the running game's (zgame::Table); mw3_ is MW3's.
 void load_set(const char* name);                     // 0x0056f520
 void unload_set(const char* name);                   // 0x0056f530
-int32_t unload_all();                                // 0x0056f540
-void free_sets(FreeFn fn);                           // 0x0056f5c0
+int32_t unload_all();
+int32_t mw3_unload_all();                            // 0x0056f540
+void free_sets(FreeFn fn);
+void mw3_free_sets(FreeFn fn);                       // 0x0056f5c0
 Set* set_at(int32_t i);                              // 0x0056f630
 int32_t set_count();                                 // 0x0056f660
-Set* find_set(const char* name);                     // 0x0056f680
+Set* find_set(const char* name);
+Set* mw3_find_set(const char* name);                 // 0x0056f680
 Object* find(const char* name);                      // 0x0056f6f0
 const char* name_of(Object* obj);                    // 0x0056f740
-int32_t load_set(Set* set);                          // 0x0056fbf0
-int32_t unload_set(Set* set);                        // 0x0056fe00
+int32_t load_set(Set* set);
+int32_t mw3_load_set(Set* set);                      // 0x0056fbf0
+int32_t unload_set(Set* set);
+int32_t mw3_unload_set(Set* set);                    // 0x0056fe00
 Sound* set_sound(Set* set, int32_t i);               // 0x0056fe70
 Sound* find_in_set(Set* set, const char* name);      // 0x0056fea0
+// 0x005762b0 on SOUND_PATH: the file in the first directory that has it, "" for none.
+std::string path_find(const char* name);
+int32_t load_from_archive(Set* set, zutl_zar::Archive& a);  // 0x0056ffc0
 
 // zsnd_grp.cpp
 void groups_reset();                                 // 0x00573270

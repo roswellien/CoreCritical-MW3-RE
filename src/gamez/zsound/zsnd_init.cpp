@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "gamez/zerror/zerr.h"
+#include "gamez/zgame/zgame_table.h"
 #include "gamez/zreader/zreader.h"
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zsound/zsnd_cd.h"
@@ -99,6 +100,7 @@ int32_t init(uint32_t window) {
   st.queued = nullptr;
   st.subtitle_hook = nullptr;
   st.can_play_hook = nullptr;
+  st.range_scale = 1.0f;  // PM's 0x005912a0 (MW3 has no scale)
   return 1;
 }
 
@@ -163,9 +165,14 @@ void drop_queued(Sound* sound) {
   }
 }
 
+int32_t shutdown() { return zgame::game().zsnd_shutdown(); }
+int32_t load(uint32_t window, const char* name, LoadFn fn, int32_t demo) {
+  return zgame::game().zsnd_load(window, name, fn, demo);
+}
+
 // Mech3.exe 1.2 @ 0x00570510. After close_device the device calls do nothing
 // (they check the open flag).
-int32_t shutdown() {
+int32_t mw3_shutdown() {
   State& st = g_state;
   stop_queue(0);
   delete st.queue;
@@ -190,7 +197,7 @@ int32_t shutdown() {
 // demo flag). Opens DirectSound, reads the file, then its SYNTAX: 2 is the
 // shipped one. The older syntax 1 reader (0x005706f0) is not ported; no data
 // uses it (docs/sound.md).
-int32_t load(uint32_t window, const char* name, LoadFn fn, int32_t demo) {
+int32_t mw3_load(uint32_t window, const char* name, LoadFn fn, int32_t demo) {
   State& st = g_state;
   if (st.open || !st.initialized) return 0;
   if (window) st.window = window;

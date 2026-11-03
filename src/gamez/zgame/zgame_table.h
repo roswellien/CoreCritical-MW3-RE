@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <list>
 
 namespace zutl_zar {
 struct Archive;
@@ -11,6 +12,12 @@ struct Node;
 }
 namespace zcls {
 struct Node;
+}
+namespace zsnd {
+struct Object;
+struct Record;
+struct Set;
+struct Sound;
 }
 
 // Ours, not the exe's: which game the shared engine runs (docs/games-layout.md).
@@ -42,6 +49,22 @@ struct Table {
   zcls::Node* (*zcls_light_create)();                    // 0x004fa720; PM 0x0050e470
   // A mission's anim.zbd (zeff/zeff_anim_init.h): PM's is version 50.
   int (*zeff_anim_read_zbd)();  // 0x0050a0e0; PM 0x00523140
+  // zsound (pm-map step 7a; zsnd.h, zsnd_cd.h): PM's reads sounds.zrd
+  // anew (sets made by name, INCLUDE_SETS, COMPILE_FORMAT, QPRIORITY), counts
+  // a set's loads, finds sets in any case, queues lines oldest first and
+  // loops the whole disc in CD mode 3.
+  int32_t (*zsnd_load)(uint32_t window, const char* name, void* (*fn)(zsnd::Object*, zrdr::Node*),
+                       int32_t demo);                              // 0x005705e0; PM 0x00591840
+  int32_t (*zsnd_shutdown)();                                      // 0x00570510; PM 0x00591700
+  int32_t (*zsnd_load_set)(zsnd::Set* set);                        // 0x0056fbf0; PM 0x00590d70
+  int32_t (*zsnd_unload_set)(zsnd::Set* set);                      // 0x0056fe00; PM 0x00590f80
+  zsnd::Set* (*zsnd_find_set)(const char* name);                   // 0x0056f680; PM 0x00590a20
+  int32_t (*zsnd_unload_all)();                                    // 0x0056f540; PM 0x00590950
+  void (*zsnd_free_sets)(void (*fn)(zsnd::Object*, void*));        // 0x0056f5c0; PM 0x00590990
+  void (*zsnd_queue_push)(zsnd::Sound* s, const float* pos, float volume, const float* vel,
+                          uint32_t start);                         // 0x0056e750; PM 0x0058fb60
+  void (*zsnd_cd_notify)(int status);                              // 0x00572bf0; PM 0x005938c0
+  int32_t (*zsnd_resume_snapshot)(std::list<zsnd::Record>* s);     // 0x0056f130; PM 0x00590530
 };
 
 const Table& mw3_table();
