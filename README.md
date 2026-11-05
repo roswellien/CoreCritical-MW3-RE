@@ -23,6 +23,9 @@ original.
 
 **Coming in the next release** (fixed, not released yet):
 
+- **Linux:** the game no longer closes at the end of the intro movies.
+- **Crashes say why:** a crash or a failed start now leaves a line in the log
+  and shows a message box, on every platform.
 - **Windows:** the installer asks for a folder every time, so you can install
   somewhere other than C.
 - **Vehicles on fast machines:** small bumps throw them much less. On rough
