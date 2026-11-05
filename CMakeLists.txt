@@ -30,7 +30,7 @@ if(NOT MW3_BUILD_NUMBER)
 endif()
 
 if(MSVC)
-  add_compile_options(/W4)
+  add_compile_options(/W4 "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")  # build.cmd's own flags replace CMake's default
 else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
