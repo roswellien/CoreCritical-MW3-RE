@@ -4027,7 +4027,8 @@ TEST(launcher_first_start_notes) {
   if (counts) {
     EXPECT(v10[0].find("No music yet") != std::string::npos && v10[0].find("ADD FROM MY DISC") != std::string::npos &&
            v10[0].find("in M as track02") != std::string::npos && v10[0].find("movies") == std::string::npos);
-    EXPECT(odd[0].find("neither") != std::string::npos && odd[0].find("patch") == std::string::npos &&
+    EXPECT(odd[0].find("modded") != std::string::npos && odd[0].find("data mods") != std::string::npos &&
+           odd[0].find("Mech3.exe") != std::string::npos && odd[0].find("1.2") == std::string::npos &&
            odd[0].find("SETUP") == std::string::npos);  // the 1.2 patch is built in now
     EXPECT(cd[0].find("no movies") != std::string::npos && cd[0].find("ADD FROM MY DISC") != std::string::npos &&
            cd[0].find("music") == std::string::npos);

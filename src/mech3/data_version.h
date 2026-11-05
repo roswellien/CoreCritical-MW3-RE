@@ -37,4 +37,9 @@ DataVersion detect_data_version();  // through zutl's mounts
 // of the 28), -1 (missing).
 int data_file_version(const char* path);
 
+// What a player is told when files are neither 1.0's nor 1.2's (Owen, 2026-11-04:
+// a mod for the original may well work, so say so; none of this stops the game).
+// `files`, when given: the names, in brackets after "another version".
+std::string mod_note(const std::string& files = "");
+
 }  // namespace mech3

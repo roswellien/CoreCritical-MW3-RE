@@ -530,10 +530,8 @@ std::string vfw_helper_path(const std::string& given) {
 }
 
 #if defined(_WIN32)
-constexpr const char* kSelf = "mw3.exe";
 constexpr const char* kImporter = "mw3import.exe";
 #else
-constexpr const char* kSelf = "mw3";
 constexpr const char* kImporter = "mw3import";
 #endif
 
@@ -541,8 +539,6 @@ constexpr const char* kImporter = "mw3import";
 // 1.2's, and no music. Lines for a box; flat() makes one for the log.
 std::vector<std::string> start_notes(const mech3::DataVersion& d, const std::string& write_dir) {
   std::vector<std::string> out;
-  const std::string patch = std::string("If you have the official 1.2 patch, start once with:\n    ") + kSelf +
-                            " --patch \"<the patch's ZIP or folder>\"\nYour install is not changed (README.txt).";
   auto list = [](const std::vector<std::string>& v) {
     std::string s;
     for (size_t i = 0; i < v.size() && i < 6; ++i) s += (i ? ", " : "") + v[i];
@@ -551,8 +547,7 @@ std::vector<std::string> start_notes(const mech3::DataVersion& d, const std::str
   };
   // 1.0's data and a mix need no note: they load as 1.2 (docs/patch12.md).
   if (d.name == "unknown")
-    out.push_back("Some MechWarrior 3 files are neither version 1.0's nor 1.2's (another version or a mod): " + list(d.unknown) +
-                  ". They may not play right. " + patch);
+    out.push_back(mech3::mod_note(list(d.unknown)));
   else if (d.name == "incomplete")
     out.push_back("Some MechWarrior 3 files are missing from the install: " + list(d.unknown) +
                   ". Reinstall MechWarrior 3 from its disc.");
