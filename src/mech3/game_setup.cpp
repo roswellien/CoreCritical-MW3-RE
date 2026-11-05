@@ -100,8 +100,7 @@ Result install_from_disc(const std::string& source, const std::string& out_dir, 
                                 : " The disc's " + std::to_string(d.music) + " music tracks were added too.";
     if (r.version == "1.0") r.warnings.push_back("This is version 1.0. Applying the official 1.2 patch is recommended.");
     if (r.version == "unknown")
-      r.warnings.push_back("Some of its files are not the ones on the MechWarrior 3 1.0 disc, so this may be "
-                           "another release or a modified copy. It may still play.");
+      r.warnings.push_back(mod_note());
     for (const std::string& w : d.warnings)
       if (w.rfind("music: ", 0) == 0) r.warnings.push_back("The music could not be copied: " + w.substr(7) + ".");
     return r;
