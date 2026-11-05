@@ -33,7 +33,9 @@ struct Bytes {
             f64(i % 5 == 0 ? 1 : 0);
     }
 };
-inline std::string mesh(unsigned version, uint32_t color = 0xffffffff) {
+inline std::string mesh(unsigned version, uint32_t color = 0xffffffff,
+                        std::array<float, 3> normal = {0, 0, 1}, bool mirrored_uv = false,
+                        bool degenerate_uv = false, bool rank_one_uv = false) {
     Bytes out;
     out.value = std::string("BWMESH") + char('0' + version) + '\0';
     out.u32(1);
@@ -67,8 +69,18 @@ inline std::string mesh(unsigned version, uint32_t color = 0xffffffff) {
     for (const auto &vertex : {platform::prepared::Vertex{-1, -1, 2, 0, 0, 1, 0, 0},
                                platform::prepared::Vertex{1, -1, 2, 0, 0, 1, 1, 0},
                                platform::prepared::Vertex{0, 1, 2, 0, 0, 1, .5f, 1}})
-        for (float value : vertex)
+        for (unsigned i = 0; i < vertex.size(); ++i) {
+            float value = vertex[i];
+            if (i >= 3 && i < 6)
+                value = normal[i - 3];
+            if (i == 6 && mirrored_uv)
+                value = 1.f - value;
+            if (i >= 6 && degenerate_uv)
+                value = 0;
+            if (i == 7 && rank_one_uv)
+                value = 0;
             out.f32(value);
+        }
     return out.value;
 }
 inline std::string textures() {
@@ -85,6 +97,26 @@ inline std::string textures() {
     out.value += char(0xf8);
     out.value += char(0xe0);
     out.value += char(7);
+    return out.value;
+}
+inline std::string normals(uint32_t rgba = 0xffff8080, bool absent = false) {
+    Bytes out;
+    out.value.assign("BWNRM2\0\0", 8);
+    out.u32(1);
+    out.u32(absent ? 0 : 1);
+    out.u32(absent ? platform::prepared::no_normal : 0);
+    if (!absent) {
+        out.name("authored");
+        out.u32(1);
+        out.u32(1);
+        uint64_t hash = 0xcbf29ce484222325ULL;
+        for (unsigned shift = 0; shift < 32; shift += 8) {
+            hash ^= uint8_t(rgba >> shift);
+            hash *= 0x100000001b3ULL;
+        }
+        out.u64(hash);
+        out.u32(rgba);
+    }
     return out.value;
 }
 } // namespace prepared_fixture

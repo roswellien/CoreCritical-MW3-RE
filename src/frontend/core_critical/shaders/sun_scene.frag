@@ -4,9 +4,9 @@
 // alpha) and alpha test. Unmodelled states are refused on the host before a draw reaches this shader.
 layout(location=0) in vec2 uvPerspective;
 layout(location=1) noperspective in vec2 uvAffine;
-layout(location=2) noperspective in vec4 colorSmooth;
+layout(location=2) in vec4 colorSmooth;
 layout(location=3) flat in vec4 colorFlat;
-layout(location=4) noperspective in vec4 specularSmooth;
+layout(location=4) in vec4 specularSmooth;
 layout(location=5) flat in vec4 specularFlat;
 layout(location=6) in vec3 worldNormal;
 layout(location=7) in vec3 worldPosition;
@@ -266,7 +266,7 @@ void main() {
         result=vec4(skyDither(min(c,vec3(1.0))),operation(draw.mode.z).a);return;
     }
     vec3 N;
-    if(sun.extra.w>0.5){
+    if(dot(worldNormal,worldNormal)<=1e-20){
         N=normalize(cross(dFdx(worldPosition),dFdy(worldPosition)));
         vec3 eye=vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
         if(dot(N,eye-worldPosition)<0.0)N=-N;
@@ -282,6 +282,11 @@ void main() {
     vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
     vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
     float det = max(dot(T, T), dot(B, B));
+    float uvArea = duv1.x * duv2.y - duv1.y * duv2.x;
+    float uvScale = dot(duv1, duv1) * dot(duv2, duv2);
+    // A rank-one chart can have a nonzero tangent but no invertible UV basis.
+    // Compare relative area so normal mapping remains valid at small footprints.
+    bool validBasis = uvScale > 0.0 && uvArea * uvArea > 1e-12 * uvScale;
     vec3 n;
     // Scale-independent: near the camera the per-pixel tangents are tiny but still valid
     // (an absolute 1e-10 cut-off dropped the normal map on nearby ground, leaving a flat band).
@@ -289,12 +294,15 @@ void main() {
     float waterMask=waterDetail&&sun.detail.x>1.5?surfMask(uv):1.0;
     if(waterDetail){
         n=waterNormal(N,waterMask);
-    }else if (det > 1e-30) {
+    }else if (validBasis && det > 1e-30) {
         float invmax = inversesqrt(det);
-        vec3 map = texture(normalMap, uv).xyz * 2.0 - 1.0;
+        // BWNRM2 encodes a neutral tangent as (128,128,255), not (127.5,127.5,255).
+        vec3 map = max((texture(normalMap, uv).xyz * 255.0 - 128.0) / 127.0, vec3(-1.0));
         float strength = max(sun.extra.y, 0.0);
-        vec3 n_tan = normalize(vec3(map.xy * strength, map.z));
-        n = normalize(T * (invmax * n_tan.x) + B * (invmax * n_tan.y) + N * n_tan.z);
+        vec3 perturbation = vec3(map.xy * strength, map.z);
+        vec3 n_tan = dot(perturbation,perturbation)>1e-8 ? normalize(perturbation) : vec3(0,0,1);
+        vec3 mapped = T * (invmax * n_tan.x) + B * (invmax * n_tan.y) + N * n_tan.z;
+        n = dot(mapped,mapped)>1e-20 ? normalize(mapped) : N;
     } else {
         n = N;
     }

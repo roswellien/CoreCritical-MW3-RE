@@ -14,6 +14,7 @@ struct QualityStatistics {
 struct AssetStatistics {
     std::uint64_t prepared_batches{}, gpu_model_draws{}, cpu_clipped_triangles{}, named_textures{};
     std::uint64_t geometry_uploads{};
+    std::uint64_t lit_draws{}, normal_draws{};
 };
 
 class VulkanFrameRenderer : public sdlfe::FrameRenderer {

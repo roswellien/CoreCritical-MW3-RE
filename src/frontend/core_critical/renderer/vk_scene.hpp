@@ -130,6 +130,9 @@ struct Draw {
     VkRect2D scissor;
     std::shared_ptr<const ModelInstance> model{};
     std::shared_ptr<const mw34::sun::Tl> sun_tl{};
+    // Camera-space smooth normals for CPU-clipped/deformed TL geometry.
+    // Owned until submission; never retained as immutable model cache entries.
+    std::shared_ptr<const std::vector<std::array<float, 3>>> lit_normals{};
     unsigned char sky{};
     std::shared_ptr<const mw34::sun::Tl> sky_view{};
     std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
@@ -191,9 +194,10 @@ class Renderer {
     // An explicit format preference lets format-sensitive callers exercise the
     // RGBA fallback without changing device capabilities or process settings.
     explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
-                      WindowSurface source = {}, Quality quality = {1, 1, 1, false}, bool models = false)
+                      WindowSurface source = {}, Quality quality = {1, 1, 1, false},
+                      bool models = false, mw34::sun::Settings lighting = {})
         : require_rgba8(color_target == ColorTarget::rgba8), surface_source(std::move(source)),
-          quality_settings(quality), use_gpu_models(models) {
+          quality_settings(quality), use_gpu_models(models), lighting_settings(lighting) {
         if (bool(surface_source.create) != bool(surface_source.destroy))
             throw std::runtime_error("Vulkan surface creation and destruction must have one owner");
         if (surface_source.create && surface_source.extensions.empty())
@@ -896,6 +900,7 @@ class Renderer {
     bool gpu_models() const { return use_gpu_models; }
     std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{}, world_gpu_draws{},
         effect_light_peak{}, fixture_light_peak{};
+    std::uint64_t normal_draws{};
     std::uint64_t presents{};
     bool presentInFlight{};
     // True when the cached texture for this guest surface already holds content version `hash` at
@@ -1044,13 +1049,27 @@ class Renderer {
             std::memcpy(up, s.color.data(), colorBytes);
         if (upload_in)
             mw34::depth::upload(up + depthOffset, s.depth.data(), size_t(pixels));
-        const auto environment = (s.hud || s.frontend_canvas)
-                                     ? mw34::sun::settings()
-                                     : mw34::sun::settings();
+        const auto &environment = lighting_settings;
         if (!world_scene_prepared)
             apply_atmosphere(s, environment);
         if (!s.vertices.empty())
             std::memcpy(vertexBuffer.mapped, s.vertices.data(), s.vertices.size());
+        if (lighting_settings.enabled) {
+            const auto count = s.vertices.size() / 32;
+            ensure(normalBuffer, std::max<VkDeviceSize>(count * 12, 12),
+                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+            std::memset(normalBuffer.mapped, 0, size_t(normalBuffer.size));
+            for (const auto &draw : s.draws) {
+                if (!draw.lit_normals)
+                    continue;
+                if (draw.lit_normals->size() != draw.count || draw.first > count ||
+                    draw.count > count - draw.first)
+                    throw std::runtime_error("Clipped smooth-normal range mismatch");
+                std::memcpy(static_cast<unsigned char *>(normalBuffer.mapped) +
+                                size_t(draw.first) * 12,
+                            draw.lit_normals->data(), size_t(draw.count) * 12);
+            }
+        }
         // Collect each immutable geometry upload once even if several instances use it.
         // std::map keeps pointers stable while additional model entries are inserted.
         std::vector<ModelBuffer *> model_pending;
@@ -1163,7 +1182,7 @@ class Renderer {
         mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
         std::vector<unsigned> sunUniformIds(s.draws.size());
         bool sunScene = false;
-        if (mw34::sun::settings().enabled) {
+        if (lighting_settings.enabled) {
             if (s.draws.size() > 0xffffffffULL / sunStride)
                 throw std::runtime_error(
                     "Sun uniform offsets exceed the Vulkan dynamic-offset range");
@@ -1290,7 +1309,7 @@ class Renderer {
         fixture_shadow_sets(sets);
         std::map<std::pair<Tex *, unsigned>, VkDescriptorSet> normalSets;
         std::vector<VkDescriptorSet> drawNormalSets(s.draws.size());
-        if (mw34::sun::settings().enabled) {
+        if (lighting_settings.enabled) {
             for (size_t i = 0; i < s.draws.size(); ++i) {
                 const auto &d = s.draws[i];
                 const auto &normal_settings = environment;
@@ -1547,6 +1566,8 @@ class Renderer {
             f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
                                       &drawSets[o.index], 0, nullptr);
             if (lit) {
+                if (d.normal_texture >= 0)
+                    ++normal_draws;
                 const std::uint32_t offset = std::uint32_t(o.index * sunStride);
                 f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1,
                                           &sunSet, 1, &offset);
@@ -1597,7 +1618,12 @@ class Renderer {
                 if (i.world)
                     ++world_gpu_draws;
             } else { // A model draw binds its own VBO; ordinary TL draws must restore theirs.
-                if (boundVertices != vertexBuffer.buffer) {
+                if (lit) {
+                    const VkBuffer buffers[2]{vertexBuffer.buffer, normalBuffer.buffer};
+                    const VkDeviceSize offsets[2]{0, 0};
+                    f.vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+                    boundVertices = vertexBuffer.buffer;
+                } else if (boundVertices != vertexBuffer.buffer) {
                     f.vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &zero);
                     boundVertices = vertexBuffer.buffer;
                 }
@@ -1781,6 +1807,7 @@ class Renderer {
     const WindowSurface surface_source;
     const Quality quality_settings;
     const bool use_gpu_models;
+    const mw34::sun::Settings lighting_settings;
     DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
@@ -1835,7 +1862,7 @@ class Renderer {
     VkQueue queue{};
     unsigned family{}, width{}, height{}, descriptorCapacity{};
     bool rgba{};
-    Buffer upload, readback, vertexBuffer, texUpload, sunBuffer, effectBuffer;
+    Buffer upload, readback, vertexBuffer, normalBuffer, texUpload, sunBuffer, effectBuffer;
     VkDeviceSize sunStride{};
     VkDescriptorSetLayout sunSetLayout{}, normalSetLayout{};
     VkShaderModule sunWorldVert{}, sunModelVert{}, sunTlVert{}, sunFrag{};
@@ -1862,7 +1889,7 @@ class Renderer {
     VkPipeline shadowPipeline{};
     VkShaderModule shadowVert{};
     void init_shadow() {
-        const auto &sun = mw34::sun::settings();
+        const auto &sun = lighting_settings;
         const unsigned size = sun.shadows ? sun.shadow_size : 1;
         VkFormat format = VK_FORMAT_D32_SFLOAT;
         VkFormatProperties fp{};
@@ -2297,7 +2324,7 @@ class Renderer {
         }
     }
     void record_shadow(const ShadowFrame &frame) {
-        const unsigned size = mw34::sun::settings().shadow_size;
+        const unsigned size = lighting_settings.shadow_size;
         VkClearValue clear{};
         clear.depthStencil.depth = 1.f;
         VkRenderPassBeginInfo rb{};
@@ -2326,7 +2353,7 @@ class Renderer {
     }
     std::map<std::uint64_t, std::uint64_t> sunChecked;
     bool sun_lit(const Draw &d) const {
-        return mw34::sun::settings().enabled &&
+        return lighting_settings.enabled &&
                (d.sky || d.sun_tl || (d.model && d.model->sun_eligible));
     }
 
@@ -2776,7 +2803,7 @@ class Renderer {
                                    sizeof(ModelPush)};
             pli.pPushConstantRanges = &mr;
             std::array<VkDescriptorSetLayout, 3> sets{setLayout, VK_NULL_HANDLE, VK_NULL_HANDLE};
-            if (mw34::sun::settings().enabled) {
+            if (lighting_settings.enabled) {
                 sunStride =
                     (sizeof(mw34::sun::Uniform) + p.limits.minUniformBufferOffsetAlignment - 1) /
                     p.limits.minUniformBufferOffsetAlignment *
@@ -2811,12 +2838,12 @@ class Renderer {
                 sets[2] = normalSetLayout;
                 pli.setLayoutCount = 3;
                 pli.pSetLayouts = sets.data();
-                const auto &sun = mw34::sun::settings();
-                std::fprintf(
-                    stderr,
-                    "Sun prototype: world +Y up, azimuth %.3f elevation %.3f strength %.3f ambient %.3f; textured original world and GPU replacement models\n",
-                    double(sun.azimuth), double(sun.elevation), double(sun.strength),
-                    double(sun.ambient));
+                const auto &sun = lighting_settings;
+                std::fprintf(stderr,
+                             "Per-pixel lighting: world +Y up, azimuth %.3f elevation %.3f "
+                             "strength %.3f ambient %.3f\n",
+                             double(sun.azimuth), double(sun.elevation), double(sun.strength),
+                             double(sun.ambient));
             }
             check(f.vkCreatePipelineLayout(device, &pli, nullptr, &modelLayout),
                   "model pipeline layout");
@@ -2838,14 +2865,14 @@ class Renderer {
             modelVert = module(model_scene_vert_spv, sizeof(model_scene_vert_spv));
             worldVert = module(world_scene_vert_spv, sizeof(world_scene_vert_spv));
         }
-        if (mw34::sun::settings().enabled) {
+        if (lighting_settings.enabled) {
             if (!gpu_models())
                 throw std::runtime_error("Sun prototype requires GPU geometry");
             sunWorldVert = module(sun_world_vert_spv, sizeof(sun_world_vert_spv));
             sunModelVert = module(sun_model_vert_spv, sizeof(sun_model_vert_spv));
             sunTlVert = module(sun_tl_vert_spv, sizeof(sun_tl_vert_spv));
             sunFrag = module(effect_scene_frag_spv, sizeof(effect_scene_frag_spv));
-            if (mw34::sun::settings().shadows)
+            if (lighting_settings.shadows)
                 shadowVert = module(sun_shadow_vert_spv, sizeof(sun_shadow_vert_spv));
         }
         std::array<VkAttachmentDescription, 2> at{};
@@ -2874,10 +2901,10 @@ class Renderer {
         rpi.subpassCount = 1;
         rpi.pSubpasses = &sp;
         check(f.vkCreateRenderPass(device, &rpi, nullptr, &renderPass), "render pass");
-        if (mw34::sun::settings().enabled) {
+        if (lighting_settings.enabled) {
             init_shadow();
             init_fixture_shadow();
-            const auto &sun = mw34::sun::settings();
+            const auto &sun = lighting_settings;
             std::fprintf(
                 stderr,
                 "Sun colour %.3f %.3f %.3f, ambient tint %.3f %.3f %.3f; sky tint %.3f %.3f %.3f (%s), haze %s %.3f %.3f %.3f\n",
@@ -3265,7 +3292,7 @@ class Renderer {
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = n * 2 + 1;
-        pi.poolSizeCount = mw34::sun::settings().enabled ? 3 : 1;
+        pi.poolSizeCount = lighting_settings.enabled ? 3 : 1;
         pi.pPoolSizes = ps.data();
         check(f.vkCreateDescriptorPool(device, &pi, nullptr, &descriptorPool), "descriptor pool");
         descriptorCapacity = n;
@@ -3342,10 +3369,18 @@ class Renderer {
              {2, 1, VK_FORMAT_R32_UINT, 20},
              {3, 1, VK_FORMAT_R32G32_SFLOAT, 24},
              {4, 0, VK_FORMAT_R32G32B32_SFLOAT, 12}}};
-        vi.vertexBindingDescriptionCount = world ? 2 : 1;
-        vi.pVertexBindingDescriptions = world ? wb.data() : &vb;
-        vi.vertexAttributeDescriptionCount = world ? (lit ? 5 : 4) : (model ? 3 : 4);
-        vi.pVertexAttributeDescriptions = world ? wa.data() : (model ? ma.data() : va.data());
+        const std::array<VkVertexInputBindingDescription, 2> tb{
+            {{0, 32, VK_VERTEX_INPUT_RATE_VERTEX}, {1, 12, VK_VERTEX_INPUT_RATE_VERTEX}}};
+        const std::array<VkVertexInputAttributeDescription, 5> ta{
+            {va[0], va[1], va[2], va[3], {4, 1, VK_FORMAT_R32G32B32_SFLOAT, 0}}};
+        const bool lit_tl = lit && !model;
+        vi.vertexBindingDescriptionCount = world || lit_tl ? 2 : 1;
+        vi.pVertexBindingDescriptions = world ? wb.data() : lit_tl ? tb.data() : &vb;
+        vi.vertexAttributeDescriptionCount = world ? (lit ? 5 : 4) : model ? 3 : lit_tl ? 5 : 4;
+        vi.pVertexAttributeDescriptions = world    ? wa.data()
+                                          : model  ? ma.data()
+                                          : lit_tl ? ta.data()
+                                                   : va.data();
         VkPipelineInputAssemblyStateCreateInfo ia{};
         ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         ia.topology =
@@ -3838,8 +3873,8 @@ class Renderer {
             f.vkDestroyFence(device, presentFence, nullptr);
         if (presentPool)
             f.vkDestroyCommandPool(device, presentPool, nullptr);
-        for (Buffer *b : {&upload, &readback, &vertexBuffer, &texUpload, &presentUpload, &sunBuffer,
-                          &effectBuffer})
+        for (Buffer *b : {&upload, &readback, &vertexBuffer, &normalBuffer, &texUpload,
+                          &presentUpload, &sunBuffer, &effectBuffer})
             if (b->buffer) {
                 f.vkDestroyBuffer(device, b->buffer, nullptr);
                 f.vkFreeMemory(device, b->memory, nullptr);

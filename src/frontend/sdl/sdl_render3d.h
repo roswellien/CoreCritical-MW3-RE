@@ -27,10 +27,18 @@ struct CoreCriticalQuality {
 struct PreparedModelBinding {
   std::string chassis, lod, mesh, textures;
 };
+struct PreparedNormalBinding {
+  std::string chassis, lod, path;
+};
 struct CoreCriticalAssets {
   std::string textures;
   std::vector<PreparedModelBinding> models;
-  bool empty() const { return textures.empty() && models.empty(); }
+  std::vector<PreparedNormalBinding> normals;
+  std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
+  bool empty() const {
+    return textures.empty() && models.empty() && normals.empty() && lighting == "off" &&
+           sun_azimuth == "45" && sun_elevation == "35";
+  }
 };
 
 class FrameRenderer : public platform::Render3D {

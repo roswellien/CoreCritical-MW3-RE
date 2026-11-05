@@ -22,9 +22,9 @@ layout(set=1,binding=0,std140) uniform SunLighting {
 
 layout(location=0) out vec2 uvPerspective;
 layout(location=1) noperspective out vec2 uvAffine;
-layout(location=2) noperspective out vec4 colorSmooth;
+layout(location=2) out vec4 colorSmooth;
 layout(location=3) flat out vec4 colorFlat;
-layout(location=4) noperspective out vec4 specularSmooth;
+layout(location=4) out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
 layout(push_constant) uniform WorldPush {
     vec4 target; vec4 fogColor; vec4 factor; uvec4 mode;
@@ -33,8 +33,8 @@ layout(push_constant) uniform WorldPush {
 vec4 unpack(uint c) { return vec4((c>>16)&255u,(c>>8)&255u,c&255u,c>>24)/255.0; }
 void main() {
     vec4 p=vec4(position,1.0);
-    worldPosition=vec3(dot(sun.normal0,p),dot(sun.normal1,p),dot(sun.normal2,p));
-    shadowPosition=vec3(dot(sun.world0,p),dot(sun.world1,p),dot(sun.world2,p));
+    worldPosition=vec3(dot(sun.world0,p),dot(sun.world1,p),dot(sun.world2,p));
+    shadowPosition=worldPosition;
     precise vec3 camera=vec3(dot(draw.camera0,p),dot(draw.camera1,p),dot(draw.camera2,p));
     precise float rhw=draw.target.z/camera.z;
     precise vec2 screen=camera.xy*draw.projection.xy*rhw+draw.projection.zw;

@@ -112,18 +112,50 @@ replaces exact named native albedos, retaining the native alpha mask on reload.
 Invalid files, duplicate selections and incompatible control bindings fail with
 an error. No asset payload is bundled with the executable or this repository.
 
-This is component admission, not admission of a complete installed pack. BWNRM2
-normal maps, BWSFM1 surfaces, skin selection and pack capability negotiation are
-still pending. Morphing, non-unit node opacity, overlay, detached and changed source meshes
+This is component admission, not admission of a complete installed pack. BWSFM1
+surfaces, skin selection and pack capability negotiation are still pending.
+Morphing, non-unit node opacity, overlay, detached and changed source meshes
 retain their native geometry; those damage/cockpit paths need further parity
-validation. Prepared lighting currently uses the existing directional visual
-shade and native fog samples; advanced per-pixel materials remain separate work.
+validation. With lighting off, prepared geometry retains the existing directional
+visual shade and native fog samples. Per-pixel lighting and normal maps are opt-in below.
 
 Run asset-free reader and GPU fixtures with
 `ctest --test-dir build-win -R '^(mw3prepared_checks|mw3ccvulkan_prepared_)' --output-on-failure`.
 The reader fixture also builds without SDL on Linux and macOS. The Core Critical
 GPU adapter remains Windows-only; these portable readers do not establish a
 Linux, macOS or Android renderer port.
+
+Append `--cc-lighting normal --cc-model-normals madcat 0 $normalsLod0
+--cc-model-normals madcat 1 $normalsLod1` to the prepared-model command to use
+the existing BWNRM2 sidecars. Normal selections are repeatable and must match a
+selected chassis/LOD. Their batch counts, content hashes and albedo material names
+must match; `UINT32_MAX` is an explicit absent-map binding. The reader accepts
+BWNRM2 linear RGBA8 tangent normals, preserves authored alpha and rejects other
+normal formats. Its FNV content key checks payload consistency, not publisher identity.
+
+`--cc-lighting` accepts `off` (default, existing visual shade), `flat` (per-pixel
+directional lighting without normal perturbation), and `normal` (the same lighting
+with selected normal maps). Normal mode requires a normal selection; explicitly
+absent bindings retain geometric lighting. Selected files are validated even when
+lighting is off. Configuration belongs to each renderer and survives scene reload.
+
+`--cc-sun AZIMUTH ELEVATION` sets angles in degrees: azimuth 0 points toward world
++X, 90 toward +Z, and positive elevation toward +Y. Supported ranges are -360..360
+and 1..89. The default is 45/35. This affects selected prepared models; native world,
+cockpit and HUD lighting remain on their existing paths. It does not enable sky,
+weather, local lights or shadow maps.
+
+The lit path keeps true world positions separate from inverse-transpose normals.
+CPU-clipped and donor-deformed batches retain smooth normals in a transient Vulkan
+stream. Mirrored UVs retain handedness; singular UV charts and zero tangent vectors
+retain geometric lighting. Native fog and sharp HUD composition are preserved.
+
+Run the material GPU checks with
+`ctest --test-dir build-win -R '^mw3ccvulkan_material_' --output-on-failure`.
+The checks cover both presenters, FXAA/AF and SSAA, neutral/absent/invalid tangent
+vectors, singular/mirrored UVs, nonuniform transforms, depth clipping, native fog,
+HUD composition, instance isolation and resource reload. Per-pixel materials need
+further model/damage/LOD calibration; this is not full pack or release validation.
 
 The adapter and renderer sources derive from the Core Critical project.
 Their MIT notice is in [src/frontend/core_critical/LICENSE](../src/frontend/core_critical/LICENSE).

@@ -38,6 +38,25 @@ void checks() {
     const auto tex = platform::prepared::read_textures(tex_input);
     require(tex.images.size() == 1 && tex.images[0].pixels == std::vector<uint16_t>{0xf800, 0x07e0},
             "RGB565 material pixels changed");
+    const auto read_normals = [&](std::istream &input) {
+        return platform::prepared::read_normals(input, tex);
+    };
+    std::istringstream normal_input(prepared_fixture::normals(0x40ff8080));
+    const auto normals = read_normals(normal_input);
+    require(normals.images.size() == 1 && normals.images[0].pixels[0] == 0x40ff8080,
+            "Normal bytes or authored alpha changed");
+    std::istringstream absent_input(prepared_fixture::normals(0, true));
+    require(read_normals(absent_input).bindings[0] == platform::prepared::no_normal,
+            "Explicit absent normal binding was lost");
+    const auto normal_bytes = prepared_fixture::normals();
+    rejects(normal_bytes.substr(0, normal_bytes.size() - 1), read_normals);
+    rejects(normal_bytes + "extra", read_normals);
+    for (size_t offset :
+         {size_t(6), size_t(8), size_t(16), size_t(20), size_t(52), size_t(60), size_t(68)}) {
+        auto bad = normal_bytes;
+        bad[offset] ^= char(0x7f);
+        rejects(bad, read_normals);
+    }
     for (unsigned version = 1; version <= 6; ++version) {
         const auto data = mesh(version);
         std::istringstream input(data);
@@ -152,7 +171,7 @@ void check_producer_unwind() {
 
 int main(int argc, char **argv) {
     try {
-        if (argc == 4 && std::string(argv[1]) == "--check") {
+        if ((argc == 4 || argc == 5) && std::string(argv[1]) == "--check") {
             std::ifstream mesh_input(std::filesystem::u8path(argv[2]), std::ios::binary),
                 texture_input(std::filesystem::u8path(argv[3]), std::ios::binary);
             if (!mesh_input || !texture_input)
@@ -160,13 +179,20 @@ int main(int argc, char **argv) {
             const auto geometry = platform::prepared::read_mesh(mesh_input);
             const auto materials = platform::prepared::read_textures(texture_input);
             platform::prepared::validate_bindings(geometry, materials);
+            if (argc == 5) {
+                std::ifstream normal_input(std::filesystem::u8path(argv[4]), std::ios::binary);
+                if (!normal_input)
+                    throw std::runtime_error("Cannot open selected normal component");
+                const auto normals = platform::prepared::read_normals(normal_input, materials);
+                std::printf("BWNRM2: %zu images; ", normals.images.size());
+            }
             std::printf("BWMESH%u: %zu batches; BWTEX1: %zu images\n", geometry.version,
                         geometry.batches.size(), materials.images.size());
         } else if (argc == 1) {
             checks();
             check_producer_unwind();
         } else
-            throw std::runtime_error("usage: mw3prepared_checks [--check MESH TEXTURES]");
+            throw std::runtime_error("usage: mw3prepared_checks [--check MESH TEXTURES [NORMALS]]");
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "%s\n", error.what());

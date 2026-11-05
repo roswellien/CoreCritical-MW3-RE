@@ -252,6 +252,64 @@ Textures read_textures(std::istream &input) {
     return textures;
 }
 
+Normals read_normals(std::istream &input, const Textures &textures) {
+    Reader reader(input);
+    char magic[8];
+    reader.bytes(magic, sizeof magic);
+    if (std::string_view(magic, 8) != std::string_view("BWNRM2\0\0", 8))
+        Reader::fail("unsupported normal-map format (expected BWNRM2)");
+    const auto batches = reader.u32(), count = reader.u32();
+    if (!batches || batches > 256 || batches != textures.bindings.size() || count > 64)
+        Reader::fail("invalid normal-map counts");
+    reader.need(uint64_t(batches) * 4);
+    Normals normals;
+    for (unsigned i = 0; i < batches; ++i) {
+        const auto index = reader.u32();
+        if (index != no_normal && index >= count)
+            Reader::fail("invalid normal-map binding");
+        normals.bindings.push_back(index);
+    }
+    std::set<std::string> names;
+    uint64_t total = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        NormalImage image;
+        image.name = reader.name();
+        if (!names.insert(image.name).second)
+            Reader::fail("duplicate normal-map material");
+        image.width = reader.u32();
+        image.height = reader.u32();
+        image.hash = reader.u64();
+        if (!image.width || !image.height || image.width > 4096 || image.height > 4096)
+            Reader::fail("invalid normal-map dimensions");
+        const auto pixels = size_t(image.width) * image.height;
+        total += uint64_t(pixels) * 4;
+        if (total > 256ULL * 1024 * 1024)
+            Reader::fail("normal-map decoded budget exceeded");
+        reader.need(uint64_t(pixels) * 4);
+        image.pixels.reserve(pixels);
+        uint64_t hash = 0xcbf29ce484222325ULL;
+        for (size_t pixel = 0; pixel < pixels; ++pixel) {
+            const auto rgba = reader.u32();
+            for (unsigned shift = 0; shift < 32; shift += 8) {
+                hash ^= uint8_t(rgba >> shift);
+                hash *= 0x100000001b3ULL;
+            }
+            image.pixels.push_back(rgba);
+        }
+        if (hash != image.hash)
+            Reader::fail("normal-map content hash mismatch");
+        normals.images.push_back(std::move(image));
+    }
+    reader.finish();
+    for (size_t i = 0; i < batches; ++i) {
+        const auto index = normals.bindings[i];
+        if (index != no_normal &&
+            normals.images[index].name != textures.images.at(textures.bindings[i]).name)
+            Reader::fail("normal-map/albedo material mismatch");
+    }
+    return normals;
+}
+
 void validate_bindings(const Mesh &mesh, const Textures &textures) {
     if (mesh.batches.size() != textures.bindings.size())
         Reader::fail("mesh/texture batch mismatch");

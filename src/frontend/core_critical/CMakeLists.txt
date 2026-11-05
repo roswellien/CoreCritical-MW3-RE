@@ -56,3 +56,7 @@ add_test(NAME mw3ccvulkan_quality_dxgi COMMAND mw3ccvulkan_checks --quality fxaa
 add_test(NAME mw3ccvulkan_prepared_wsi COMMAND mw3ccvulkan_checks --wsi --prepared)
 add_test(NAME mw3ccvulkan_prepared_dxgi COMMAND mw3ccvulkan_checks --prepared)
 add_test(NAME mw3ccvulkan_prepared_quality COMMAND mw3ccvulkan_checks --wsi --prepared --quality fxaa)
+add_test(NAME mw3ccvulkan_material_wsi COMMAND mw3ccvulkan_checks --wsi --materials)
+add_test(NAME mw3ccvulkan_material_dxgi COMMAND mw3ccvulkan_checks --materials)
+add_test(NAME mw3ccvulkan_material_fxaa COMMAND mw3ccvulkan_checks --wsi --materials --quality fxaa)
+add_test(NAME mw3ccvulkan_material_ssaa COMMAND mw3ccvulkan_checks --wsi --materials --quality ssaa4)

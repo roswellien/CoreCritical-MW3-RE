@@ -4,6 +4,7 @@
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zmodel/gmod_const.h"
+#include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "tests/prepared_visual_fixture.h"
 #include <cfenv>
@@ -337,7 +338,7 @@ void check_quality(SDL_Window *window, sdlfe::RendererBackend backend,
 
 namespace {
 void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
-                    const sdlfe::CoreCriticalQuality &quality) {
+                    const sdlfe::CoreCriticalQuality &quality, bool materials = false) {
     const auto folder = std::filesystem::temp_directory_path() /
                         ("cc-prepared-check-" + std::to_string(SDL_GetPerformanceCounter()));
     require(std::filesystem::create_directory(folder), "Authored fixture directory already exists");
@@ -347,6 +348,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
             std::error_code error;
             std::filesystem::remove(folder / "mesh.bin", error);
             std::filesystem::remove(folder / "textures.bin", error);
+            std::filesystem::remove(folder / "normals.bin", error);
             std::filesystem::remove(folder, error);
         }
     } files{folder};
@@ -356,6 +358,12 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     sdlfe::CoreCriticalAssets options;
     options.textures = (folder / "textures.bin").u8string();
     options.models.push_back({"authored", "0", (folder / "mesh.bin").u8string(), options.textures});
+    if (materials) {
+        std::ofstream(folder / "normals.bin", std::ios::binary)
+            << prepared_fixture::normals(0xffd980d9);
+        options.normals.push_back({"authored", "0", (folder / "normals.bin").u8string()});
+        options.lighting = "normal";
+    }
     require(SDL_SetWindowSize(window, 64, 64) && SDL_SyncWindow(window), SDL_GetError());
     std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> root(zcls::object3d_create(),
                                                             zcls::tree_destroy);
@@ -473,11 +481,139 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     require(zcls::object3d_set_matrix(control, matrix) == 0, "Authored pose could not reset");
     require(frame() == first && renderer->asset_statistics().geometry_uploads == 2,
             "Prepared scene reload reused stale geometry or changed its pixels");
+    if (!materials)
+        return;
+    require(renderer->asset_statistics().lit_draws > 0 &&
+                renderer->asset_statistics().normal_draws > 0,
+            "Prepared materials did not reach a per-pixel normal-map draw");
+
+    // Use a white albedo so lighting has a direct numeric oracle independent of UV filtering.
+    auto albedo = prepared_fixture::textures();
+    albedo.replace(albedo.size() - 4, 4, std::string(4, char(0xff)));
+    std::ofstream(folder / "textures.bin", std::ios::binary) << albedo;
+    auto render_material = [&](const char *mode, uint32_t normal, bool absent = false,
+                               bool mirror = false, bool degenerate = false,
+                               std::array<float, 3> source_normal = {0, 0, 1},
+                               bool rank_one_uv = false) {
+        zvid::set_render3d(nullptr);
+        renderer.reset();
+        std::ofstream(folder / "mesh.bin", std::ios::binary) << prepared_fixture::mesh(
+            2, 0xffffffff, source_normal, mirror, degenerate, rank_one_uv);
+        std::ofstream(folder / "normals.bin", std::ios::binary)
+            << prepared_fixture::normals(normal, absent);
+        options.lighting = mode;
+        renderer = cc_mw3_re::make_renderer(window, backend, quality, options);
+        renderer->set_viewport(0, 0, 64, 64);
+        zvid::set_render3d(renderer.get());
+        return frame();
+    };
+    const auto flat = render_material("flat", 0xffd980d9);
+    require(render_material("normal", 0xffff8080) == flat,
+            "Neutral BWNRM2 map changed flat material lighting");
+    require(render_material("normal", 0, true) == flat,
+            "Explicit absent normal map changed flat material lighting");
+    require(render_material("normal", 0xff808080) == flat,
+            "Zero tangent vector produced invalid material lighting");
+    const auto normal = render_material("normal", 0xffd980d9);
+    const auto mirrored = render_material("normal", 0xffd980d9, false, true);
+    const size_t centre = 32 * 64 + 32;
+    require(int(normal[centre] & 255) > int(mirrored[centre] & 255) + 30 && normal != flat,
+            "Mirrored UV handedness or tangent normal response was lost");
+    require(render_material("normal", 0xffd980d9, false, false, true) == flat,
+            "Degenerate UVs did not retain the geometric normal");
+    require(render_material("normal", 0xff80ff80, false, false, false, {0, 0, 1}, true) == flat,
+            "Rank-one UVs did not retain finite geometric lighting");
+    require(render_material("normal", 0xffd980d9, false, false, false, {0, 0, 1}, true) == flat,
+            "Rank-one UVs accepted tangent perturbation");
+    const auto off = render_material("off", 0xffd980d9);
+    render_material("normal", 0xffd980d9);
+    require(render_material("off", 0xffd980d9) == off,
+            "Material mode leaked across renderer instances");
+
+    matrix[0] = 1.7f;
+    matrix[4] = .8f;
+    matrix[8] = .5f;
+    require(zcls::object3d_set_matrix(control, matrix) == 0,
+            "Cannot stage nonuniform source scale");
+    options.sun_azimuth = "-45";
+    const auto scaled = render_material("flat", 0xffff8080, false, false, false, {1, 1, 1});
+    const double nx = 1.0 / 1.7, ny = 1.0 / .8, nz = 1.0 / .5;
+    const double len = std::hypot(nx, ny, nz);
+    const double radians = 3.14159265358979323846 / 180;
+    const double direct =
+        std::max(0.0, ((nx - nz) * std::cos(35 * radians) * std::cos(45 * radians) +
+                       ny * std::sin(35 * radians)) /
+                          len);
+    const int expected = int(std::lround(std::min(1.0, .3 + .85 * direct) * 255));
+    require(std::abs(int((scaled[centre] >> 16) & 255) - expected) <= 1,
+            "Nonuniform source scale did not use inverse-transpose material normals");
+    options.sun_azimuth = "90";
+    const auto scaled_map = render_material("normal", 0xffd980d9);
+    // The native XY scale gives the cotangent frame a 0.8/1.7 axis ratio.
+    // Transforming positions with the normal matrix would invert that ratio.
+    const double ratio = .8 / 1.7;
+    const double mapped_z = 1.0 / std::sqrt(1 + ratio * ratio);
+    const int mapped_expected =
+        int(std::lround((.3 + .85 * std::cos(35 * radians) * mapped_z) * 255));
+    require(std::abs(int((scaled_map[centre] >> 16) & 255) - mapped_expected) <= 1,
+            "Tangent basis used normal coordinates instead of true world positions");
+
+    matrix[0] = matrix[4] = matrix[8] = 1;
+    matrix[2] = 1;
+    matrix[11] = -1.5f;
+    require(zcls::object3d_set_matrix(control, matrix) == 0,
+            "Cannot stage clipped material source");
+    options.sun_azimuth = "45";
+    const auto clipped_flat = render_material("flat", 0xffff8080, false, false, false, {1, 0, 1});
+    const auto clipped_normal =
+        render_material("normal", 0xffd980d9, false, false, false, {1, 0, 1});
+    const int clipped_expected =
+        int(std::lround((.3 + .85 * std::cos(35 * radians) * std::sin(45 * radians)) * 255));
+    require(std::abs(int((clipped_flat[centre] >> 16) & 255) - clipped_expected) <= 1,
+            "Clipped geometry lost its authored smooth normals");
+    require(clipped_normal != clipped_flat && renderer->asset_statistics().normal_draws > 0 &&
+                renderer->asset_statistics().cpu_clipped_triangles > 0,
+            "Clipped prepared geometry lost per-pixel normal response");
+
+    // Black albedo isolates native fog from the lighting equation. Geometry has
+    // varying depth, so this catches interpolation changes and accidental sky dithering.
+    const auto saved_fog = zmod::fog();
+    auto &fog = zmod::fog();
+    fog = {};
+    fog.on = 1;
+    fog.far_range = 10;
+    fog.far_sq = 100;
+    fog.inv_range = .1f;
+    fog.alt_low = 1;
+    fog.alt_high = 100;
+    fog.inv_alt = 1.f / 99;
+    fog.color[0] = .13f;
+    fog.color[1] = .37f;
+    fog.color[2] = .61f;
+    albedo.replace(albedo.size() - 4, 4, std::string(4, char(0)));
+    std::ofstream(folder / "textures.bin", std::ios::binary) << albedo;
+    const auto clipped_fog = render_material("off", 0xffff8080);
+    require(render_material("normal", 0xffff8080) == clipped_fog,
+            "Clipped material lighting changed native fog");
+    matrix[11] = 2.5f;
+    require(zcls::object3d_set_matrix(control, matrix) == 0,
+            "Cannot stage varying-depth fog source");
+    const auto gpu_fog = render_material("off", 0xffff8080);
+    require(render_material("normal", 0xffff8080) == gpu_fog,
+            "Rigid material lighting changed native fog");
+    platform::DrawState hud;
+    hud.sharp = hud.depth_always = true;
+    quad(*renderer, 0, 16, .5f, 0xff112233, hud);
+    std::vector<uint32_t> composed;
+    require(renderer->read_back(&composed, &width, &height) && composed[8 * 64 + 8] == 0xff112233 &&
+                composed[centre] == gpu_fog[centre],
+            "Prepared lighting changed sharp HUD composition or existing world color");
+    zmod::fog() = saved_fog;
 }
 } // namespace
 
 int main(int argc, char **argv) {
-    bool native_wsi = false, quality_check = false, prepared_check = false;
+    bool native_wsi = false, quality_check = false, prepared_check = false, material_check = false;
     sdlfe::CoreCriticalQuality quality;
     for (int i = 1; i < argc; ++i) {
         const std::string_view option(argv[i]);
@@ -485,12 +621,16 @@ int main(int argc, char **argv) {
             native_wsi = true;
         else if (option == "--prepared")
             prepared_check = true;
+        else if (option == "--materials")
+            prepared_check = material_check = true;
         else if (option == "--quality" && i + 1 < argc) {
             quality.antialiasing = argv[++i];
             quality.anisotropy = "16";
             quality_check = true;
         } else {
-            std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] [--quality MODE]\n");
+            std::fprintf(
+                stderr,
+                "usage: mw3ccvulkan_checks [--wsi] [--prepared|--materials] [--quality MODE]\n");
             return 1;
         }
     }
@@ -519,7 +659,7 @@ int main(int argc, char **argv) {
         const auto backend = native_wsi ? sdlfe::RendererBackend::core_critical_wsi
                                         : sdlfe::RendererBackend::core_critical_dxgi;
         if (prepared_check)
-            check_prepared(window, backend, quality);
+            check_prepared(window, backend, quality, material_check);
         else if (quality_check)
             check_quality(window, backend, quality);
         else

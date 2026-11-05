@@ -53,8 +53,21 @@ struct Textures {
     std::vector<Image> images;
 };
 
+constexpr uint32_t no_normal = 0xffffffff;
+struct NormalImage {
+    std::string name;
+    unsigned width = 0, height = 0;
+    uint64_t hash = 0;
+    std::vector<uint32_t> pixels; // linear RGBA8; alpha retains its authored meaning
+};
+struct Normals {
+    std::vector<uint32_t> bindings; // per batch, image index or explicit no_normal
+    std::vector<NormalImage> images;
+};
+
 Mesh read_mesh(std::istream &input);
 Textures read_textures(std::istream &input);
+Normals read_normals(std::istream &input, const Textures &textures);
 void validate_bindings(const Mesh &mesh, const Textures &textures);
 
 } // namespace platform::prepared

@@ -8,6 +8,7 @@ namespace cc_mw3_re {
 struct PreparedBatchDraw {
     const platform::prepared::Batch *batch{};
     const platform::prepared::Image *texture{};
+    const platform::prepared::NormalImage *normal{};
     platform::prepared::Matrix camera{}, world{};
     // Mixed-bone seams follow the existing CPU visual deformation contract.
     // Their per-frame vertices are submitted as TL data, never cached as immutable geometry.
@@ -30,6 +31,7 @@ class PreparedModels {
         std::string source_asset;
         platform::prepared::Mesh mesh;
         platform::prepared::Textures textures;
+        platform::prepared::Normals normals;
     };
     platform::prepared::Textures named_;
     std::vector<Model> models_;

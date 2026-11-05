@@ -166,6 +166,10 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options) {
         named_ = platform::prepared::read_textures(input);
     }
     std::set<std::string> selected;
+    std::map<std::pair<std::string, std::string>, std::string> normals;
+    for (const auto &binding : options.normals)
+        if (!normals.emplace(std::make_pair(binding.chassis, binding.lod), binding.path).second)
+            throw std::runtime_error("Duplicate prepared normal-map selection");
     for (const auto &binding : options.models) {
         if (binding.chassis.empty() || binding.chassis.size() > 32 ||
             binding.chassis.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") !=
@@ -180,6 +184,14 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options) {
         model.mesh = platform::prepared::read_mesh(geometry);
         model.textures = platform::prepared::read_textures(textures);
         platform::prepared::validate_bindings(model.mesh, model.textures);
+        const auto normal = normals.find({binding.chassis, binding.lod});
+        if (normal != normals.end()) {
+            auto input = open(normal->second);
+            model.normals = platform::prepared::read_normals(input, model.textures);
+            normals.erase(normal);
+            std::fprintf(stderr, "Prepared normals loaded: %s, %zu images\n",
+                         model.source_asset.c_str(), model.normals.images.size());
+        }
         // Mesh colors are diagnostics from preparation. As in Core Critical's
         // existing adapter, a bound albedo supplies the final material color.
         for (auto &batch : model.mesh.batches)
@@ -205,6 +217,12 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options) {
                      model.textures.images.size());
         models_.push_back(std::move(model));
     }
+    if (!normals.empty())
+        throw std::runtime_error("A prepared normal-map selection has no matching model/LOD");
+    if (options.lighting != "off" && models_.empty())
+        throw std::runtime_error("Prepared lighting requires at least one --cc-model selection");
+    if (options.lighting == "normal" && options.normals.empty())
+        throw std::runtime_error("Normal lighting requires --cc-model-normals");
 }
 
 const platform::prepared::Image *PreparedModels::named_texture(const char *name) const {
@@ -259,6 +277,11 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         PreparedBatchDraw draw;
         draw.batch = &batch;
         draw.texture = &selected->textures.images.at(selected->textures.bindings[index]);
+        if (!selected->normals.bindings.empty()) {
+            const auto normal = selected->normals.bindings[index];
+            if (normal != platform::prepared::no_normal)
+                draw.normal = &selected->normals.images.at(normal);
+        }
         if (selected->mesh.version != 4) {
             draw.camera = placed(root_camera, live.poses, batch);
             draw.world = placed(root_world, live.poses, batch);

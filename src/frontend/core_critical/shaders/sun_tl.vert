@@ -4,11 +4,12 @@ layout(location=0) in vec4 position;
 layout(location=1) in uint diffuse;
 layout(location=2) in uint specular;
 layout(location=3) in vec2 uv;
+layout(location=4) in vec3 smoothNormal;
 layout(location=0) out vec2 uvPerspective;
 layout(location=1) noperspective out vec2 uvAffine;
-layout(location=2) noperspective out vec4 colorSmooth;
+layout(location=2) out vec4 colorSmooth;
 layout(location=3) flat out vec4 colorFlat;
-layout(location=4) noperspective out vec4 specularSmooth;
+layout(location=4) out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
 layout(location=6) out vec3 worldNormal;
 layout(location=7) out vec3 worldPosition;
@@ -42,6 +43,8 @@ void main() {
     worldPosition=vec3(dot(sun.normal0,p),dot(sun.normal1,p),dot(sun.normal2,p));
     shadowPosition=worldPosition;
     screenPos=position.xy;
-    worldNormal=vec3(0.0);
+    // Native cameras are rigid. The adapter has already applied the model's
+    // inverse-transpose before clipping these camera-space normals.
+    worldNormal=vec3(dot(sun.normal0.xyz,smoothNormal),dot(sun.normal1.xyz,smoothNormal),dot(sun.normal2.xyz,smoothNormal));
     specularSmooth=specularFlat=vec4(0.0,0.0,0.0,unpack(specular).a);
 }
