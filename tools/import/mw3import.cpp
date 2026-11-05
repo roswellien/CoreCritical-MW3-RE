@@ -35,6 +35,7 @@
 #include "mech3/app_movie.h"
 #include "platform/cue_audio.h"
 #include "gamez/zutil/zutl_path.h"
+#include "frontend/sdl/data_folder_start.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -323,9 +324,7 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  if (write_dir.empty()) {
-    if (char* p = SDL_GetPrefPath("MicroProse", "MechWarrior 3")) write_dir = p, SDL_free(p);
-  }
+  if (write_dir.empty() && !sdlfe::data_folder_at_start(&write_dir, false)) return 1;
   if (write_dir.empty()) return std::fprintf(stderr, "mw3import: no write dir\n"), 1;
   std::setvbuf(stdout, nullptr, _IONBF, 0);  // mw3 follows the progress lines as they come
   int failed = 0;

@@ -66,6 +66,7 @@
 #include "frontend/sdl/debug_states.h"
 #include "frontend/sdl/first_run_import.h"
 #include "frontend/sdl/crash_report.h"
+#include "frontend/sdl/data_folder_start.h"
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/launcher.h"
@@ -605,8 +606,11 @@ int main(int argc, char** argv) {
     return 1;
   }
   // The write dir: saves and settings, outside the install (assets-layer.md).
-  if (a.write_dir.empty()) {
-    if (char* p = SDL_GetPrefPath("MicroProse", "MechWarrior 3")) a.write_dir = p, SDL_free(p);
+  // --write-dir wins; else the usual folder, or the one its pointer names (data_folder.h).
+  const bool write_dir_given = !a.write_dir.empty();
+  if (!write_dir_given && !sdlfe::data_folder_at_start(&a.write_dir, !a.hidden)) {
+    SDL_Quit();
+    return 1;
   }
   while (a.write_dir.size() > 1 && a.write_dir.back() == '/') a.write_dir.pop_back();
   // A --write-dir that does not exist is made, as SDL_GetPrefPath makes the default.
@@ -687,6 +691,7 @@ int main(int argc, char** argv) {
   if (setup_only) {
     sdlfe::LauncherOptions lo;
     lo.setup_only = setup_only;
+    lo.write_dir_fixed = write_dir_given;
     lo.write_dir = a.write_dir, lo.cfg_install = a.cfg_install, lo.cfg_mw1_game = a.cfg_mw1_game;
 #ifdef MW3_GAME_DIR
     if (!std::getenv("MW3_FIND_INSTALL")) lo.more_installs.push_back(MW3_GAME_DIR);

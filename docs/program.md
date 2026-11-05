@@ -64,6 +64,26 @@ build/mw3 [install-dir] [options] [-nofmv] [-seasick] [-cdN]
   survives the restart a player makes before reporting it. Each stream
   goes through a pipe and a thread that writes the console's own handle and
   the file; at exit the handles are put back and the threads drained.
+- **The data folder** (ours, `mech3/data_folder.cpp`, `data_folder_start.h`;
+  Owen, 2026-11-04): the write dir on another drive, chosen in the launcher (GAME
+  FILES, MY DATA FOLDER). `data-folder.txt` in the usual folder names it, and
+  `mw3-data-folder.txt` in the folder says it is ours; with no pointer nothing
+  changes. mw3, mw3launcher and mw3import all read it, and `--write-dir` wins (and
+  hides the setting); the launcher passes the folder on to the game. A pointer's
+  folder that is missing, unmarked, read-only or full is said, with Try again and
+  Quit (hidden runs and mw3import exit 1), and no fresh folder ever stands in.
+  A move: the plan refuses a target inside or around the folder, one holding
+  files (a picked folder that is not empty and not ours gets a `MechWarrior 3
+  Data` folder inside it), or short of room; then each file is copied and read
+  back, `mw3.cfg`'s paths under the old folder follow (a disc install lives in
+  `<folder>/install`), and the pointer switches last, by rename. Failure or
+  cancel removes only what that run made; cut off outright, the pointer still
+  names the old folder, and `mw3-data-copying.txt` lets a new move finish the half
+  copy. The old copy goes only on the player's yes, and only in that session:
+  the files that move copied, one by one (never `remove_all`), when the pointer
+  names the new folder and it has every one; folders only when that empties
+  them. Logs stay behind: they are in use, and each start makes new ones.
+  `MW3_USUAL_FOLDER`, `MW3_LAUNCHER_MOVE_TO`, `MW3_LAUNCHER_MOVE_OLD`: for checks.
 - **A crash says why** (ours, `crash_report.cpp`; not in hidden runs): a
   crash signal, a Windows exception or an uncaught exception puts a line in
   the log (`mw3: crashed: ...`, with a backtrace where the system has one) and

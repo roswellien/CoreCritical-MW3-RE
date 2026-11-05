@@ -60,6 +60,7 @@ add_library(mw3core STATIC
   src/gamez/zutil/zutl_reg.cpp
   src/platform/reg_file.cpp
   src/platform/cue_audio.cpp
+  src/mech3/data_folder.cpp
   src/mech3/data_version.cpp
   src/mech3/patch12.cpp
   src/mech3/patch12_edits.cpp
