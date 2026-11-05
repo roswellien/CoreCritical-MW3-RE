@@ -63,7 +63,8 @@ The adapter owns immutable prepared mesh batches. A candidate cache entry is
 selected by batch/instance identity and reused only when all mutable inputs
 match byte-for-byte: camera/world matrices, clip/projection values, viewport,
 target size, lighting selection, native fog state and camera-to-world matrix,
-rounding mode and immutable geometry identity. Pose changes, camera movement,
+rounding mode, x86 SSE control state and immutable geometry identity. Architectures
+whose control state is not handled recompute instead. Pose changes, camera movement,
 fog changes, clipping changes and resize invalidate that entry. Deformed
 vertices always bypass the immutable cache.
 

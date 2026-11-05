@@ -3,6 +3,9 @@
 #include "prepared_draw.hpp"
 #include <cfenv>
 #include <map>
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+#include <xmmintrin.h>
+#endif
 
 namespace cc_mw3_re {
 // PreparedModels owns immutable batches for the adapter's lifetime. Addresses
@@ -10,6 +13,13 @@ namespace cc_mw3_re {
 // Deformed batches bypass the cache because their vertex bytes can change.
 class PreparedDrawCache {
   public:
+    static constexpr bool supports_control_state() {
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+        return true;
+#else
+        return false;
+#endif
+    }
     struct Statistics {
         std::uint64_t hits{}, misses{}, bypasses{};
         std::size_t bytes{}, entries{};
@@ -27,7 +37,7 @@ class PreparedDrawCache {
             return std::make_shared<PreparedSubmission>(prepare_draw(
                 source, context, viewport, width, height, geometry, lighting, profile));
         };
-        if (!enabled || !source.deformed.empty() || !maximum_entries_) {
+        if (!enabled || !supports_control_state() || !source.deformed.empty() || !maximum_entries_) {
             ++statistics_.bypasses;
             return build();
         }
@@ -54,6 +64,13 @@ class PreparedDrawCache {
         append(zmod::fog_calc().camera_to_world);
         const int rounding = std::fegetround();
         append(rounding);
+        std::uint32_t controls = 0;
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+        // FTZ/DAZ and exception masks affect arithmetic too. Status flags do
+        // not affect results and remain restored by the adapter's FP scope.
+        controls = _mm_getcsr() & 0xffc0U;
+#endif
+        append(controls);
         const auto identity = std::make_pair(reinterpret_cast<std::uintptr_t>(source.batch),
                                              reinterpret_cast<std::uintptr_t>(context.node));
         auto found = entries_.find(identity);
@@ -101,7 +118,7 @@ class PreparedDrawCache {
         std::array<unsigned char, 2 * sizeof(platform::prepared::Matrix) + 7 * sizeof(float) +
                                       sizeof(std::array<int, 4>) + 2 * sizeof(unsigned) +
                                       sizeof(bool) + sizeof(zmod::Fog) +
-                                      sizeof(zmod::FogCalc::camera_to_world) + sizeof(int)>;
+                 sizeof(zmod::FogCalc::camera_to_world) + sizeof(int) + sizeof(std::uint32_t)>;
     struct Entry {
         Signature signature;
         std::shared_ptr<const mw34::vkscene::ModelGeometry> geometry;

@@ -73,6 +73,11 @@ void checks() {
     const auto get = [&] {
         return cache.get(source, context, viewport, width, height, geometry, lighting, &profile);
     };
+    if (!cc::PreparedDrawCache::supports_control_state()) {
+        same(*get(), reference());
+        require(cache.statistics().bypasses == 1, "Unsupported FP controls entered cache");
+        return;
+    }
     const auto first = get();
     same(*first, reference());
     const auto processed = profile.vertices;
@@ -119,6 +124,12 @@ void checks() {
     std::fesetround(FE_DOWNWARD);
     miss();
     std::fesetround(rounding);
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+    const auto controls = _mm_getcsr();
+    _mm_setcsr(controls ^ 0x8000U);
+    miss();
+    _mm_setcsr(controls);
+#endif
     const auto bypasses = cache.statistics().bypasses;
     source.deformed = batch.vertices;
     same(*get(), reference());
