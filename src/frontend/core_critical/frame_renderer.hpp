@@ -15,6 +15,7 @@ struct AssetStatistics {
     std::uint64_t prepared_batches{}, gpu_model_draws{}, cpu_clipped_triangles{}, named_textures{};
     std::uint64_t geometry_uploads{};
     std::uint64_t lit_draws{}, normal_draws{};
+    std::uint64_t retired_geometry_buffers{};
 };
 
 class VulkanFrameRenderer : public sdlfe::FrameRenderer {
@@ -23,6 +24,7 @@ class VulkanFrameRenderer : public sdlfe::FrameRenderer {
     virtual std::uint64_t presentation_count() const = 0;
     virtual QualityStatistics quality_statistics() const = 0;
     virtual AssetStatistics asset_statistics() const = 0;
+    virtual cc::geometry::Statistics geometry_statistics() const = 0;
 };
 
 std::unique_ptr<VulkanFrameRenderer> make_renderer(

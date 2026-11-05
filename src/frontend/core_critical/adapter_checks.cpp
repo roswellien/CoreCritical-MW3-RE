@@ -628,7 +628,10 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 }
 } // namespace
 
+#include "geometry_checks.inc"
+
 int main(int argc, char **argv) {
+    bool geometry_check = false;
     bool native_wsi = false, quality_check = false, prepared_check = false, material_check = false;
     sdlfe::CoreCriticalQuality quality;
     for (int i = 1; i < argc; ++i) {
@@ -637,6 +640,8 @@ int main(int argc, char **argv) {
             native_wsi = true;
         else if (option == "--prepared")
             prepared_check = true;
+        else if (option == "--geometry")
+            geometry_check = true;
         else if (option == "--materials")
             prepared_check = material_check = true;
         else if (option == "--quality" && i + 1 < argc) {
@@ -674,7 +679,21 @@ int main(int argc, char **argv) {
         }
         const auto backend = native_wsi ? sdlfe::RendererBackend::core_critical_wsi
                                         : sdlfe::RendererBackend::core_critical_dxgi;
-        if (prepared_check)
+        if (geometry_check) {
+            check_strict_geometry(window,backend);
+            const auto gpu = check_native_geometry(window,backend);
+            const auto reference = check_native_geometry(window,backend,true);
+            require(gpu.size() == reference.size(),"Geometry comparison lost a scenario");
+            for (std::size_t frame = 0; frame < gpu.size(); ++frame) {
+                require(gpu[frame].size() == reference[frame].size(),"Geometry comparison lost pixels");
+                for (std::size_t pixel = 0; pixel < gpu[frame].size(); ++pixel)
+                    for (unsigned shift : {0U,8U,16U})
+                        require(std::abs(int((gpu[frame][pixel]>>shift)&255)-
+                                         int((reference[frame][pixel]>>shift)&255)) <= 2,
+                                "GPU/reference transform, fog, clipping or normal debug mismatch");
+            }
+        }
+        else if (prepared_check)
             check_prepared(window, backend, quality, material_check);
         else if (quality_check)
             check_quality(window, backend, quality);

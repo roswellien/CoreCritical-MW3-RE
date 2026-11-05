@@ -31,12 +31,14 @@ struct PreparedNormalBinding {
   std::string chassis, lod, path;
 };
 struct CoreCriticalAssets {
+  std::string geometry = "legacy";
+  bool geometry_debug_normals = false;
   std::string textures;
   std::vector<PreparedModelBinding> models;
   std::vector<PreparedNormalBinding> normals;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool empty() const {
-    return textures.empty() && models.empty() && normals.empty() && lighting == "off" &&
+    return geometry == "legacy" && !geometry_debug_normals && textures.empty() && models.empty() && normals.empty() && lighting == "off" &&
            sun_azimuth == "45" && sun_elevation == "35";
   }
 };

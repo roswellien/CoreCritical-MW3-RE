@@ -5,6 +5,7 @@
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "prepared_draw.hpp"
 #include "prepared_models.hpp"
+#include "renderer/geometry/reference.hpp"
 
 #include "frontend/sdl/sdl_child.h"
 #include "vk_scene.hpp"
@@ -85,7 +86,12 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
     };
     result.azimuth = number(options.sun_azimuth, -360, 360);
     result.elevation = number(options.sun_elevation, 1, 89);
-    result.enabled = options.lighting != "off";
+    result.enabled = options.lighting != "off" || options.geometry != "legacy";
+    if (options.lighting == "off" && options.geometry != "legacy") {
+        result.strength = 0;
+        result.ambient = 1;
+        result.ambient_color = {1,1,1};
+    }
     result.normals = options.lighting == "normal";
     result.normal_strength = result.ground_normal_strength = result.normals ? 1.f : 0.f;
     // Native sky/weather/shadow production is not part of prepared-model lighting.
@@ -167,6 +173,14 @@ std::vector<uint32_t> image_pixels(const platform::prepared::Image &image,
     return pixels;
 }
 
+cc::geometry::Mode parse_geometry(const std::string& mode) {
+    if (mode == "legacy") return cc::geometry::Mode::legacy;
+    if (mode == "partial") return cc::geometry::Mode::partial;
+    if (mode == "gpu") return cc::geometry::Mode::gpu;
+    if (mode == "cpu-reference") return cc::geometry::Mode::cpu_reference;
+    throw std::runtime_error("--cc-geometry supports legacy, partial, gpu or cpu-reference");
+}
+
 class FrameRenderer final : public VulkanFrameRenderer {
   public:
     explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
@@ -176,7 +190,10 @@ class FrameRenderer final : public VulkanFrameRenderer {
           hwnd_(static_cast<HWND>(SDL_GetPointerProperty(
               SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))),
           native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
-          quality_(parse_quality(quality)), lighting_(parse_lighting(assets)), prepared_(assets) {
+          quality_(parse_quality(quality)), lighting_(parse_lighting(assets)), prepared_(assets),
+          geometry_mode_(parse_geometry(assets.geometry)), geometry_debug_(assets.geometry_debug_normals) {
+        if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
+            throw std::runtime_error("Geometry normal debug requires an explicit geometry mode");
         if (!hwnd_) {
             throw std::runtime_error("SDL window has no Win32 handle");
         }
@@ -200,8 +217,12 @@ class FrameRenderer final : public VulkanFrameRenderer {
                 named_textures_,
                 retired_model_uploads_ + renderer_->model_uploads,
                 retired_lit_draws_ + renderer_->sun_world_draws + renderer_->sun_tl_draws,
-                retired_normal_draws_ + renderer_->normal_draws};
+                retired_normal_draws_ + renderer_->normal_draws,
+                retired_geometry_buffers_ + renderer_->retired_model_buffers};
     }
+#include "geometry_frame_adapter.inc"
+#include "geometry_reference_adapter.inc"
+
     bool wants_model_context() const override { return !prepared_.empty(); }
     bool replaces_model_geometry() const override { return suppress_model_draws_; }
     void end_model_draw() noexcept override { suppress_model_draws_ = false; }
@@ -255,6 +276,13 @@ class FrameRenderer final : public VulkanFrameRenderer {
                          prepared_cpu_.stage_ticks * milliseconds,
                          prepared_cpu_.assembly_ticks * milliseconds);
         }
+        if (geometry_mode_ != cc::geometry::Mode::legacy)
+            std::fprintf(stderr,"Geometry handoff: %llu submitted models, %llu CPU vertex preparations skipped, %llu CPU polygon preparations skipped, %llu unsupported models, %llu CPU 3D draw calls observed\n",
+                (unsigned long long)geometry_statistics_.submitted_models,
+                (unsigned long long)geometry_statistics_.skipped_vertices,
+                (unsigned long long)geometry_statistics_.skipped_polygons,
+                (unsigned long long)geometry_statistics_.unsupported_models,
+                (unsigned long long)geometry_statistics_.cpu_draw_calls);
         const auto quality = quality_statistics();
         std::fprintf(
             stderr,
@@ -383,6 +411,14 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void draw(Primitive primitive, const TLVertex *vertices, int count,
               const DrawState &state) override {
+        // Only the explicitly marked 2D compositor may supply CPU vertices in
+        // strict mode. Depth-always also occurs in 3D overlays, so it cannot
+        // identify a HUD exemption.
+        if (count > 0 && !state.sharp && geometry_mode_ != cc::geometry::Mode::legacy) {
+            ++geometry_statistics_.cpu_draw_calls;
+            if (geometry_mode_ == cc::geometry::Mode::gpu)
+                throw std::runtime_error("Strict GPU geometry: CPU 3D draw is not implemented");
+        }
         if (suppress_model_draws_)
             return;
         append_draw(primitive, vertices, count, state, state.sharp || state.depth_always);
@@ -727,7 +763,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
         auto source = native_wsi_ ? sdl_surface(window_) : vk::Renderer::WindowSurface{};
         renderer_ =
             std::make_unique<vk::Renderer>(vk::Renderer::ColorTarget::rgba8, std::move(source),
-                                           quality_, !prepared_.empty(), lighting_);
+                                           quality_, !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy,
+                                           lighting_, geometry_mode_ != cc::geometry::Mode::legacy);
         texture_limit_ = renderer_->max_texture_dimension(hwnd_);
         if (!native_wsi_ && !renderer_->dxgi_presenting()) {
             throw std::runtime_error("Core Critical DXGI transport is unavailable");
@@ -744,6 +781,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
             retired_model_uploads_ += renderer_->model_uploads;
             retired_lit_draws_ += renderer_->sun_world_draws + renderer_->sun_tl_draws;
             retired_normal_draws_ += renderer_->normal_draws;
+            retired_geometry_buffers_ += renderer_->retired_model_buffers;
             initialize_renderer();
             window_bound_ = false;
             resident_width_ = resident_height_ = 0;
@@ -835,6 +873,14 @@ class FrameRenderer final : public VulkanFrameRenderer {
     const vk::Renderer::Quality quality_;
     const mw34::sun::Settings lighting_;
     PreparedModels prepared_;
+    const cc::geometry::Mode geometry_mode_;
+    const bool geometry_debug_;
+    cc::geometry::Statistics geometry_statistics_;
+    struct NativeGeometry {
+        std::weak_ptr<const cc::geometry::Resource> source;
+        std::shared_ptr<const vk::ModelGeometry> geometry;
+    };
+    std::map<std::uint64_t,NativeGeometry> native_geometry_;
     std::unique_ptr<vk::Renderer> renderer_;
     const sdlfe::FrameShape *shape_{};
     vk::Scene scene_{};
@@ -845,6 +891,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
     std::string capture_path_;
     std::uint64_t texture_version_{}, retired_draws_{}, retired_presents_{};
     std::uint64_t presented_frames_{};
+    std::uint64_t retired_geometry_buffers_{};
     QualityStatistics retired_quality_{};
     std::map<const platform::prepared::Image *, int32_t> prepared_textures_;
     std::map<const platform::prepared::NormalImage *, int32_t> prepared_normals_;

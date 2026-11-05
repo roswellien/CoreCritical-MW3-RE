@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <memory>
+#include "frontend/core_critical/renderer/geometry/resource.hpp"
 
 // What the rebuilt Direct3D layer (zvid_ddd3d.c, docs/render.md section 4)
 // needs from the machine: stands in for IDirect3DDevice3 and the DirectDraw
@@ -58,6 +60,13 @@ class Render3D {
   virtual ~Render3D() = default;
   // What the load screen names as the video driver (ours; 0x005799f0 named the DirectDraw driver).
   virtual const char* driver_name() const { return "Default"; }
+  virtual cc::geometry::Mode geometry_mode() const { return cc::geometry::Mode::legacy; }
+  virtual cc::geometry::Submission submit_model_geometry(
+      std::shared_ptr<const cc::geometry::Resource>, const ModelDrawContext&,
+      const std::vector<cc::geometry::Material>&, const cc::geometry::Fog&) {
+    return cc::geometry::Submission::unsupported;
+  }
+  virtual void note_cpu_model_geometry() {}
   virtual bool wants_model_context() const { return false; }
   virtual void begin_model_draw(const ModelDrawContext&) {}
   virtual void end_model_draw() noexcept {}

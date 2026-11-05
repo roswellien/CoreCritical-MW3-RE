@@ -51,6 +51,8 @@
 #include <set>
 #include <thread>
 #include "world_fast_binding.hpp"
+#include "geometry/resource.hpp"
+#include "native_geometry_vert.h"
 #include "world_scene_vert.h"
 #include "status_model_fit.hpp"
 #include "model_scene_vert.h"
@@ -95,13 +97,13 @@ struct Push {
     std::uint32_t mode[4];
 };
 static_assert(sizeof(Push) == 64);
-struct ModelVertex {
-    float x, y, z, nx, ny, nz, u, v;
-};
+using ModelVertex = cc::geometry::Vertex;
 static_assert(sizeof(ModelVertex) == 32);
 struct ModelGeometry {
     std::uint64_t key{}, hash{};
     std::vector<ModelVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    std::weak_ptr<const cc::geometry::Resource> source;
 };
 struct ModelInstance {
     std::shared_ptr<const ModelGeometry> geometry;
@@ -113,6 +115,9 @@ struct ModelInstance {
     std::array<float, 12> sun_normal{}, sun_world{};
     bool sun_eligible{};
     std::uint64_t shadow_source{};
+    std::shared_ptr<const cc::geometry::Resource> source;
+    std::array<float,4> geometry_fog0{}, geometry_fog1{};
+    float geometry_near{};
 };
 struct ModelPush {
     Push base;
@@ -143,6 +148,7 @@ struct Draw {
     bool condition_schematic{};
     bool depth_only{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
+    bool geometry_debug_normals{};
 };
 struct Clear {
     unsigned flags;
@@ -196,9 +202,9 @@ class Renderer {
     // RGBA fallback without changing device capabilities or process settings.
     explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
                       WindowSurface source = {}, Quality quality = {1, 1, 1, false},
-                      bool models = false, mw34::sun::Settings lighting = {})
+                      bool models = false, mw34::sun::Settings lighting = {}, bool native_geometry = false)
         : require_rgba8(color_target == ColorTarget::rgba8), surface_source(std::move(source)),
-          quality_settings(quality), use_gpu_models(models), lighting_settings(lighting) {
+          quality_settings(quality), use_gpu_models(models), lighting_settings(lighting), use_native_geometry(native_geometry) {
         if (bool(surface_source.create) != bool(surface_source.destroy))
             throw std::runtime_error("Vulkan surface creation and destruction must have one owner");
         if (surface_source.create && surface_source.extensions.empty())
@@ -899,6 +905,8 @@ class Renderer {
         return p.limits.maxImageDimension2D;
     }
     bool gpu_models() const { return use_gpu_models; }
+    bool use_native_geometry{};
+    std::uint64_t retired_model_buffers{};
     std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{}, world_gpu_draws{},
         effect_light_peak{}, fixture_light_peak{};
     std::uint64_t normal_draws{};
@@ -962,6 +970,20 @@ class Renderer {
     // With copy-back disabled, the GPU may still be working when this call returns.
     void render(Scene &s, bool upload_in = true, bool readback_out = true) {
         settle();
+        // The previous GPU submission has completed. Indexed geometry owns no
+        // live engine pointers and can retire once its source and packets expire.
+        for (auto it = model_buffers.begin(); it != model_buffers.end();) {
+            auto& buffer = it->second;
+            if (!buffer.index_count || !buffer.source.expired()) { ++it; continue; }
+            for (Buffer* allocation : {&buffer.local, &buffer.staging, &buffer.indices,
+                                       &buffer.index_staging}) {
+                if (allocation->buffer) f.vkDestroyBuffer(device, allocation->buffer, nullptr);
+                if (allocation->memory) f.vkFreeMemory(device, allocation->memory, nullptr);
+            }
+            sunChecked.erase(it->first);
+            ++retired_model_buffers;
+            it = model_buffers.erase(it);
+        }
         if (!device)
             init();
         if (s.width != width || s.height != height || scale_req != scale ||
@@ -1243,6 +1265,8 @@ class Renderer {
                         }
                         u = mw34::sun::uniform(instance.sun_normal, environment);
                         u.world = instance.sun_world;
+                        u.geometry_fog0 = instance.geometry_fog0;
+                        u.geometry_fog1 = instance.geometry_fog1;
                         if (instance.world)
                             u.extra[1] = environment.ground_normal_strength;
                     } else {
@@ -1253,6 +1277,7 @@ class Renderer {
                         u.extra = {light.projection[0], environment.ground_normal_strength,
                                    environment.shadow_debug ? 1.f : 0.f, 1};
                     }
+                    if (draw.geometry_debug_normals) u.ambient[3] = 1;
                     if (skyEyeValid) {
                         const auto &e =
                             draw.sun_tl && !draw.sky ? draw.sun_tl->camera_world : skyEye;
@@ -1421,6 +1446,10 @@ class Renderer {
         for (auto *b : model_pending) {
             VkBufferCopy c{0, 0, b->local.size};
             f.vkCmdCopyBuffer(cmd, b->staging.buffer, b->local.buffer, 1, &c);
+            if (b->indices.buffer) {
+                VkBufferCopy indices{0, 0, b->indices.size};
+                f.vkCmdCopyBuffer(cmd, b->index_staging.buffer, b->indices.buffer, 1, &indices);
+            }
             b->uploaded = true;
             ++model_uploads;
             model_uploaded_bytes += c.size;
@@ -1429,7 +1458,7 @@ class Renderer {
             VkMemoryBarrier mb{};
             mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
             mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+            mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
             f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                    VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1, &mb, 0, nullptr, 0,
                                    nullptr);
@@ -1592,7 +1621,8 @@ class Renderer {
             const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
             const VkPipelineLayout layout = (model || lit) ? modelLayout : pipelineLayout;
             f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline(d.key, model, d.model && d.model->world, lit));
+                                pipeline(d.key, model, d.model && d.model->world, lit, d.model && d.model->source != nullptr,
+                                         (d.push.mode[3] & 0x80000000U) != 0));
             f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
                                       &drawSets[o.index], 0, nullptr);
             if (lit) {
@@ -1617,8 +1647,11 @@ class Renderer {
             if (model) {
                 const auto &i = *d.model;
                 const auto &b = model_buffers.at(i.geometry->key);
-                if (!b.uploaded || (!i.world && d.first) || d.count != b.count)
+                const bool indexed = !i.geometry->indices.empty();
+                if (!b.uploaded || (indexed ? (d.first > b.index_count || d.count > b.index_count - d.first)
+                                          : ((!i.world && d.first) || d.count != b.count)))
                     throw std::runtime_error("GPU model draw range mismatch");
+                if (indexed) f.vkCmdBindIndexBuffer(cmd, b.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
                 if (i.world) {
                     const VkBuffer buffers[2]{b.local.buffer, vertexBuffer.buffer};
                     const VkDeviceSize offsets[2]{0, VkDeviceSize(d.first) * 32};
@@ -1639,7 +1672,7 @@ class Renderer {
                     mp.base.factor[0] = float((i.color >> 16) & 255) / 255.f;
                     mp.base.factor[1] = float((i.color >> 8) & 255) / 255.f;
                     mp.base.factor[2] = float(i.color & 255) / 255.f;
-                    mp.base.factor[3] = i.diagnostic_fog_factor;
+                    mp.base.factor[3] = i.source ? i.geometry_near : i.diagnostic_fog_factor;
                 }
                 f.vkCmdPushConstants(cmd, layout,
                                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -1661,7 +1694,10 @@ class Renderer {
                                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                      sizeof(Push), &d.push);
             }
-            f.vkCmdDraw(cmd, vertexCount, 1, d.model && d.model->world ? 0 : d.first, 0);
+            if (d.model && !d.model->geometry->indices.empty())
+                f.vkCmdDrawIndexed(cmd, vertexCount, 1, d.first, 0, 0);
+            else
+                f.vkCmdDraw(cmd, vertexCount, 1, d.model && d.model->world ? 0 : d.first, 0);
             if (reconstruction_stage == ReconstructionStage::coverage)
                 coverage_draws += logicalDraws;
             else {
@@ -1860,7 +1896,7 @@ class Renderer {
     X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) X(vkCreateCommandPool) \
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
     X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
-    X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
+    X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
     X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences) \
     X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp)
 #define MW34_VK_DECL(n) PFN_##n n{};
@@ -1900,7 +1936,7 @@ class Renderer {
     Buffer upload, readback, vertexBuffer, normalBuffer, texUpload, sunBuffer, effectBuffer;
     VkDeviceSize sunStride{};
     VkDescriptorSetLayout sunSetLayout{}, normalSetLayout{};
-    VkShaderModule sunWorldVert{}, sunModelVert{}, sunTlVert{}, sunFrag{};
+    VkShaderModule sunWorldVert{}, sunModelVert{}, sunTlVert{}, sunFrag{}, nativeGeometryVert{};
     // Optional sun shadow map. Casters are GPU replacement models only.
     struct ShadowCaster {
         VkBuffer buffer{};
@@ -2399,7 +2435,9 @@ class Renderer {
 
   private:
     struct ModelBuffer {
-        Buffer local, staging;
+        Buffer local, staging, indices, index_staging;
+        std::weak_ptr<const cc::geometry::Resource> source;
+        unsigned index_count{};
         std::uint64_t hash{};
         unsigned count{};
         bool uploaded{};
@@ -2627,6 +2665,14 @@ class Renderer {
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &q;
         VkPhysicalDeviceFeatures enabled{};
+        if (use_native_geometry) {
+            VkPhysicalDeviceFeatures supported{};
+            f.vkGetPhysicalDeviceFeatures(gpu, &supported);
+            if (!supported.shaderClipDistance)
+                throw std::runtime_error("GPU geometry requires shaderClipDistance");
+            enabled.shaderClipDistance = VK_TRUE;
+        }
+        dci.pEnabledFeatures = &enabled;
         if (anisotropy() > 1) {
             VkPhysicalDeviceFeatures supported{};
             f.vkGetPhysicalDeviceFeatures(gpu, &supported);
@@ -2924,6 +2970,7 @@ class Renderer {
                 throw std::runtime_error("Sun prototype requires GPU geometry");
             sunWorldVert = module(sun_world_vert_spv, sizeof(sun_world_vert_spv));
             sunModelVert = module(sun_model_vert_spv, sizeof(sun_model_vert_spv));
+            if (use_native_geometry) nativeGeometryVert = module(native_geometry_vert_spv, sizeof(native_geometry_vert_spv));
             sunTlVert = module(sun_tl_vert_spv, sizeof(sun_tl_vert_spv));
             sunFrag = module(effect_scene_frag_spv, sizeof(effect_scene_frag_spv));
             if (lighting_settings.shadows)
@@ -3134,11 +3181,12 @@ class Renderer {
     }
     // A cached immutable device-local model buffer and its one-time upload.
     ModelBuffer &model_buffer(const ModelGeometry &g) {
-        if (g.vertices.empty() || g.vertices.size() > 65535 || g.vertices.size() % 3)
+        if (g.vertices.empty() || (g.indices.empty() ? (g.vertices.size() > 65535 || g.vertices.size() % 3)
+                                                    : (g.vertices.size() > 1000000 || g.indices.size() > 6000000 || g.indices.size() % 3)))
             throw std::runtime_error("GPU model geometry size mismatch");
         auto &b = model_buffers[g.key];
         if (b.local.buffer) {
-            if (b.hash != g.hash || b.count != g.vertices.size())
+            if (b.hash != g.hash || b.count != g.vertices.size() || b.index_count != g.indices.size())
                 throw std::runtime_error("GPU model geometry identity changed");
             return b;
         }
@@ -3162,6 +3210,24 @@ class Renderer {
         b.local.size = bytes;
         b.hash = g.hash;
         b.count = unsigned(g.vertices.size());
+        b.index_count = unsigned(g.indices.size());
+        b.source = g.source;
+        if (!g.indices.empty()) {
+            for (auto index : g.indices) if (index >= g.vertices.size())
+                throw std::runtime_error("GPU geometry index outside vertices");
+            const VkDeviceSize index_bytes = g.indices.size() * sizeof(std::uint32_t);
+            ensure(b.index_staging, index_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+            std::memcpy(b.index_staging.mapped, g.indices.data(), size_t(index_bytes));
+            ci.size = index_bytes;
+            ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            check(f.vkCreateBuffer(device, &ci, nullptr, &b.indices.buffer), "model index buffer");
+            f.vkGetBufferMemoryRequirements(device, b.indices.buffer, &r);
+            ai.allocationSize = r.size;
+            ai.memoryTypeIndex = type(r, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            check(f.vkAllocateMemory(device, &ai, nullptr, &b.indices.memory), "model index memory");
+            check(f.vkBindBufferMemory(device, b.indices.buffer, b.indices.memory, 0), "bind model indices");
+            b.indices.size = index_bytes;
+        }
         return b;
     }
     // Transfer-only images need no view. Sampled/attachment images receive a view
@@ -3384,11 +3450,13 @@ class Renderer {
         return samplers[key] = s;
     }
     VkPipeline pipeline(const PipelineKey &k, bool model = false, bool world = false,
-                        bool lit = false) {
+                        bool lit = false, bool native_geometry = false, bool clockwise_front = false) {
         // points uses bit56 (0/1); bit57 distinguishes this private model pipeline.
         const std::uint64_t key = k.packed() | (model ? (1ULL << 57) : 0ULL) |
                                   (world ? (1ULL << 58) : 0ULL) | (lit ? (1ULL << 59) : 0ULL) |
-                                  (reconstruction_stage == ReconstructionStage::coverage ? (1ULL << 60) : 0ULL);
+                                  (reconstruction_stage == ReconstructionStage::coverage ? (1ULL << 60) : 0ULL) |
+                                  (native_geometry ? (1ULL << 61) : 0ULL) |
+                                  (clockwise_front ? (1ULL << 62) : 0ULL);
         auto it = pipelines.find(key);
         if (it != pipelines.end())
             return it->second;
@@ -3401,6 +3469,7 @@ class Renderer {
                     : (i ? frag : (world ? worldVert : (model ? modelVert : vert)));
             if (i && reconstruction_stage == ReconstructionStage::coverage)
                 st[i].module = coverageFrag;
+            if (!i && native_geometry) st[i].module = nativeGeometryVert;
             st[i].pName = "main";
         }
         VkVertexInputBindingDescription vb{0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
@@ -3450,7 +3519,7 @@ class Renderer {
         // D3DCULL_CW culls clockwise screen-space triangles, D3DCULL_CCW counter-clockwise ones (y
         // down in both APIs).
         rs.cullMode = k.cull == 1 ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-        rs.frontFace = k.cull == 3 ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.frontFace = clockwise_front || k.cull == 3 ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
         VkPipelineMultisampleStateCreateInfo ms{};
         ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -3906,7 +3975,7 @@ class Renderer {
         if (coverageFrag)
             f.vkDestroyShaderModule(device, coverageFrag, nullptr);
         for (auto &[key, b] : model_buffers)
-            for (Buffer *p : {&b.local, &b.staging}) {
+            for (Buffer *p : {&b.local, &b.staging, &b.indices, &b.index_staging}) {
                 if (p->buffer)
                     f.vkDestroyBuffer(device, p->buffer, nullptr);
                 if (p->memory)
@@ -3994,6 +4063,7 @@ class Renderer {
             f.vkDestroyDescriptorSetLayout(device, normalSetLayout, nullptr);
         if (sunWorldVert)
             f.vkDestroyShaderModule(device, sunWorldVert, nullptr);
+        if (nativeGeometryVert) f.vkDestroyShaderModule(device, nativeGeometryVert, nullptr);
         if (sunModelVert)
             f.vkDestroyShaderModule(device, sunModelVert, nullptr);
         if (sunTlVert)

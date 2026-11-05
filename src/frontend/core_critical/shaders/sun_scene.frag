@@ -272,6 +272,7 @@ void main() {
         if(dot(N,eye-worldPosition)<0.0)N=-N;
     }else{
         N=normalize(worldNormal);
+        if ((draw.mode.w & 0x80000000u) != 0u && !gl_FrontFacing) N=-N;
     }
     vec3 dp1 = dFdx(worldPosition);
     vec3 dp2 = dFdy(worldPosition);

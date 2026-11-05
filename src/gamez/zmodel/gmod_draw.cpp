@@ -1,8 +1,10 @@
 #include "gamez/zmodel/gmod_draw.h"
 #include "platform/render3d.h"
+#include "gamez/zmodel/gmod_geometry.h"
 
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 
 #include "crt/msvc_math.h"
 #include "gamez/zclass/cls_node.h"
@@ -887,6 +889,12 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
   l.normals = g_buf.poly_normal;
   const int32_t type = field<int32_t>(m, 0);
   if (type == 2) {
+    if (auto* renderer = zvid::render3d(); renderer &&
+        renderer->geometry_mode() != cc::geometry::Mode::legacy) {
+      renderer->note_cpu_model_geometry();
+      if (renderer->geometry_mode() == cc::geometry::Mode::gpu)
+        throw std::runtime_error("Strict GPU geometry: point model is not implemented");
+    }
     draw_points(m);
     s.default_model = 0;
     return 0;
@@ -898,6 +906,13 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
     zmth::load_model_view();
   }
   s.default_model = type == 0 ? 1 : 0;
+  // The owned geometry handoff precedes every rendering-related vertex loop.
+  // This initial family has no model lights, morphs or material cycles.
+  if (submit_geometry(*node)) {
+    s.clip.mask = mask;
+    zvid::device_state().primitive = 6;
+    return 0;
+  }
   uint32_t needs = 0;  // uninitialised stack in the original when there are no polygons
   if (field<int32_t>(m, 0x10) > 0) {
     needs = model_needs(field<uint32_t>(m, 8), reinterpret_cast<const float*>(m.header + 0x48), field<float>(m, 0x54));

@@ -321,4 +321,12 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     return output;
 }
 
+bool PreparedModels::has_binding(const platform::ModelDrawContext& context) const {
+    const auto* node = static_cast<const Node*>(context.node);
+    if (!node || !node->source_asset) return false;
+    for (const auto& model : models_)
+        if (model.source_asset == node->source_asset->name) return true;
+    return false;
+}
+
 } // namespace cc_mw3_re

@@ -236,6 +236,7 @@ void usage() {
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
       "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
+        "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
@@ -366,6 +367,14 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
     else if (s == "--cc-textures" && next(1)) a.cc_assets.textures = argv[++i];
     else if (s == "--cc-lighting" && next(1)) a.cc_assets.lighting = argv[++i];
+    else if (s == "--cc-geometry" && next(1)) a.cc_assets.geometry = argv[++i];
+    else if (s == "--cc-geometry-debug" && next(1)) {
+      if (std::string(argv[++i]) != "normals") {
+        std::fprintf(stderr,"--cc-geometry-debug supports normals\n");
+        return 1;
+      }
+      a.cc_assets.geometry_debug_normals = true;
+    }
     else if (s == "--cc-sun" && next(2)) {
       a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
     }
@@ -1022,10 +1031,22 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     std::unique_ptr<mech3::ActionGame> ia_game;  // --mission ia<N>: the launch's game
     std::unique_ptr<mech3::MultiplayerGame> multi_game;  // --mission <dir>mp<N>: the launch's
     std::vector<double> frame_ms;  // --frame-times: each frame's wall time
+    const char* benchmark_timestamps = std::getenv("MW3_BENCHMARK_TIMESTAMPS");
+    struct FrameTimestamp { int frame; uint64_t counter; };
+    std::vector<FrameTimestamp> frame_timestamps;
+    if (benchmark_timestamps) {
+      if (a.frame_times <= 0) throw std::runtime_error("Benchmark timestamps require --frame-times");
+      frame_timestamps.reserve(a.frames > 0 ? std::size_t(a.frames) : 4096);
+      std::printf("mw3: benchmark main thread %llu, counter frequency %llu\n",
+                  (unsigned long long)SDL_GetCurrentThreadID(),
+                  (unsigned long long)SDL_GetPerformanceFrequency());
+      std::fflush(stdout);
+    }
     uint64_t frame_last = 0;
     auto record_frame_time = [&](int frame) {
       if (a.frame_times <= 0 || frame < a.frame_times) return;
       const uint64_t now = SDL_GetPerformanceCounter();
+      if (benchmark_timestamps) frame_timestamps.push_back({frame,now});
       if (frame_last) frame_ms.push_back(static_cast<double>(now - frame_last) * 1000.0 / SDL_GetPerformanceFrequency());
       frame_last = now;
     };
@@ -1670,6 +1691,18 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         std::printf("mw3: frame times over %zu frames: mean %.4f ms, median %.4f, p95 %.4f, p99 %.4f, max %.4f\n",
                     s.size(), sum / s.size(), at(0.5), at(0.95), at(0.99), s.back());
       }
+    }
+    // Save the buffered clock samples after timing, never with per-frame I/O.
+    if (benchmark_timestamps && !frame_timestamps.empty()) {
+      auto* output = std::fopen(benchmark_timestamps,"w");
+      if (!output) throw std::runtime_error("Cannot write benchmark timestamps");
+      std::fprintf(output,"# counter_frequency %llu\nframe,counter\n",
+                   (unsigned long long)SDL_GetPerformanceFrequency());
+      for (const auto& sample : frame_timestamps)
+        std::fprintf(output,"%d,%llu\n",sample.frame,(unsigned long long)sample.counter);
+      const bool failed = std::ferror(output) != 0;
+      const int closed = std::fclose(output);
+      if (failed || closed) throw std::runtime_error("Incomplete benchmark timestamps");
     }
     app.destroy();  // the app's destructor: the settings saved
     if (a.verbose) engine.print_unported_summary();

@@ -37,7 +37,14 @@ endif()
 
 # The rebuilt game and engine. No platform or engine types in here: the front end
 # (SDL3, with Godot as the fallback) talks to it through src/platform.
+add_library(cc_geometry_resources STATIC
+  src/frontend/core_critical/renderer/geometry/resource.cpp)
+target_compile_features(cc_geometry_resources PUBLIC cxx_std_17)
+if(MSVC)
+  target_compile_options(cc_geometry_resources PRIVATE /EHsc)
+endif()
 add_library(mw3core STATIC
+  src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
   src/crt/msvc_math.cpp
@@ -302,6 +309,10 @@ add_library(mw3core STATIC
   src/mech3/music.cpp
 )
 target_include_directories(mw3core PUBLIC src)
+target_link_libraries(mw3core PUBLIC cc_geometry_resources)
+if(MSVC)
+  target_compile_options(mw3core PRIVATE /EHsc)
+endif()
 target_include_directories(mw3core PRIVATE third_party)
 if(MSVC)
   target_compile_options(mw3core PRIVATE /EHsc)
@@ -571,6 +582,12 @@ target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
                                           MW3_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME mw3tests COMMAND mw3tests)
+add_executable(mw3geometry_checks tests/test_geometry_handoff.cpp)
+target_link_libraries(mw3geometry_checks PRIVATE mw3core)
+if(MSVC)
+  target_compile_options(mw3geometry_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3geometry_checks COMMAND mw3geometry_checks)
 
 # The SDL3 front end and the programs on it.
 option(MW3_CORE_CRITICAL_VULKAN "Build the experimental Core Critical Vulkan/DXGI renderer" OFF)

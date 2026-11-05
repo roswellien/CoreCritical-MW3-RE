@@ -28,6 +28,7 @@ class PreparedModels {
     const CpuStatistics &cpu_statistics() const { return cpu_statistics_; }
     explicit PreparedModels(const sdlfe::CoreCriticalAssets &options);
     bool empty() const { return models_.empty(); }
+    bool has_binding(const platform::ModelDrawContext& context) const;
     const platform::prepared::Image *named_texture(const char *name) const;
     PreparedModelDraw draw(const platform::ModelDrawContext &context) const;
 
