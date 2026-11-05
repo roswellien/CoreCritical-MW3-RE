@@ -21,8 +21,12 @@ Every release's full notes are on the [Releases](../../releases) page, and
 [CHANGES.md](CHANGES.md) lists everything the rebuild changes from the
 original.
 
-**Coming in the next release** (fixed, not released yet):
+**1.0.3 (2026-11-05)**
 
+- **Your data folder can live on another drive:** GAME FILES, MY DATA FOLDER in the
+  launcher copies it, checks the copy, then switches over, and removes the old
+  copy only if you say so. If the drive is missing at start the game says so
+  instead of starting afresh.
 - **Linux:** the game no longer closes at the end of the intro movies.
 - **Linux:** an install in any letter case now works (all lower case, all upper
   case, or mixed).
