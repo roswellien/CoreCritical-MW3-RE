@@ -151,6 +151,7 @@ it is clear what the designers meant.
 - **Cut ground keeps its texture lined up.** When a crater cut a ground polygon and a corner of a cut piece lay on a straight edge, the original dropped that corner from the piece's points but not from its texture coordinates and colours, so every corner after it took the next one's: the texture and shading on that piece slid by one corner (about 1 in 200 of the polygons a crater adds). The extra corner's texture coordinates and colours now go with it.
 - **Craters next to an earlier crater are judged on the earlier one.** The original refuses a crater that would come within 5 m of an earlier crater in the same patch of ground, but it checked against the earlier crater's record after freeing it, so the answer depended on what the memory held by then. The rebuild keeps the earlier craters' outlines for the test.
 - From high up, no dark band between the far ground and the sky: what nothing draws takes the fog's colour (bug fixes on).
+- A light carried by something that moves now shines from where it is, not from the world's origin.
 
 ## Crashes and broken data that no longer break the game
 

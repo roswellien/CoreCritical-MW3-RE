@@ -1,3 +1,4 @@
+#include "gamez/zclass/class.h"
 #include "gamez/zmodel/gmod_light.h"
 
 #include <cmath>
@@ -158,6 +159,9 @@ Clouds& clouds() { return g_clouds; }
 Lighting& lighting() { return g_lighting; }
 LightHooks& light_hooks() { return g_hooks; }
 void use_device_light_output() {
+  // FIX (bug): the whole chain (0x004ed280), or a light under an object3d (a mech's headlight, a world's lamp) sits
+  // at its parent's origin: the simple chain above stands in only for the tests' worlds.
+  g_hooks.node_to_world = zcls::node_to_world;
   g_hooks.point_color = zvid::set_point_light_color;
   g_hooks.mix_fog = zrndr::set_mix_fog_color;
   g_hooks.send_mix_fog = zvid::send_mix_fog;
