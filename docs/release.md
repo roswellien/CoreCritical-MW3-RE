@@ -56,11 +56,13 @@ every box here is ticked:
 ## 1. Before
 
 - [ ] `main` is the commit to release, with nothing uncommitted.
-- [ ] The tests pass on that commit: `mw3tests` and `mw3sdltests` on the Mac
-      and Windows, the differential tests on the Mac
-      (`tests/differential/run_all.sh`; under `run_capped.py` give it `--secs 2400`:
-      `test_anim_save` took 1729 s on a busy machine), and on Linux `mw3tests` and
-      `mw3sdltests` one test at a time under `run_capped.py` (WSL: docs/linux.md,
+- [ ] The tests of what changed since the last release pass on that commit, not
+      the whole suites (Owen, 2026-11-05): each change's own tests and those of
+      the code that uses it. A change to movement or collision runs the mission
+      tests (`MW3_TEST=mission_`), a change to loading or play the campaign runs,
+      a change to platform code its tests on that platform. The notes say which
+      ran. Full runs when wanted: `tests/differential/run_all.sh` under
+      `run_capped.py --secs 2400`; Linux one test at a time (docs/linux.md,
       Checking).
 - [ ] `CHANGES.md` has a line for every change since the last release.
 - [ ] The README's **What's new** has this release's section, its date, and an
