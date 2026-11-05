@@ -220,8 +220,9 @@ pseudocode) for the vehicle editor.
    ported: the first is read only by the editors (S5 on), the second writes
    into the debug lines, which the release never shows.
 
-**After v1.0, with Pirate's Moon** (its zainetedit.cpp changed: 35 changed
-functions, 85 new; ported once with both versions side by side):
+**After Pirate's Moon is finished (Owen, 2026-11-05):** MW3's version on `main`,
+PM's differences on `pm` (its zainetedit.cpp changed: 35 changed functions, 85
+new):
 
 5. **S5, S6** The AI net editor: 0x00402d60, 0x0040e120, 0x00403690, the
    handlers above, the tree view; Save Changes to the write dir (FIX (A)),
@@ -230,3 +231,7 @@ functions, 85 new; ported once with both versions side by side):
 6. **S7** The vehicle editor mapped (0x004b80f0's object, its screens and
    what each control edits and writes, to which file; every save to the
    write dir), then its own sittings (likely 3 to 5), named from that map.
+7. **S8** The "GameZ Interpreter" console 0x5960a0, with its log callback
+   0x596130, its line runner 0x596190 and its toggle 0x4810d0 (`interp.md`,
+   Hidden debug console). The exe's only way in, action 0xa3, is likely
+   unreachable, so the key is ours, under a debug flag as the camera's is.
