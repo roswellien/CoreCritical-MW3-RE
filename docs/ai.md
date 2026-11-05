@@ -993,7 +993,7 @@ two updates):
 | animation | 0x4e30f0: the mission's animation by name (0x50b450) | 0x4e3120: runs it (0x508c10); `_once` the first time |
 | scan_aim, scan_hit, scan_time, canleave | 0x4e3230: the named vehicle's brain (0x4d7330, vt+0x40, vt+0x140, IControls vt+0x54) found as the mission starts | 0x4e3200: the brain's switch on or off by the record's flag: +0x98, +0x9c, +0xa0 (aiv.zrd p8's 14th..16th items), canleave +0x3c (params' second item) with +0xdc FLT_MAX (0x4d9c20..0x4d9ca0, the same functions the compiled nets' scan steps name) |
 | shutdown | 0x4e3560 | 0x4e3650: a mech of that name powered down or up (0x41cc30, the record's second item) |
-| destroy | 0x4e33c0 | 0x4e34b0: a mech destroyed (0x41cfa0(1)), anything else through its vt+0x70 |
+| destroy | 0x4e33c0 | 0x4e34b0: a mech destroyed (0x41cfa0(1)), anything else through its vt+0x70 (`WiredValveHooks::mech_destroy`; the name `player` is the launched mech, 0x004140c0's). Shipped on mechs only in c2 m2: the refinery's animation sets valve `apcan01` (event 0x2b, the binder), and with `player_in_gas` or `dominic_in_gas` (the regions `reg_gas`) that mech dies. A turret or target named by a destroy still logs `obj.vt+0x70`; none ships |
 | setteam | 0x4e3700 | 0x4e37f0: the entity's AiTarget masks from the team, as the mission start sets them |
 | attack_strategy | 0x4e38d0 | 0x4e39c0: the vehicle's brain +0x40 (aiv.zrd p2's first item) |
 | teleport | 0x4e3a90 | 0x4e3ba0: zEntity's vehicle (0x5a8210) placed at (x y z) and yaw (vt+0xdc), its controls given the brain's current order's net again (IControls vt+0x04, section 12), so it plans its way from there |

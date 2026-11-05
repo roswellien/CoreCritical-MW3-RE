@@ -9175,6 +9175,121 @@ TEST(mission_c1m1_unported_survey_headless) {
   mech3::options() = mech3::Options{};
 }
 
+// The destroy valves on the real hooks (0x004e34b0, ai.md section 13): c2m2's
+// gas, its two shipped records aimed at mechs. The Air Refinery shot down, its
+// animation sets the valve apcan01 (event 0x2b, the binder's valve named as its
+// node); with dominic_in_gas (a region's) that destroys Dominic Paine, with
+// player_in_gas the player.
+TEST(mission_c2m2_gas_destroys_the_mechs_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("mission_valve_destroy_write"));
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::player_controls_instance() = nullptr;
+  mech3::options() = mech3::Options{};
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    mech3::GameEngine::Launch l;
+    l.index = 1, l.op = 2, l.number = 2;
+    l.mech = 3;
+    engine.set_launch(l);
+    app.post_intro_ = &mech3::states().load;
+    int frames = 0, fired_at = -1;
+    void* player = nullptr;
+    void* dominic = nullptr;
+    void* gun = nullptr;
+    void* refinery = nullptr;
+    int dominic_state = -1, player_state = -1, player_after_dominic = -1;
+    float armor_before = -1, armor_after = -1;
+    const auto state = [](void* m) {
+      mech3::LaunchedMech o;
+      mech3::describe_mech(m, &o);
+      return o.anim_state;
+    };
+    const auto valve = [](const char* name) {
+      mech3::ai::Valve* v = mech3::ai::valve_find(name);
+      return v ? v->get() : -1;
+    };
+    const auto set = [](const char* name) {
+      if (mech3::ai::Valve* v = mech3::ai::valve_find(name)) v->set(1);
+    };
+    int before_canister = -1;
+    engine.on_present = [&](int) {
+      if (app.current() != &mech3::states().core) return;
+      ++frames;
+      if (frames == 5) {
+        player = mech3::mech_mission_player();
+        int32_t made = 0;
+        const mech3::AiMechMade* ai = mech3::mission_ai_mechs(&made);
+        for (int32_t i = 0; i < made; ++i)
+          if (ai[i].name && std::strcmp(ai[i].name, "Dominic_Paine") == 0) dominic = ai[i].mech;
+        gun = mech3::chain_weapon();
+        for (int32_t i = 0; i < zcls::nodes().capacity; ++i)
+          if (zcls::Node* n = zcls::node_at(i); n && std::strcmp(n->name(), "apcan01") == 0) refinery = n;
+        if (player) armor_before = [&] { mech3::LaunchedMech o; mech3::describe_mech(player, &o); return o.armor; }();
+        set("dominic_in_gas");
+      }
+      if (!dominic || !player || !refinery) return;
+      if (frames == 20) before_canister = state(dominic);
+      if (fired_at < 0) {
+        if (valve("apcan01") == 1) fired_at = frames, set("dominic_in_gas");  // (his region clears it while he is out)
+        else if (frames > 20) mech3::chain_hit_node(refinery, gun);
+        return;
+      }
+      if (frames == fired_at + 10) {
+        dominic_state = state(dominic);
+        player_after_dominic = state(player);
+        set("player_in_gas");
+      }
+      if (frames == fired_at + 20) {
+        player_state = state(player);
+        mech3::LaunchedMech o;
+        mech3::describe_mech(player, &o);
+        armor_after = o.armor;
+      }
+    };
+    CountingPump pump;
+    pump.stop = [&] { return fired_at > 0 && frames >= fired_at + 21; };
+    pump.limit = 6000;
+    app.run(pump);
+    std::printf("  apcan01 set at frame %d (%.1f s); Dominic's state %d -> %d; the player's %d -> %d, armor %.3f -> %.3f; 0x0041cfa0 unported %d\n",
+                fired_at, static_cast<double>(fired_at) * 0.016, before_canister, dominic_state, player_after_dominic, player_state,
+                armor_before, armor_after, static_cast<int>(engine.unported_counts().count("0x0041cfa0")));
+    EXPECT(dominic && player && refinery);
+    EXPECT(fired_at > 20);                                   // the game's own setter, not this test's
+    EXPECT(before_canister != 10);                           // in the gas before the canister goes: nothing
+    EXPECT(dominic_state == 10 && player_after_dominic != 10);  // Mech::Die's +0x578: Dominic only
+    EXPECT(player_state == 10 && armor_after < armor_before);
+    EXPECT(engine.unported_counts().count("0x0041cfa0") == 0);
+    EXPECT(engine.unported_counts().count("obj.vt+0x50") == 0 && engine.unported_counts().count("obj.vt+0x70") == 0);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
+}
+
 // The target keys through the mech's vt+0xc0 (0x0041d890), as the exe's
 // 0x004d6710 and its neighbours call it (hud.md): E, Ctrl+E and Shift+E pressed
 // on c1m1, T between them. Each new target starts TARGET's pulse

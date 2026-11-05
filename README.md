@@ -32,6 +32,8 @@ original.
   Ctrl and Shift forms now does what Z and Q already did: the target triangle
   pulses, the target's mech sound plays, and a missile lock starts over on the new
   target instead of carrying across.
+- **Op 2 Mission 2's gas kills.** After the Air Refinery goes down, standing in its
+  gas now destroys you, or Dominic, as the original does; before, nothing happened.
 - **The debriefing's scores.** A campaign debriefing now lists the mission's
   objectives, each worth 2500 when done, and counts them in the mission and
   campaign totals and the rank; before, it listed none and scored none. Instant

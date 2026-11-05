@@ -1042,6 +1042,8 @@ WiredBrainHooks g_brain_hooks;
 // the objectives' lookup both.
 Handle entity_by_name(GameEngine& e, const char* name) {
   if (!name) return 0;
+  if (std::strcmp(name, "player") == 0)  // the launch names its mech so (0x004140c0, mission_launch.cpp)
+    if (void* p = mech_mission_player()) return e.handle_of(p);
   int32_t n = 0;
   const AiMechMade* m = mission_ai_mechs(&n);
   for (int32_t i = 0; i < n; ++i)
@@ -1081,7 +1083,7 @@ struct WiredValveHooks : ai::ValveHooks {
     const AiMechMade* m = mission_ai_mechs(&n);
     for (int32_t i = 0; i < n; ++i)
       if (e->object_of(h) == m[i].mech) return true;
-    return false;
+    return is_launched_mech(e->object_of(h));
   }
   // A basic vehicle answers itself to vt+0x2c and vt+0x40 (0x004d2a70), 0
   // to vt+0x50 (0x0040bae0); its vt+0x140 is its controls (0x004020b0).
@@ -1109,6 +1111,7 @@ struct WiredValveHooks : ai::ValveHooks {
   }
   Handle brain_of(Handle c) override { return e->handle_of(brain(c)); }
   void mech_power(Handle m, int32_t down) override { mech3::mech_power(e->object_of(m), down); }
+  void mech_destroy(Handle m) override { mech_destroy_part(e->object_of(m), 1); }  // 0x0041cfa0(1): the torso
   Handle brain_order_net(Handle b) override {
     auto* br = static_cast<ai::Brain*>(e->object_of(b));
     return br && !br->orders.empty() ? e->handle_of(br->current().net->net()) : 0;
