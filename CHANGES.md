@@ -659,3 +659,4 @@ Known quirks the rebuild deliberately keeps:
 - A crash now says so, in the log and in a message box that names the log, as does a start that cannot open its window or graphics. It used to just close.
 - Linux: an install whose files are in another letter case (all lower case, all upper case, mixed) now works. Windows ignores case, so the game's names never had to match; on Linux it could not find them.
 - A softer message when files match neither 1.0 nor 1.2: they look modded or from another version, data mods are read but may not play right, and a mod that patches the old Mech3.exe won't apply. It never stopped the game, and still doesn't.
+- Your data folder (settings, pilots, saves, converted movies) can live on another drive: GAME FILES, MY DATA FOLDER in the launcher copies it, checks the copy, then switches over, and removes the old copy only if you say so. If the drive is missing at start the game says so instead of starting afresh.

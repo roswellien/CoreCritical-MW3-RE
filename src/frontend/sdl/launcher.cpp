@@ -1,4 +1,5 @@
 #include "frontend/sdl/launcher.h"
+#include "frontend/sdl/data_folder_start.h"
 #include "frontend/sdl/launcher_notes.h"
 #include "frontend/sdl/movie_import.h"
 #include "frontend/sdl/text_fit.h"
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -327,6 +329,7 @@ enum Id {
   kPatch,  // the 1.2 patch's zip: unreachable since the patch is built in (patch12.h), its code kept
   kAddDisc = 20,
   kGo = 30, kCancel, kNotesOk,
+  kData = 40, kDataPick, kDataUsual, kMoveGo, kRemoveOld, kKeepOld,
 };
 
 struct Install {
@@ -342,7 +345,7 @@ struct Work {
   mech3::setup::Result result;
   std::atomic<bool> cancel{false}, done{false};
   std::string title;
-  enum Kind { kOther, kLook, kInstallIt, kAddDisc, kConvert } kind = kOther;  // a look, an install, ADD FROM MY DISC, the movies
+  enum Kind { kOther, kLook, kInstallIt, kAddDisc, kConvert, kMoveData, kRemoveData } kind = kOther;  // a look, an install, ADD FROM MY DISC, the movies
   ~Work() {
     cancel = true;
     if (th.joinable()) th.join();
@@ -408,6 +411,10 @@ class Launcher {
   void look_at(const std::string& path);
   void search();
   void use_install(const std::string& dir, const std::string& version, const std::string& summary);
+  bool data_elsewhere() const;
+  void ask_move(const std::string& to);
+  void start_move();
+  void moved(const mech3::setup::Result& r);
   void play();
   int movies_to_convert() const;
   void convert_movies(std::function<void()> then);
@@ -424,7 +431,7 @@ class Launcher {
   SDL_Surface* canvas_ = nullptr;
   Art art_;
   Text text_;
-  enum Screen { kMain, kSetupScreen, kConfirm, kWorking, kNotes } screen_ = kMain;
+  enum Screen { kMain, kSetupScreen, kConfirm, kWorking, kNotes, kDataScreen } screen_ = kMain;
   std::vector<std::string> notes_;  // the first start's (launcher_notes)
   std::vector<Button> buttons_;
   int hot_ = -1, focus_ = -1;
@@ -458,6 +465,9 @@ class Launcher {
   Uint64 ask_at_ = 0;      // when the picker was asked for (its timing in the log)
   bool ask_shown_ = false;  // the panel took the window's focus
   std::string confirm_text_, pending_source_;
+  std::string move_to_, move_from_;  // the data folder's move (ask_move)
+  std::vector<std::string> move_copied_;
+  std::shared_ptr<std::vector<std::string>> move_copied_out_;
   int confirm_go_ = 0;
   std::shared_ptr<mech3::source::Found> found_;  // the last look's (look_at)
   bool auto_go_ = false;  // MW3_LAUNCHER_PICK (checks): its look's INSTALL pressed too
@@ -712,11 +722,23 @@ void Launcher::layout() {
       add(kFind, {130, 222, 380, 52}, "FIND THE GAME", "A disc image, a download (.zip .iso), or Mech3.exe in an installed copy");
       if (install_.ok && (lacks_music_ || lacks_movies_))  // what the install in use lacks, from the disc
         add(kAddDisc, {130, 318, 380, 46}, "ADD FROM MY DISC", "A disc in a drive first, else its image or any file of the disc");
+      if (from_files_ && !o_.write_dir_fixed) add(kData, {130, 278, 380, 36}, "MY DATA FOLDER");
       add(kBack, {250, 384, 140, 34}, o_.setup_only ? "QUIT" : "BACK");
       break;
     }
+    case kDataScreen:
+      add(kDataPick, {130, 250, 380, 46}, "MOVE IT TO ANOTHER FOLDER", "Copied, checked, then switched. The old copy goes only if you say so");
+      if (data_elsewhere()) add(kDataUsual, {130, 304, 380, 40}, "MOVE IT BACK TO THE USUAL FOLDER");
+      add(kBack, {250, 384, 140, 34}, "BACK");
+      break;
     case kConfirm:
-      if (confirm_go_) add(kGo, {170, 300, 140, 40}, "INSTALL");
+      if (confirm_go_ == 3) {
+        add(kRemoveOld, {130, 300, 200, 40}, "REMOVE THE OLD COPY");
+        add(kKeepOld, {340, 300, 140, 40}, "KEEP IT");
+        break;
+      }
+      if (confirm_go_ == 2) add(kMoveGo, {170, 300, 140, 40}, "MOVE");
+      else if (confirm_go_) add(kGo, {170, 300, 140, 40}, "INSTALL");
       add(kBack, {330, 300, 140, 40}, "BACK");
       break;
     case kWorking:
@@ -729,7 +751,7 @@ void Launcher::layout() {
       break;
   }
   {  // the screen and its plates (the checks follow them)
-    static const char* const kNames[] = {"main", "find", "confirm", "work", "notes"};
+    static const char* const kNames[] = {"main", "find", "confirm", "work", "notes", "data"};
     std::string labels;
     for (const Button& b : buttons_) labels += (labels.empty() ? "" : ", ") + b.label;
     std::printf("mw3: launcher: screen %s: %s\n", kNames[screen_], labels.c_str());
@@ -856,6 +878,13 @@ void Launcher::draw(float dt) {
     case kConfirm:
       text_.draw_wrapped(canvas_, confirm_text_, 16, kWhite, W / 2, 150, 460);
       break;
+    case kDataScreen: {
+      text_.draw_wrapped(canvas_, "Your settings, pilots, saved games and converted movies are in:", 16, kWhite, W / 2, 130, 480);
+      text_.draw_wrapped(canvas_, text_.fit(o_.write_dir, 14, 480), 14, kAmber, W / 2, 176, 480);
+      if (!status_.empty())
+        text_.draw_wrapped(canvas_, status_, 13, status_good_ ? kAmber : SDL_Color{240, 190, 180, 255}, W / 2, 350, 480);
+      break;
+    }
     case kWorking: {
       mech3::setup::Progress p;
       std::string title;
@@ -944,6 +973,7 @@ void Launcher::picked(int what, const std::string& path) {
     run_mw1();
     return;
   }
+  if (what == kDataPick) return ask_move(mech3::data_folder::destination(path, usual_folder()));
   if (what == kPoint) {  // an image or archive as it is, any other file for its folder
     look_at(pick_source(path, {"iso", "cue", "img", "zip", "7z", "rar", "tar", "gz", "tgz", "xz"}));
     return;
@@ -1062,6 +1092,77 @@ void Launcher::convert_movies(std::function<void()> then) {
   screen_ = kWorking, layout();
 }
 
+bool Launcher::data_elsewhere() const {
+  std::error_code ec;
+  const std::string usual = usual_folder();
+  return !usual.empty() && !fs::equivalent(o_.write_dir, usual, ec) && o_.write_dir != usual;
+}
+
+// The player's folder to `to` (docs/program.md, The data folder): asked first,
+// with the sizes; a move that cannot be done is said and nothing starts.
+void Launcher::ask_move(const std::string& to) {
+  const mech3::data_folder::Plan p = mech3::data_folder::plan(o_.write_dir, to, usual_folder());
+  if (!p.error.empty()) {
+    status_ = p.error, status_good_ = false;
+    screen_ = kDataScreen, layout();
+    return;
+  }
+  char size[64];
+  std::snprintf(size, sizeof size, "%.2f GB, %.1f GB free there", static_cast<double>(p.bytes) / 1e9, static_cast<double>(p.free) / 1e9);
+  move_to_ = to;
+  confirm_text_ = "Move your data to " + to + "?\n\n" + std::to_string(p.files) + " files, " + size +
+                  ". The old copy stays until you choose.";
+  confirm_go_ = 2;
+  screen_ = kConfirm, layout();
+}
+
+void Launcher::start_move() {
+  work_ = std::make_unique<Work>();
+  work_->kind = Work::kMoveData;
+  const std::string from = o_.write_dir, to = move_to_, usual = usual_folder();
+  move_from_ = from;
+  auto copied = std::make_shared<std::vector<std::string>>();
+  move_copied_out_ = copied;
+  work_->start("MOVING YOUR DATA", [from, to, usual, copied](const mech3::setup::ProgressFn& f) {
+    mech3::setup::Result r;
+    const mech3::data_folder::Moved m = mech3::data_folder::move_data(from, to, usual, [&](double at, const std::string& name) {
+      return f(mech3::setup::Progress{"Copying and checking", at, name});
+    });
+    *copied = m.copied;
+    r.ok = m.ok, r.cancelled = m.cancelled;
+    r.summary = m.ok ? "Your data is now in " + to + "." : m.cancelled ? "Stopped. Nothing was changed." : m.error;
+    return r;
+  });
+  screen_ = kWorking, layout();
+}
+
+// The move done: this run goes on with the new folder (its own log stays in
+// the old one until the next start), and the old copy is the player's to remove.
+void Launcher::moved(const mech3::setup::Result& r) {
+  if (!r.ok) {
+    status_ = r.summary, status_good_ = r.cancelled;
+    screen_ = kDataScreen, layout();
+    return;
+  }
+  move_copied_ = *move_copied_out_;
+  using mech3::data_folder::moved_path;
+  const std::string from = move_from_, to = move_to_;
+  if (install_.ok) install_.dir = moved_path(install_.dir, from, to);
+  o_.cfg_install = moved_path(o_.cfg_install, from, to);
+  mw1_game_ = moved_path(mw1_game_, from, to);
+  o_.write_dir = to;
+  bool named = false;
+  for (size_t i = 0; i + 1 < o_.game_args.size(); ++i)
+    if (o_.game_args[i] == "--write-dir") o_.game_args[i + 1] = to, named = true;
+  if (!named) o_.game_args.push_back("--write-dir"), o_.game_args.push_back(to);
+  notes_refresh();
+  confirm_text_ = r.summary + "\n\nThe old copy is still in " + from + ".\nRemove it? Log files stay there.";
+  confirm_go_ = 3;
+  screen_ = kConfirm, layout();
+  if (const char* a = SDL_getenv("MW3_LAUNCHER_MOVE_OLD"))  // checks: the answer
+    activate(std::strcmp(a, "remove") == 0 ? kRemoveOld : kKeepOld);
+}
+
 // A found install used: saved to mw3.cfg, then straight on into the game
 // (Owen, 2026-11-02); when it lacks the movies or the music, or its data is
 // odd, the notes first, their OK the start (lead).
@@ -1150,6 +1251,12 @@ void Launcher::finish_work() {
   const Work::Kind kind = work_->kind;
   work_.reset();
   std::printf("mw3: launcher: %s%s%s\n", r.summary.c_str(), r.detail.empty() ? "" : " | ", r.detail.c_str());
+  if (kind == Work::kRemoveData) {
+    status_ = r.summary, status_good_ = r.ok;
+    from_files_ = false, screen_ = kMain, layout();
+    return;
+  }
+  if (kind == Work::kMoveData) return moved(r);
   if (kind == Work::kConvert) {  // on where it was going
     std::function<void()> then = std::move(after_convert_);
     after_convert_ = nullptr;
@@ -1210,6 +1317,34 @@ void Launcher::activate(int id) {
       else from_files_ = false, screen_ = kSetupScreen, status_.clear(), layout();  // its files to find first
       break;
     case kQuit: done_ = true; break;
+    case kData:
+      status_.clear();
+      screen_ = kDataScreen, layout();
+      break;
+    case kDataPick: ask_folder(kDataPick); break;
+    case kDataUsual: ask_move(usual_folder()); break;
+    case kMoveGo: start_move(); break;
+    case kRemoveOld: {
+      work_ = std::make_unique<Work>();
+      work_->kind = Work::kRemoveData;
+      const std::string old = move_from_, now = o_.write_dir, usual = usual_folder();
+      const std::vector<std::string> copied = move_copied_;
+      work_->start("REMOVING THE OLD COPY", [old, now, usual, copied](const mech3::setup::ProgressFn&) {
+        mech3::setup::Result r;
+        const mech3::data_folder::Removed d = mech3::data_folder::remove_old(old, now, copied, usual);
+        r.ok = d.error.empty() && d.failed.empty();
+        r.summary = !d.error.empty()     ? d.error
+                    : d.failed.empty()   ? "The old copy is removed."
+                                         : std::to_string(d.failed.size()) + " files of the old copy could not be removed, in " + old + ".";
+        return r;
+      });
+      screen_ = kWorking, layout();
+      break;
+    }
+    case kKeepOld:
+      status_ = "The old copy stays in " + move_from_ + ".", status_good_ = true;
+      from_files_ = false, screen_ = kMain, layout();
+      break;
     case kFiles:  // the find screen at any time (Owen): repick or refresh the game's files
       from_files_ = true, status_.clear();
       screen_ = kSetupScreen, layout();
@@ -1225,7 +1360,10 @@ void Launcher::activate(int id) {
     case kBack:
       if (screen_ == kNotes) return activate(kNotesOk);  // Escape on the notes: as OK
       if (o_.setup_only && screen_ == kSetupScreen) done_ = true;  // a plain start's QUIT
+      else if (screen_ == kConfirm && confirm_go_ == 3) return activate(kKeepOld);  // Escape: nothing removed
+      else if (screen_ == kConfirm && confirm_go_ == 2) screen_ = kDataScreen, layout();
       else if (screen_ == kConfirm) screen_ = kSetupScreen, layout();
+      else if (screen_ == kDataScreen) screen_ = kSetupScreen, status_.clear(), layout();
       else screen_ = kMain, from_files_ = false, status_.clear(), layout();
       break;
     case kNotesOk:
@@ -1312,6 +1450,7 @@ LauncherChoice Launcher::run() {
       screen_ = kSetupScreen, from_files_ = o_.screen == "files";
     if (o_.screen == "pick") status_ = "Not found on this computer or in a disc drive. Pick it: a disc image, a download, or Mech3.exe.";
     if (o_.screen == "notes" || o_.screen == "disc") screen_ = kNotes;
+    if (o_.screen == "data") screen_ = kDataScreen;
     if (o_.screen == "disc") status_ = "No disc in a drive. Pick its image (.cue .iso) or any file of the disc.";
     if (o_.screen == "work") {
       screen_ = kWorking;
@@ -1373,6 +1512,11 @@ LauncherChoice Launcher::run() {
   }
   // Checks: a pick as if made in the find screen's dialog (after any NAV
   // steps: GAME FILES), INSTALL and the notes' OK pressed.
+  if (const char* to = SDL_getenv("MW3_LAUNCHER_MOVE_TO")) {  // checks: the data folder's move, its MOVE pressed
+    from_files_ = true;
+    picked(kDataPick, to);
+    if (screen_ == kConfirm && confirm_go_ == 2) activate(kMoveGo);
+  }
   if (const char* pick = SDL_getenv("MW3_LAUNCHER_PICK"); pick && (screen_ == kSetupScreen || !install_.ok))
     auto_go_ = auto_ok_ = true, look_at(pick);
   if (o_.play_mw1) activate(kMw1), done_ = !asking_;

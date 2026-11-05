@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "check.h"
+#include "mech3/data_folder.h"
 #include "frontend/sdl/gdi_font_size.h"
 #include "frontend/sdl/sdl_fit.h"
 #include "frontend/sdl/launcher_notes.h"
@@ -4357,6 +4358,64 @@ TEST(sdl_program_launcher_waits_for_the_game_in_an_appimage) {
   const LauncherRun r = run_launcher_with("launcher_game_image", "READY\nsleep 2", nullptr, {{"APPIMAGE", "/x.AppImage"}});
   EXPECT(r.exited && !r.game_alive && r.game_finished);
   EXPECT(has(r.log, "the game's first frame") && has(r.log, "MechWarrior 3 exited (0)"));
+}
+
+// The data folder elsewhere (docs/program.md): the three programs' starts with
+// a pointer. The launcher's move, end to end, hidden.
+TEST(sdl_program_data_folder_pointer_and_move) {
+  const std::string dir = std::string(MW3_TEST_TMP) + "/data_folder_program";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  const std::string usual = dir + "/usual", gone = dir + "/gone/mine", to = dir + "/drive/mine";
+  std::filesystem::create_directories(usual, ec);
+  setenv("MW3_USUAL_FOLDER", usual.c_str(), 1);
+  auto wait = [](pid_t pid) {
+    int status = 0;
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  };
+  auto text = [](const std::string& path) {
+    std::ifstream in(path);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  };
+  // A pointer to a missing drive: said, no fresh folder, not the usual one in its place.
+  std::ofstream(usual + "/" + mech3::data_folder::kPointer) << gone << "\n";
+  const std::string log = dir + "/out.log";
+  EXPECT(wait(spawn_bin(MW3_BIN, {"--hidden", "--nosound"}, log)) == 1);
+  EXPECT(has(text(log), "data folder is not there") && !std::filesystem::exists(dir + "/gone"));
+  EXPECT(wait(spawn_launcher({"--hidden", "--nosound", "--window", "640x480"}, log)) == 1);
+  EXPECT(!std::filesystem::exists(dir + "/gone") && !std::filesystem::exists(usual + "/mw3launcher.log"));
+  // --write-dir wins over it.
+  setenv("MW3_START_ONLY", "1", 1);
+  const std::string named = dir + "/named";
+  EXPECT(wait(spawn_bin(MW3_BIN, {"--hidden", "--nosound", "--write-dir", named}, log)) == 0);
+  unsetenv("MW3_START_ONLY");
+  EXPECT(std::filesystem::exists(named + "/mw3.log") && !std::filesystem::exists(dir + "/gone"));
+  // No pointer, the launcher's move and its remove: the folder switched, the old copy gone.
+  std::filesystem::remove(usual + "/" + mech3::data_folder::kPointer, ec);
+  std::ofstream(usual + "/mw3.cfg") << "install=" << MW3_GAME_DIR << "\n";
+  std::filesystem::create_directories(usual + "/pilots", ec);
+  std::ofstream(usual + "/pilots/a.pil") << "pilot";
+  setenv("MW3_LAUNCHER_MOVE_TO", to.c_str(), 1);
+  setenv("MW3_LAUNCHER_MOVE_OLD", "remove", 1);
+  setenv("MW3_LAUNCHER_FRAMES", "90", 1);
+  EXPECT(wait(spawn_launcher({"--hidden", "--nosound", "--window", "640x480"}, log)) == 0);
+  unsetenv("MW3_LAUNCHER_MOVE_TO");
+  unsetenv("MW3_LAUNCHER_MOVE_OLD");
+  unsetenv("MW3_LAUNCHER_FRAMES");
+  EXPECT(text(usual + "/" + mech3::data_folder::kPointer) == to + "\n");
+  EXPECT(text(to + "/pilots/a.pil") == "pilot" && !std::filesystem::exists(usual + "/pilots"));
+  // The next launcher reads the pointer and passes the folder to the game.
+  const std::string game = dir + "/game.sh", args = dir + "/args.txt";
+  std::ofstream(game) << "#!/bin/sh\necho \"$@\" > " << args << "\nexit 0\n";
+  std::filesystem::permissions(game, std::filesystem::perms::owner_all, ec);
+  setenv("MW3_GAME_BIN", game.c_str(), 1);
+  setenv("MW3_NO_IMPORT", "1", 1);
+  EXPECT(wait(spawn_launcher({"--hidden", "--nosound", "--window", "640x480", "--launcher-play"}, log)) == 0);
+  unsetenv("MW3_GAME_BIN");
+  unsetenv("MW3_NO_IMPORT");
+  EXPECT(text(args).find("--write-dir " + to) != std::string::npos);
+  EXPECT(std::filesystem::exists(to + "/mw3launcher.log"));
+  unsetenv("MW3_USUAL_FOLDER");
 }
 
 TEST(sdl_program_launcher_stays_when_the_game_fails_or_is_slow) {

@@ -97,7 +97,9 @@ Everything the game writes goes to:
 folder, windowed=), your pilots and saves, the settings, the converted
 movies (video\) and music (music\), and mw3.log. Uninstalling the rebuild
 keeps this folder. Your MechWarrior 3 install is only read, never changed.
-Deleting this folder resets everything.
+Deleting this folder resets everything. To keep it on another drive: in the
+launcher, GAME FILES, MY DATA FOLDER. It is copied and checked first, and the old
+copy is removed only if you say so.
 
 mw3.log is written new at every start; the start before it is kept as
 mw3.old.log, so after a crash the crash's log is mw3.old.log if you have

@@ -10,7 +10,7 @@ build/mw3import [--install DIR] [--write-dir DIR] [--only NAME]
 
 - `--install`: the MW3 1.2 folder (default: `game/mw3-1.2`).
 - `--write-dir`: where the game's files go (default: the game's own, SDL's
-  pref path for "MicroProse" / "MechWarrior 3", as `mw3` uses). The movies go
+  pref path for "MicroProse" / "MechWarrior 3", or the data folder it points to, as `mw3` uses). The movies go
   in its `video` folder, which the game searches first. They never go in the
   repo.
 - `--only`: one movie by name (`c1m2`).

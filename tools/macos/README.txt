@@ -37,7 +37,8 @@ Your settings and saves
 In ~/Library/Application Support/MicroProse/MechWarrior 3/ (in Finder: Go >
 Go to Folder). It holds mw3.cfg, your pilots and saves, the settings, the
 installed game, its music, the converted movies and mw3.log (what the game reported while it ran;
-send it with a bug report). Deleting the app keeps this folder.
+send it with a bug report). Deleting the app keeps this folder. To keep it on
+another drive: in the launcher, GAME FILES, MY DATA FOLDER.
 
 Licences
 --------
