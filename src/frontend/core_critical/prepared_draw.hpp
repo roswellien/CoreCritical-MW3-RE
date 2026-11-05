@@ -57,12 +57,17 @@ struct PreparedSubmission {
     uint64_t clipped_triangles{};
 };
 
+struct PreparedDrawCpuStatistics {
+    std::uint64_t vertices{}, stage_ticks{}, assembly_ticks{};
+};
+
 // Keeps clipping, native projection and fog identical for both material modes.
 // Lit CPU vertices carry smooth normals in a transient stream, not immutable VBOs.
 inline PreparedSubmission
 prepare_draw(const PreparedBatchDraw &source, const platform::ModelDrawContext &context,
              const std::array<int, 4> &viewport, unsigned width, unsigned height,
-             std::shared_ptr<const mw34::vkscene::ModelGeometry> geometry, bool lighting) {
+             std::shared_ptr<const mw34::vkscene::ModelGeometry> geometry, bool lighting,
+             PreparedDrawCpuStatistics *statistics = nullptr) {
     namespace vk = mw34::vkscene;
     if (!(context.near_z > 0) || !(context.far_z > context.near_z))
         throw std::runtime_error("Prepared model requires valid native clip planes");
@@ -73,34 +78,41 @@ prepare_draw(const PreparedBatchDraw &source, const platform::ModelDrawContext &
     bool gpu = source.deformed.empty();
     std::vector<PreparedVertex> staged;
     staged.reserve(vertices.size());
-    for (const auto &vertex : vertices) {
-        PreparedVertex output;
-        for (unsigned row = 0; row < 3; ++row) {
-            output.camera[row] = ((camera[row * 4] * vertex[0] + camera[row * 4 + 1] * vertex[1]) +
-                                  camera[row * 4 + 2] * vertex[2]) +
-                                 camera[row * 4 + 3];
-            output.normal[row] =
-                (normal_matrix[row * 4] * vertex[3] + normal_matrix[row * 4 + 1] * vertex[4]) +
-                normal_matrix[row * 4 + 2] * vertex[5];
-            if (!std::isfinite(output.camera[row]) || !std::isfinite(output.normal[row]))
-                throw std::runtime_error("Prepared vertex transform is nonfinite");
+    if (statistics)
+        statistics->vertices += vertices.size();
+    {
+        sdlfe::CpuInterval interval(statistics ? &statistics->stage_ticks : nullptr);
+        for (const auto &vertex : vertices) {
+            PreparedVertex output;
+            for (unsigned row = 0; row < 3; ++row) {
+                output.camera[row] =
+                    ((camera[row * 4] * vertex[0] + camera[row * 4 + 1] * vertex[1]) +
+                     camera[row * 4 + 2] * vertex[2]) +
+                    camera[row * 4 + 3];
+                output.normal[row] =
+                    (normal_matrix[row * 4] * vertex[3] + normal_matrix[row * 4 + 1] * vertex[4]) +
+                    normal_matrix[row * 4 + 2] * vertex[5];
+                if (!std::isfinite(output.camera[row]) || !std::isfinite(output.normal[row]))
+                    throw std::runtime_error("Prepared vertex transform is nonfinite");
+            }
+            const float length = std::hypot(output.normal[0], output.normal[1], output.normal[2]);
+            if (!(length > 0) || !std::isfinite(length))
+                throw std::runtime_error("Prepared vertex has a degenerate transformed normal");
+            const float light =
+                .35f + .65f * std::max(0.f, (.3f * output.normal[0] + .6f * output.normal[1] -
+                                             .74f * output.normal[2]) /
+                                                length);
+            for (unsigned channel = 0; channel < 3; ++channel)
+                output.color[channel] =
+                    std::floor(float((source.batch->color >> (16 - channel * 8)) & 255) * light);
+            output.visibility = zmod::fog().on ? 1.f - zmod::fog_at(output.camera.data()) : 1.f;
+            output.u = vertex[6];
+            output.v = vertex[7];
+            gpu = gpu && output.camera[2] >= near_clip && output.camera[2] <= context.far_z;
+            staged.push_back(output);
         }
-        const float length = std::hypot(output.normal[0], output.normal[1], output.normal[2]);
-        if (!(length > 0) || !std::isfinite(length))
-            throw std::runtime_error("Prepared vertex has a degenerate transformed normal");
-        const float light =
-            .35f + .65f * std::max(0.f, (.3f * output.normal[0] + .6f * output.normal[1] -
-                                         .74f * output.normal[2]) /
-                                            length);
-        for (unsigned channel = 0; channel < 3; ++channel)
-            output.color[channel] =
-                std::floor(float((source.batch->color >> (16 - channel * 8)) & 255) * light);
-        output.visibility = zmod::fog().on ? 1.f - zmod::fog_at(output.camera.data()) : 1.f;
-        output.u = vertex[6];
-        output.v = vertex[7];
-        gpu = gpu && output.camera[2] >= near_clip && output.camera[2] <= context.far_z;
-        staged.push_back(output);
     }
+    sdlfe::CpuInterval assembly(statistics ? &statistics->assembly_ticks : nullptr);
     PreparedSubmission result;
     auto &draw = result.draw;
     draw.texture = -1;

@@ -234,6 +234,8 @@ const platform::prepared::Image *PreparedModels::named_texture(const char *name)
 }
 
 PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context) const {
+    sdlfe::CpuInterval interval(cpu_profile_ ? &cpu_statistics_.selection_ticks : nullptr);
+    if (cpu_profile_) ++cpu_statistics_.calls;
     PreparedModelDraw output;
     const auto *node = static_cast<const Node *>(context.node);
     if (!node || !node->source_asset || !context.ordinary || context.morphing || context.overlay ||
@@ -266,8 +268,10 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     const auto root_camera = math::product(from_native(context.model_to_camera), inverse_node);
     const auto root_world = math::product(from_native(context.model_to_world), inverse_node);
     math::Pose donor;
-    if (selected->mesh.version == 4)
+    if (selected->mesh.version == 4) {
+        sdlfe::CpuInterval retarget(cpu_profile_ ? &cpu_statistics_.retarget_ticks : nullptr);
         donor = donor_pose(rig_for(selected->mesh.rig), live.poses);
+    }
     output.replace = true;
     for (size_t index = 0; index < selected->mesh.batches.size(); ++index) {
         const auto &batch = selected->mesh.batches[index];
@@ -292,6 +296,7 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
                 draw.camera = math::product(camera, donor.world.at(batch.donor_bone));
                 draw.world = math::product(world, donor.world.at(batch.donor_bone));
             } else {
+                sdlfe::CpuInterval deform(cpu_profile_ ? &cpu_statistics_.deform_ticks : nullptr);
                 draw.camera = camera;
                 draw.world = world;
                 draw.deformed = batch.vertices;

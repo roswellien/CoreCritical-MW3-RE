@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frontend/sdl/sdl_render3d.h"
+#include "frontend/sdl/cpu_interval.h"
 #include "platform/prepared_visuals.h"
 
 namespace cc_mw3_re {
@@ -21,6 +22,10 @@ struct PreparedModelDraw {
 
 class PreparedModels {
   public:
+    struct CpuStatistics {
+        std::uint64_t calls{}, selection_ticks{}, retarget_ticks{}, deform_ticks{};
+    };
+    const CpuStatistics &cpu_statistics() const { return cpu_statistics_; }
     explicit PreparedModels(const sdlfe::CoreCriticalAssets &options);
     bool empty() const { return models_.empty(); }
     const platform::prepared::Image *named_texture(const char *name) const;
@@ -35,6 +40,8 @@ class PreparedModels {
     };
     platform::prepared::Textures named_;
     std::vector<Model> models_;
+    const bool cpu_profile_ = sdlfe::cpu_profile_requested();
+    mutable CpuStatistics cpu_statistics_;
 };
 
 } // namespace cc_mw3_re

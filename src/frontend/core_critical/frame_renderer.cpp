@@ -1,4 +1,5 @@
 #include "frame_renderer.hpp"
+#include "frontend/sdl/cpu_interval.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "prepared_draw.hpp"
@@ -32,24 +33,8 @@ using platform::TLVertex;
 
 // Wall durations on the calling CPU thread, including waits inside the measured
 // operation. Disabled intervals do not read a clock or change rendering inputs.
-class CpuInterval {
-  public:
-    explicit CpuInterval(std::uint64_t *ticks)
-        : ticks_(ticks), start_(ticks ? SDL_GetPerformanceCounter() : 0) {}
-    ~CpuInterval() {
-        if (ticks_)
-            *ticks_ += SDL_GetPerformanceCounter() - start_;
-    }
-
-  private:
-    std::uint64_t *ticks_;
-    std::uint64_t start_;
-};
-
-bool cpu_profile_requested() {
-    const char *value = std::getenv("MW3_CC_CPU_PROFILE");
-    return value && std::strcmp(value, "1") == 0;
-}
+using sdlfe::CpuInterval;
+using sdlfe::cpu_profile_requested;
 
 class VisualFloatScope {
   public:
@@ -254,6 +239,20 @@ class FrameRenderer final : public VulkanFrameRenderer {
                          static_cast<unsigned long long>(gpu_sharp_draws_),
                          static_cast<unsigned long long>(render_calls_),
                          render_ticks_ * milliseconds, transport_ticks_ * milliseconds);
+            const auto &models = prepared_.cpu_statistics();
+            std::fprintf(stderr,
+                         "CPU prepared profile (includes warmup, nested intervals): %llu calls, "
+                         "selection %.4f ms, retarget %.4f ms, deform %.4f ms, "
+                         "emission %.4f ms, TL append %.4f ms\n",
+                         static_cast<unsigned long long>(models.calls),
+                         models.selection_ticks * milliseconds, models.retarget_ticks * milliseconds,
+                         models.deform_ticks * milliseconds, prepared_emit_ticks_ * milliseconds,
+                         append_ticks_ * milliseconds);
+            std::fprintf(stderr,
+                         "CPU prepared vertices: %llu vertices, stage %.4f ms, assembly %.4f ms\n",
+                         static_cast<unsigned long long>(prepared_cpu_.vertices),
+                         prepared_cpu_.stage_ticks * milliseconds,
+                         prepared_cpu_.assembly_ticks * milliseconds);
         }
         const auto quality = quality_statistics();
         std::fprintf(
@@ -411,6 +410,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void append_draw(Primitive primitive, const TLVertex *vertices, int count,
                      const DrawState &state, bool hud, bool depth_only = false) {
+        CpuInterval interval(cpu_profile_ ? &append_ticks_ : nullptr);
         if (count <= 0) {
             return;
         }
@@ -684,8 +684,10 @@ class FrameRenderer final : public VulkanFrameRenderer {
     }
 
     void emit_prepared(const PreparedBatchDraw &source, const platform::ModelDrawContext &context) {
+        CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
         auto staged = prepare_draw(source, context, viewport_, scene_.width, scene_.height,
-                                   prepared_geometry(*source.batch), lighting_.enabled);
+                                   prepared_geometry(*source.batch), lighting_.enabled,
+                                   cpu_profile_ ? &prepared_cpu_ : nullptr);
         auto &draw = staged.draw;
         draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
         draw.texture = int(bind_texture(prepared_texture(*source.texture), false));
@@ -838,6 +840,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
     const bool cpu_profile_ = cpu_profile_requested();
     std::uint64_t render_ticks_{}, transport_ticks_{};
     std::uint64_t gpu_sharp_draws_{}, render_calls_{};
+    std::uint64_t prepared_emit_ticks_{}, append_ticks_{};
+    PreparedDrawCpuStatistics prepared_cpu_;
 };
 
 } // namespace

@@ -12,6 +12,7 @@
 // vertical blank, as DDFLIP_WAIT did).
 #pragma once
 #include "capture_pixels.hpp"
+#include "frontend/sdl/cpu_interval.h"
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan_core.h>
 #include <windows.h>
@@ -925,10 +926,35 @@ class Renderer {
     // the command pool, upload, vertex and descriptor resources, so the game computes the next
     // scene while the GPU renders this one.
     bool scene_pending{};
+    const bool profile_cpu = sdlfe::cpu_profile_requested();
+    const bool profile_gpu = [] {
+        const auto *value = std::getenv("MW3_CC_GPU_PROFILE");
+        return value && std::strcmp(value, "1") == 0;
+    }();
+    VkQueryPool profile_queries{};
+    bool profile_queries_pending{};
+    unsigned profile_timestamp_bits{};
+    float profile_timestamp_period{};
+    std::uint64_t profile_gpu_ticks{}, profile_gpu_submissions{}, profile_wait_ticks{};
+    void collect_profile_queries() {
+        if (!profile_queries_pending) return;
+        std::uint64_t values[2]{};
+        // The scene fence (or shutdown device-idle) completed before this read.
+        check(f.vkGetQueryPoolResults(device, profile_queries, 0, 2, sizeof values, values,
+                                     sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT),
+              "completed scene timestamp results");
+        const auto mask = profile_timestamp_bits == 64 ? ~std::uint64_t{} :
+                          (std::uint64_t{1} << profile_timestamp_bits) - 1;
+        profile_gpu_ticks += (values[1] - values[0]) & mask;
+        ++profile_gpu_submissions;
+        profile_queries_pending = false;
+    }
     void settle() {
         if (!scene_pending)
             return;
+        sdlfe::CpuInterval interval(profile_cpu ? &profile_wait_ticks : nullptr);
         check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait previous scene");
+        collect_profile_queries();
         scene_pending = false;
     }
     // Record uploads, ordered clears/draws, and optional copy-back as one submission.
@@ -1386,6 +1412,10 @@ class Renderer {
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         check(f.vkBeginCommandBuffer(cmd, &bi), "begin");
+        if (profile_queries) {
+            f.vkCmdResetQueryPool(cmd, profile_queries, 0, 2);
+            f.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, profile_queries, 0);
+        }
         // Static model geometry reaches device-local memory once. Subsequent
         // frames send only controller matrices and projection constants.
         for (auto *b : model_pending) {
@@ -1665,6 +1695,8 @@ class Renderer {
                                    0, 1, &hb, 0, nullptr, 0, nullptr);
         }
         in_attachment_layout = !readback_out;
+        if (profile_queries)
+            f.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, profile_queries, 1);
         check(f.vkEndCommandBuffer(cmd), "end");
         check(f.vkResetFences(device, 1, &fence), "reset fence");
         VkSubmitInfo si{};
@@ -1672,11 +1704,13 @@ class Renderer {
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd;
         check(f.vkQueueSubmit(queue, 1, &si, fence), "submit");
+        profile_queries_pending = profile_queries != VK_NULL_HANDLE;
         fixture_atlas_submitted();
         if (reconstruction_stage != ReconstructionStage::coverage)
             ++scenes;
         if (readback_out) {
             check(f.vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ULL), "wait");
+            collect_profile_queries();
             copy_back(s);
         } else
             scene_pending = true;
@@ -1827,7 +1861,8 @@ class Renderer {
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
     X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
-    X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences)
+    X(vkDestroyFence) X(vkResetFences) X(vkQueueSubmit) X(vkWaitForFences) \
+    X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp)
 #define MW34_VK_DECL(n) PFN_##n n{};
         MW34_VK_FNS(MW34_VK_DECL) MW34_VK_DEV_FNS(MW34_VK_DECL) MW34_VK_WSI_FNS(MW34_VK_DECL) MW34_VK_SWAP_FNS(MW34_VK_DECL)
     } f;
@@ -2774,6 +2809,25 @@ class Renderer {
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         check(f.vkCreateFence(device, &fci, nullptr, &fence), "fence");
+        if (profile_gpu) {
+            VkPhysicalDeviceProperties properties{};
+            f.vkGetPhysicalDeviceProperties(gpu, &properties);
+            unsigned count = 0;
+            f.vkGetPhysicalDeviceQueueFamilyProperties(gpu, &count, nullptr);
+            std::vector<VkQueueFamilyProperties> queues(count);
+            f.vkGetPhysicalDeviceQueueFamilyProperties(gpu, &count, queues.data());
+            profile_timestamp_bits = queues.at(family).timestampValidBits;
+            profile_timestamp_period = properties.limits.timestampPeriod;
+            if (!profile_timestamp_bits || profile_timestamp_bits > 64 ||
+                !(profile_timestamp_period > 0))
+                throw std::runtime_error("GPU scene timestamp profiling is unsupported");
+            VkQueryPoolCreateInfo query{};
+            query.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            query.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            query.queryCount = 2;
+            check(f.vkCreateQueryPool(device, &query, nullptr, &profile_queries),
+                  "scene timestamp query pool");
+        }
         const VkDescriptorSetLayoutBinding bindings[2]{
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
@@ -3822,6 +3876,19 @@ class Renderer {
         if (coverage_scenes)
             std::fprintf(stderr, "World reconstruction: %llu opaque scenes, %llu coverage draws\n",
                          (unsigned long long)coverage_scenes, (unsigned long long)coverage_draws);
+        collect_profile_queries();
+        if (profile_queries) {
+            std::fprintf(stderr,
+                         "GPU scene profile (includes warmup; excludes quality/presentation): "
+                         "%llu submissions, %.4f ms\n",
+                         (unsigned long long)profile_gpu_submissions,
+                         double(profile_gpu_ticks) * profile_timestamp_period / 1000000.0);
+            f.vkDestroyQueryPool(device, profile_queries, nullptr);
+            profile_queries = VK_NULL_HANDLE;
+        }
+        if (profile_cpu)
+            std::fprintf(stderr, "CPU scene wait profile (includes warmup): %.4f ms\n",
+                         double(profile_wait_ticks) * 1000.0 / SDL_GetPerformanceFrequency());
         std::fprintf(stderr, "Submission: %llu logical draws, %llu GPU draws, %llu adjacent TL draws combined\n",
             (unsigned long long)draws, (unsigned long long)submitted_draws,
             (unsigned long long)combined_draws);
