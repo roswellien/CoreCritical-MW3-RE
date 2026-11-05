@@ -166,7 +166,11 @@ into the target straight (+0x3c) and never touches it. So the defaults' 0..1
 lever drives 0..-1 after Backspace. The axis popup's OK (0x0042e5b0) takes
 the lever's place at OK as 0: pressed with the lever centred, its lower half
 is reverse; at an end, stop to full only. Ours (W56, fixes.md): with bugs the
-lever covers reverse itself (`lever_throttle`).
+lever covers reverse itself (`lever_throttle`), and the flag no longer flips it:
+a tapped throttle-down key with the lever behind stop, or Backspace or button 10
+with it ahead, left up meaning reverse until the mission's end, while Backspace
+with it behind stop did nothing. The keys' throttle keeps the flag. A lever that
+reads high at its top runs backwards until Invert is unticked in Assign Axis.
 
 FIX (B): the throttle keys' 0.025 is per 1/30 s (`zfix::frame_steps`;
 fixes.md).

@@ -202,9 +202,11 @@ installed copy does not have. Two ways to get it back:
   (one word a stick axis: X, Y, Z, Rx, Ry, Rz, S0, S1, or - for none).
   `mw3.log` lists every device found and the line in use.
 - A stick's throttle lever covers reverse too: full reverse at the bottom,
-  stop a little over a third of the way up. `throttle_reverse=0` in
-  `mw3.cfg` gives the original's stop at the bottom (reverse is then
-  Backspace, "Toggle throttle direction").
+  stop a little over a third of the way up. If yours runs backwards, untick
+  Invert in Options, Controls, Assign Axis on Forward Throttle, and save
+  when Accept asks. Toggle throttle direction (Backspace) is for the keys
+  and does not flip a lever. `throttle_reverse=0` in `mw3.cfg` gives the original's
+  stop at the bottom (reverse is then Backspace).
 - On a widescreen every screen uses the whole width: the missions, the
   menus, the mech lab, the briefings and the multiplayer screens. For the
   original's 4:3 menus, put `widemenus=0` in `mw3.cfg` (or start with

@@ -19987,12 +19987,13 @@ TEST(mission_c1m2_destroy_objectives_met_by_mech_kills_headless) {
 // the box as a player would: `step` runs on each core frame, with the engine
 // and the keyboard, `other` on the frames after the mission in other states,
 // until one says done or `limit` frames pass.
+platform::JoyState* g_cheat_stick = nullptr;  // a fake stick for the launch; none the default
 struct CheatKeys : platform::Input {
   std::vector<platform::KeyEvent> queue;
   uint32_t t = 0;
   void key(uint32_t dik, bool down) { queue.push_back({dik, down ? 0x80u : 0u, ++t, t}); }
   void press(uint32_t dik) { key(dik, true), key(dik, false); }
-  bool open(Device d) override { return d == kKeyboard; }
+  bool open(Device d) override { return d == kKeyboard || (d == kJoystick && g_cheat_stick); }
   void close(Device) override {}
   int32_t acquire(Device) override { return 0; }
   int32_t unacquire(Device) override { return 0; }
@@ -20004,8 +20005,13 @@ struct CheatKeys : platform::Input {
     return 0;
   }
   int32_t mouse_state(platform::MouseState*) override { return kNotAcquired; }
-  int32_t joystick_state(platform::JoyState*) override { return kNotAcquired; }
+  int32_t joystick_state(platform::JoyState* out) override {
+    if (!g_cheat_stick) return kNotAcquired;
+    *out = *g_cheat_stick;
+    return 0;
+  }
 };
+const char* g_cheat_mission_dir = nullptr;  // the launch's write dir kept (a saved controls file); none a fresh one
 platform::Settings* g_cheat_mission_settings = nullptr;  // the launch's saved settings; none the default
 int g_cheat_mission_op = 0;  // the campaign's operation for the launch (a lancemate comes with it); 0 the default
 int cheat_mission(const char* write, int32_t index, int32_t number, int limit,
@@ -20014,7 +20020,7 @@ int cheat_mission(const char* write, int32_t index, int32_t number, int limit,
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
   zutl::mount(MW3_GAME_DIR);
-  zutl::set_write_dir(temp_dir(write));
+  zutl::set_write_dir(g_cheat_mission_dir ? std::string(g_cheat_mission_dir) : temp_dir(write));
   mech3::reset_states();
   reset_process_state();
   mech3::missions() = mech3::Missions{};
@@ -20135,6 +20141,205 @@ TEST(controls_saved_stick_axes_with_no_stick_do_not_walk_the_mech_headless) {
   const NoStick original = no_stick_run("nostick_original", "joystick(Slider0)\tslope(-0.000015)\tintercept(1.000000)\tdeadzone(0.000000)");
   zfix::options().bugs = true;
   EXPECT(original.moved > 5.0f);
+}
+
+
+// A Thrustmaster report (latest, model unknown): the slider backwards, Invert
+// changing nothing. A fake stick through the real screens and a mission.
+namespace {
+struct LeverStick {
+  platform::JoyState st;
+  int32_t source = 3;
+  bool high_up = false;  // the reading rises as the lever goes up
+  void set(float up) {
+    const float r = high_up ? up : 1.0f - up;
+    if (source == 3) st.z = static_cast<int32_t>(std::lround(2000.0f * r - 1000.0f));
+    else st.slider[source - 7] = static_cast<int32_t>(std::lround(65535.0f * r));
+  }
+};
+// The screens: `untick` clicks Invert (shown checked for the defaults) before
+// OK, `save` answers ACCEPT's question. The axis left bound at the main menu.
+mech3::AxisBinding lever_screens(const std::string& dir, LeverStick& k, bool assign, bool untick, bool save) {
+  g_cheat_stick = &k.st;
+  k.set(0.5f);
+  CheatKeys keys;
+  int stage = 0, wait = 0;
+  mech3::AxisBinding bound;
+  w40_run(dir, nullptr, nullptr, [&](mech3::GameEngine& engine, mech3::Mech3App& app) {
+    engine.on_message_box = [&](int32_t, int32_t, int32_t) { return save ? 1u : 0u; };
+    auto* os = dynamic_cast<mech3::OptionsState*>(app.current());
+    auto* c = os ? dynamic_cast<mech3::ControlsScreen*>(engine.screen_of(os->screen_)) : nullptr;
+    if (!assign) {
+      bound = mech3::axis_table().axes[0];
+      return at_main_menu(app);
+    }
+    if (stage == 0 && at_main_menu(app)) {
+      const_cast<mech3::MainMenu*>(mech3::main_menu())->buttons[mech3::MainMenuButton::kOptions].on_left_up();
+      stage = 1;
+    } else if (stage == 1 && os) {
+      auto* g = dynamic_cast<mech3::GameOptionsScreen*>(engine.screen_of(os->screen_));
+      if (!g) return false;
+      g->controls.on_left_up();
+      stage = 2;
+    } else if (stage == 2 && c) {
+      c->select_command(0);
+      c->assign_axis.on_left_up();
+      stage = 3;
+    } else if (stage == 3) {
+      auto* st = dynamic_cast<mech3::AxisPopupState*>(app.current());
+      if (!st || !st->popup) return ++wait > 60;
+      mech3::AxisCycle& src = st->popup->sources;
+      for (int32_t i = 0; i < 16; ++i) {
+        src.select(i);
+        if (src.selected_value() == k.source) break;
+      }
+      EXPECT(src.selected_value() == k.source && st->popup->invert.checked == 1);
+      if (untick) st->popup->invert.CheckButton::on_left_up();
+      st->popup->ok.on_left_up();
+      stage = 4;
+    } else if (stage == 4 && c) {
+      c->accept.on_left_up();
+      stage = 5;
+    } else if (stage == 5) {
+      auto* st = dynamic_cast<mech3::LoadSavePopupState*>(app.current());
+      if (st && st->popup) {
+        st->popup->ok.on_left_up();
+        stage = 6;
+      } else if (at_main_menu(app) || (os && !c)) {
+        stage = 7;
+      }
+    } else if (stage == 6 && c) {
+      c->accept.on_left_up();
+      stage = 7;
+    } else if (stage == 7) {
+      if (os) {
+        if (auto* g = dynamic_cast<mech3::GameOptionsScreen*>(engine.screen_of(os->screen_))) {
+          g->accept.on_left_up();
+          stage = 8;
+        }
+      } else if (at_main_menu(app)) {
+        stage = 8;
+      }
+    } else if (stage == 8 && at_main_menu(app)) {
+      bound = mech3::axis_table().axes[0];
+      return true;
+    }
+    return ++wait > 500;
+  }, &keys);
+  g_cheat_stick = nullptr;
+  EXPECT(!assign || stage == 8);
+  return bound;
+}
+struct LeverRun { float up = 0, down = 0, after_up = 0, after_down = 0; bool flag = false; int32_t source = 0; float scale = 0; };
+// A mission with the lever up then down; `act` at the end of that (1
+// Backspace, 2 button 10, 3 throttle-down tapped, 4 the stop key; 5 Backspace
+// with the lever still up), then up and down again.
+LeverRun lever_mission(const std::string& dir, LeverStick& k, int act) {
+  LeverRun r;
+  g_cheat_stick = &k.st;
+  platform::RegFile settings(dir + "/settings.reg");
+  g_cheat_mission_settings = &settings;
+  g_cheat_mission_dir = dir.c_str();
+  auto target = [] { auto* c = mech3::player_controls_instance(); return c ? c->throttle_target : -9.0f; };
+  cheat_mission("lever_unused", 0, 1, 900, [&](int f, mech3::GameEngine&, CheatKeys& keys) {
+    k.st.buttons[9] = 0;
+    if (f == 1) k.set(0.5f);
+    if (f == 5) {
+      r.source = mech3::axis_table().axes[0].source, r.scale = mech3::axis_table().axes[0].scale;
+      k.set(1.0f);
+    }
+    if (f == 15) {
+      r.up = target();
+      if (act == 5) keys.press(0x0e);
+      else k.set(0.0f);
+    }
+    if (f == 25) {
+      r.down = target();
+      if (act == 1) keys.press(0x0e);
+      if (act == 2) k.st.buttons[9] = 0x80;
+      if (act == 3) keys.key(0xd0, true);
+      if (act == 4) keys.press(0x02);
+    }
+    if (f == 27 && act == 3) keys.key(0xd0, false);
+    if (f == 35) k.set(1.0f);
+    if (f == 45) { r.after_up = target(); k.set(0.0f); }
+    if (f == 55) {
+      r.after_down = target();
+      auto* c = mech3::player_controls_instance();
+      r.flag = c && c->reverse;
+      return true;
+    }
+    return false;
+  });
+  g_cheat_mission_settings = nullptr;
+  g_cheat_mission_dir = nullptr;
+  g_cheat_stick = nullptr;
+  std::printf("  lever, act %d: axis %d x %g; up %.2f down %.2f; then up %.2f down %.2f, reverse flag %d\n", act, r.source, r.scale, r.up, r.down, r.after_up, r.after_down, r.flag);
+  return r;
+}
+}  // namespace
+
+TEST(controls_lever_direction_through_the_screens_and_a_mission_headless) {
+  if (!have_game()) return;
+  zfix::Options fix_was = zfix::options();
+  const mech3::AxisTable axes_was = mech3::axis_table();
+  auto is = [](const LeverRun& r, float up) {  // full one way up, the other down, before and after
+    return r.up == up && r.down == -up && r.after_up == up && r.after_down == -up;
+  };
+  for (const int32_t source : {3, 7})
+    for (const bool high_up : {false, true}) {
+      LeverStick k;
+      k.source = source, k.high_up = high_up;
+      const float normal = high_up ? -1.0f : 1.0f;  // the defaults take a falling reading as up
+      {  // Invert as shown (checked), saved, restarted: the defaults' direction.
+        W40Setup w("lever_write");
+        const mech3::AxisBinding b = lever_screens(w.dir, k, true, false, true);
+        EXPECT(b.source == source && b.scale < 0.0f);
+        lever_screens(w.dir, k, false, false, false);
+        EXPECT(mech3::axis_table().axes[0].source == source && mech3::axis_table().axes[0].scale < 0.0f);
+        EXPECT(is(lever_mission(w.dir, k, 0), normal));
+      }
+      {  // Invert unticked, saved, restarted: the other way.
+        W40Setup w("lever_write");
+        const mech3::AxisBinding b = lever_screens(w.dir, k, true, true, true);
+        EXPECT(b.source == source && b.scale > 0.0f);
+        lever_screens(w.dir, k, false, false, false);
+        EXPECT(mech3::axis_table().axes[0].source == source && mech3::axis_table().axes[0].scale > 0.0f);
+        EXPECT(is(lever_mission(w.dir, k, 0), -normal));
+      }
+      {  // Not saved: kept for the session, gone at the next start.
+        W40Setup w("lever_write");
+        const mech3::AxisBinding b = lever_screens(w.dir, k, true, true, false);
+        EXPECT(b.source == source && b.scale > 0.0f && mech3::axis_table().ready == 0);
+        lever_screens(w.dir, k, false, false, false);
+        EXPECT(mech3::axis_table().axes[0].source == 3 && mech3::axis_table().axes[0].scale < 0.0f);
+      }
+    }
+  // Backspace, button 10 and a tapped key never flip the lever, ahead or behind
+  // stop, either way of reading; the stop key's a key's, and the lever takes over.
+  for (const bool high_up : {false, true}) {
+    LeverStick k;
+    k.high_up = high_up;
+    for (const int act : {1, 2, 3, 4}) {
+      W40Setup w("lever_write");
+      EXPECT(is(lever_mission(w.dir, k, act), high_up ? -1.0f : 1.0f));
+    }
+  }
+  // The original's lever keeps its flag: Backspace with the lever ahead
+  // flips it to the mission's end, bug fixes off and with the switch off.
+  for (const bool bugs : {false, true}) {
+    zfix::options().bugs = bugs;
+    zfix::options().throttle_reverse = false;
+    LeverStick k;
+    W40Setup w("lever_write");
+    k.set(1.0f);
+    const LeverRun r = lever_mission(w.dir, k, 5);
+    EXPECT(r.flag && r.after_up < -0.9f);
+    zfix::options() = fix_was;
+  }
+  mech3::axis_table() = axes_was;
+  zin::state().joy_ready = 0;  // no stick for the tests after (joy_init leaves it when none opens)
+  zin::state().joy_open = false;
 }
 
 // Food for thought: a mech that lost a leg comes whole and a vehicle's

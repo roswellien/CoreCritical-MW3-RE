@@ -262,6 +262,35 @@ TEST(sdl_input_t16000m_twist_reaches_rz) {
   SDL_DetachVirtualJoystick(id);
 }
 
+// A T.16000M's lever through its map and the popup's binding (Invert as
+// shown): the low end, its top, full ahead, the high end full reverse; a
+// slider stays in DirectInput's default 0..65535 (zInput sets none on them).
+TEST(sdl_input_t16000m_lever_up_is_ahead) {
+  EXPECT(SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD));
+  const SDL_JoystickID id = attach_stick("T.16000M", 4, 16, 1, 0x044f, 0xb10a);
+  SDL_Joystick* v = SDL_OpenJoystick(id);
+  sdlfe::SdlInput in;
+  in.hid_usages = [](SDL_Joystick*) { return sdlfe::hid_axis_usages(kT16000m, sizeof kT16000m); };
+  EXPECT(in.open(platform::Input::kJoystick));
+  joy_setup_as_zinput(in);
+  EXPECT(in.acquire(platform::Input::kJoystick) == 0);
+  const mech3::AxisBinding lever{7, -0.5f / 32767.5f, 1.0f, 0.0f};
+  float at[2] = {};
+  for (int k = 0; k < 2; ++k) {
+    SDL_SetJoystickVirtualAxis(v, 3, k == 0 ? -32768 : 32767);
+    SDL_UpdateJoysticks();
+    platform::JoyState st;
+    EXPECT(in.joystick_state(&st) == 0);
+    EXPECT(st.slider[0] == (k == 0 ? 0 : 65535));
+    at[k] = mech3::lever_throttle(lever, &st);
+  }
+  std::printf("  T.16000M lever: low end %.2f, high end %.2f\n", at[0], at[1]);
+  EXPECT(at[0] == 1.0f && at[1] == -1.0f);
+  in.close(platform::Input::kJoystick);
+  SDL_CloseJoystick(v);
+  SDL_DetachVirtualJoystick(id);
+}
+
 TEST(sdl_input_picks_the_stick_over_an_odd_device) {
   EXPECT(SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD));
   const SDL_JoystickID odd = attach_stick("mw3 test RGB keyboard", 1, 2, 0);  // first, as EnumDevices took
