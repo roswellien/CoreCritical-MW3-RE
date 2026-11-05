@@ -7,6 +7,16 @@ ratio is meaningful only when the scene, executable, settings, GPU, assets and
 simulation inputs match. Frame timing uses wall-clock intervals; `--frame-ms`
 pins simulation time and is not an FPS cap.
 
+## CPU/GPU offload status
+
+GPU drawing is not the same as a GPU geometry producer. The current backend
+has GPU HUD sampling/composition, immutable replacement-model buffers and
+per-pixel material lighting. Stock native geometry still performs substantial
+CPU transform/lighting/clipping work. Replacement models still prepare CPU
+vertex streams for native fog, color and clipping contracts before their GPU
+draws. This change reduces duplicate preparation; it does not finish that
+offload. The separate stock-geometry GPU prototype is not included here.
+
 ## Opt-in diagnostics
 
 `MW3_CC_CPU_PROFILE=1` records integer performance-counter durations and prints

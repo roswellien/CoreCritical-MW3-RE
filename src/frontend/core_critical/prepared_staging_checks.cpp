@@ -125,8 +125,15 @@ void checks() {
     miss();
     std::fesetround(rounding);
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+    const auto rounded = get();
+    require(get() == rounded, "Restored rounding did not stabilize the cache fixture");
     const auto controls = _mm_getcsr();
     _mm_setcsr(controls ^ 0x8000U);
+    miss();
+    _mm_setcsr(controls);
+    const auto unflushed = get();
+    require(get() == unflushed, "Restored FTZ did not stabilize the cache fixture");
+    _mm_setcsr(controls ^ 0x40U);
     miss();
     _mm_setcsr(controls);
 #endif
