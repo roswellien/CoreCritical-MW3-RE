@@ -27,7 +27,8 @@ your pilots, saves and settings are kept.
   log. It used to just close.
 - **Windows: the installer asks for a folder every time,** so you can install
   somewhere other than C, or to a new place when upgrading. A new folder leaves
-  the old folder's files behind.
+  the old folder's files behind. We set this in the installer but haven't
+  yet watched the page on a real install; tell us if it doesn't appear.
 - **A softer message for mods.** When files match neither 1.0 nor 1.2, it now
   says data mods are read, though they may not play right, and that a mod which
   patches the old `Mech3.exe` won't apply. This message never stopped the game
