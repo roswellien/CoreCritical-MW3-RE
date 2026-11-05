@@ -64,6 +64,14 @@ build/mw3 [install-dir] [options] [-nofmv] [-seasick] [-cdN]
   survives the restart a player makes before reporting it. Each stream
   goes through a pipe and a thread that writes the console's own handle and
   the file; at exit the handles are put back and the threads drained.
+- **A crash says why** (ours, `crash_report.cpp`; not in hidden runs): a
+  crash signal, a Windows exception or an uncaught exception puts a line in
+  the log (`mw3: crashed: ...`, with a backtrace where the system has one) and
+  shows a box naming the log. A signal handler cannot use SDL, so it starts
+  its own program with `--crash-box <text>` and ends; the launcher's box
+  stands in where it stays for an AppImage (`docs/linux.md`, Packaging).
+  A failed start (SDL, the window, the GPU device) also shows a box. A normal
+  end logs `mw3: closed, result N`, so a log with neither line was killed.
 - **The start's notes** (ours, `start_notes` in `mw3_main.cpp`): after the
   data version, a note when it is not 1.2's (1.0, a mix: `--patch`; files
   of neither version; files missing) and when no `music/trackNN` is found

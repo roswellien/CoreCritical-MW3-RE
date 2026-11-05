@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "frontend/sdl/crash_report.h"
 #include "frontend/sdl/launcher.h"
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
@@ -80,6 +81,7 @@ void read_config(const std::string& write_dir, sdlfe::LauncherOptions& o) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (sdlfe::crash_box_main(argc, argv)) return 0;
   sdlfe::LauncherOptions o;
   bool windowed = false, window_given = false, hidden_log = false;
   for (int i = 1; i < argc; ++i) {
@@ -120,6 +122,7 @@ int main(int argc, char** argv) {
   if (!hidden_log && !sdlfe::log_to_file(o.write_dir, "mw3launcher") && !o.write_dir.empty())
     run_log.open(o.write_dir, "mw3launcher");
   std::printf("mw3launcher (MechWarrior 3 rebuild) %s, write dir %s\n", MW3_VERSION, o.write_dir.c_str());
+  if (!hidden_log && !o.write_dir.empty()) sdlfe::crash_report_install("mw3launcher", o.write_dir + "/mw3launcher.log", true);
   read_config(o.write_dir, o);
 #ifdef MW3_GAME_DIR
   if (!std::getenv("MW3_FIND_INSTALL")) o.more_installs.push_back(MW3_GAME_DIR);

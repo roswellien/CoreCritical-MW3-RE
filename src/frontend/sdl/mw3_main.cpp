@@ -65,6 +65,7 @@
 #include "frontend/sdl/modes_chain.h"
 #include "frontend/sdl/debug_states.h"
 #include "frontend/sdl/first_run_import.h"
+#include "frontend/sdl/crash_report.h"
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/launcher.h"
@@ -593,6 +594,7 @@ std::string codec_path(const std::string& install) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (sdlfe::crash_box_main(argc, argv)) return 0;
   // In order with the log on stderr. Windows' CRT has no line buffering (and takes size 0 as
   // an invalid argument): unbuffered there.
 #if defined(_WIN32)
@@ -604,7 +606,7 @@ int main(int argc, char** argv) {
   if (!parse(argc, argv, a)) return 2;
   if (!a.shot.empty()) a.hidden = true;
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK)) {
-    std::fprintf(stderr, "mw3: SDL_Init: %s\n", SDL_GetError());
+    sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
     return 1;
   }
   // The write dir: saves and settings, outside the install (assets-layer.md).
@@ -627,6 +629,7 @@ int main(int argc, char** argv) {
     std::printf("mw3 (MechWarrior 3 rebuild) %s: %s\n", MW3_VERSION, argc > 1 ? "started with arguments" : "started");
   else if (!a.write_dir.empty() && run_log.open(a.write_dir))
     std::printf("mw3 (MechWarrior 3 rebuild) %s, log %s\n", MW3_VERSION, run_log.path().c_str());
+  if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
   if (!a.mods_given) a.mods = a.cfg_mods;
   if (a.no_mods) a.mods.clear();
@@ -825,6 +828,7 @@ int main(int argc, char** argv) {
     }
   }
   const int result = run(a, vfw.get());
+  std::printf("mw3: closed, result %d\n", result);
   g_net_pass = nullptr;
   vfw.reset();
   SDL_Quit();  // after every SDL object above is gone
@@ -835,7 +839,11 @@ namespace {
 
 int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlWindow window;
-  if (!window.init(a.hidden, a.launcher_window)) return 1;
+  if (!window.init(a.hidden, a.launcher_window)) {
+    // The reason is in the line before this (SdlWindow::init).
+    sdlfe::fatal_box(std::string("MechWarrior 3 could not open its window or graphics (Vulkan on Linux): ") + SDL_GetError(), a.hidden);
+    return 1;
+  }
   sdlfe::SdlInput input;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)
