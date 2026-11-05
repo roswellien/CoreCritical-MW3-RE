@@ -41,8 +41,6 @@ struct Pair {
   CountHead ha;
   MechData pa, pb;
   float damage_a = 0, damage_b = 0, head_a = 0;
-  CollideCalls saved = collide_calls();  // put back: the mission tests that follow read these hooks
-  ~Pair() { collide_calls() = saved; }
   Pair() {
     pa.roster = 13, pb.roster = 4;
     a.pilot = &pa, b.pilot = &pb;
