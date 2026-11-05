@@ -8,6 +8,14 @@ namespace zrndr {
 
 namespace {
 Target2D g_target;
+DrawObserver* g_observer = nullptr;
+class MuteObserver {
+ public:
+  MuteObserver() : saved_(g_observer) { g_observer = nullptr; }
+  ~MuteObserver() { g_observer = saved_; }
+ private:
+  DrawObserver* saved_;
+};
 
 // 565: red and blue by alpha/256 of the difference, green rounded to an odd
 // count of its units when it falls (the code keeps bit 5 for the sign).
@@ -63,14 +71,22 @@ uint16_t cover_blend(uint16_t* dst, uint16_t s, uint32_t al, bool rgb565) {
 // same colour (the damage diagram's blue outlines over its blue fill, hud.md
 // section 16) was drawn see-through.
 void cover_opaque(uint16_t* dst) {
+  if (g_observer) g_observer->pixel(dst, *dst);
   if (g_cover.alpha) g_cover.alpha[dst - reinterpret_cast<uint16_t*>(g_target.base)] = 0;
 }
 
 Target2D& target2d() { return g_target; }
+DrawObserver* draw_observer() { return g_observer; }
+void set_draw_observer(DrawObserver* value) { g_observer = value; }
+void observe_framebuffer_write(const void* target, const char* operation) {
+  if (g_observer) g_observer->framebuffer_write(target, operation);
+}
 LayerCover& layer_cover() { return g_cover; }
 
 // Mech3.exe 1.2 @ 0x0055b3c0
 void blit16(const zimg::Texture* img, int32_t x, int32_t y, uint16_t key, const BlitRect* src) {
+  if (g_observer) g_observer->image(img, x, y, key, src);
+  MuteObserver mute;
   // FIX (B): a source rectangle reaching past the image is cut at its edges;
   // the original reads past the pixels. The menus pass the screen's size as
   // the rectangle of their 1280x960 background, so at taller or wider screens

@@ -35,7 +35,7 @@ vertex Out vs(In in [[stage_in]], constant V& v [[buffer(0)]]) {
   o.uv = in.uv;
   return o;
 }
-// opts.x fog on, opts.y alpha modulate, opts.zw a sharp draw's frame pixels a texel
+// opts.x fog on, opts.y alpha modulate, opts.z sharp sampling enabled
 struct F { float4 fog; float4 opts; };
 float4 finish(float4 c, Out in, constant F& f) {
   if (f.opts.x > 0.5) c.rgb = mix(f.fog.rgb, c.rgb, in.specular.a);
@@ -44,8 +44,9 @@ float4 finish(float4 c, Out in, constant F& f) {
 // Sharp bilinear: each texel flat but for one frame pixel's blend at its
 // edges, so a whole scale is exactly nearest and a fractional one stays
 // crisp. The texels are premultiplied, so a key's clear texel blends no black.
-float4 sample_sharp(texture2d<float> t, sampler s, float2 uv, float2 scale) {
+float4 sample_sharp(texture2d<float> t, sampler s, float2 uv) {
   float2 size = float2(t.get_width(), t.get_height());
+  float2 scale = max(float2(1.0), 1.0 / max(fwidth(uv) * size, float2(0.000001)));
   float2 texel = uv * size, base = floor(texel), d = texel - base - 0.5;
   float2 r = 0.5 - 0.5 / scale;
   float4 c = t.sample(s, (base + (d - clamp(d, -r, r)) * scale + 0.5) / size);
@@ -53,7 +54,7 @@ float4 sample_sharp(texture2d<float> t, sampler s, float2 uv, float2 scale) {
 }
 fragment float4 fs_tex(Out in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]],
                        constant F& f [[buffer(0)]]) {
-  float4 tex = f.opts.z > 0.0 ? sample_sharp(t, s, in.uv, f.opts.zw) : t.sample(s, in.uv);
+  float4 tex = f.opts.z > 0.0 ? sample_sharp(t, s, in.uv) : t.sample(s, in.uv);
   float4 c = float4(tex.rgb * in.diffuse.rgb, f.opts.y > 0.5 ? tex.a * in.diffuse.a : tex.a);
   return finish(c, in, f);
 }

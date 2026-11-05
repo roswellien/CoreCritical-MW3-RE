@@ -18,6 +18,21 @@ struct Target2D {
 };
 Target2D& target2d();
 
+struct BlitRect;
+// The SDL HUD adapter observes owned draw recipes while the native buffer is
+// still maintained for reads/grabs. It never receives guest addresses or state.
+class DrawObserver {
+ public:
+  virtual ~DrawObserver() = default;
+  virtual void image(const zimg::Texture*, int32_t x, int32_t y, uint16_t key, const BlitRect*) = 0;
+  virtual void pixel(const uint16_t* destination, uint16_t colour) = 0;
+  virtual void span(const uint16_t* destination, uint32_t count, uint16_t colour) = 0;
+  virtual void framebuffer_write(const void* target, const char* operation) = 0;
+};
+DrawObserver* draw_observer();
+void set_draw_observer(DrawObserver*);
+void observe_framebuffer_write(const void* target, const char* operation);
+
 // FIX (A): the program's 16-bit layer over the Direct3D frame (app_engine)
 // starts as `key`, not the frame the original's locked back buffer held, so
 // an alpha blend there would mix with the key colour. While `alpha` is set

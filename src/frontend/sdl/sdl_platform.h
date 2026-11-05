@@ -7,6 +7,7 @@
 
 #include "frontend/sdl/sdl_fit.h"
 #include "frontend/sdl/sdl_render3d.h"
+#include "frontend/sdl/gpu_hud.h"
 #include "platform/platform.h"
 
 namespace zgame { class App; }
@@ -71,7 +72,11 @@ class SdlWindow : public platform::Window {
 // texture drawn over the whole window by Render3D.
 class SdlScreen2D : public platform::Screen2D {
  public:
-  explicit SdlScreen2D(FrameRenderer* render) : render_(render) {}
+  explicit SdlScreen2D(FrameRenderer* render, const HudOptions& hud = {}, SDL_Window* window = nullptr,
+                       const FrameShape* shape = nullptr);
+  ~SdlScreen2D() override;
+  void begin_overlay_16(const uint16_t*, int width, int height, int pitch) override;
+  void cancel_overlay_16() override;
   void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) override;
   // A 16-bit pixel (565, else 555) as the layer's RGBA8, opaque.
   static uint32_t rgba(uint16_t pixel, bool rgb565);
@@ -86,6 +91,9 @@ class SdlScreen2D : public platform::Screen2D {
               const uint8_t* alpha = nullptr, const uint16_t* colour = nullptr);
   void draw_layer(int width, int height, bool blend);
   FrameRenderer* render_;
+  std::unique_ptr<GpuHud> hud_;
+  SDL_Window* hud_window_{};
+  const FrameShape* hud_shape_{};
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
   std::vector<uint8_t> rgba_;

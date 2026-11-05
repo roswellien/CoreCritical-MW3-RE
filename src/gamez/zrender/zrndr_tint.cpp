@@ -1,4 +1,5 @@
 #include "gamez/zrender/zrndr_tint.h"
+#include "gamez/zrender/zrndr_blit.h"
 
 #include <cstring>
 
@@ -141,6 +142,7 @@ void tint_row_565_mmx(uint16_t* row, int32_t count) { mmx_row(row, count, 0xf800
 uint32_t finish() {
   const TintState& s = g_tint;
   if (!s.pending) return 0;
+  observe_framebuffer_write(g_target.base, "tint");
   FinishConstants& k = g_k;
   const FinishTarget& t = g_target;
   if (g_machine.mmx) k.row = g_machine.format == 5 ? 2 : 3;
@@ -209,6 +211,7 @@ void static_fill(const int32_t* rect, double level, uint16_t lo, uint16_t mid, u
     uint16_t* p = f.base + (y * f.pitch_px + left);
     for (int32_t i = 0; i < w; ++i, ++p, ++n) {
       if (n[1] >= under) continue;
+      observe_framebuffer_write(f.base, "damage static");
       *p = n[0] < 0x55 ? lo : n[0] < 0xab ? mid : hi;
     }
   }

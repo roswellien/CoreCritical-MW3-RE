@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "gamez/ztwod/twod_host.h"
+#include "platform/prepared_hud.h"
 
 typedef struct TTF_Font TTF_Font;
 
@@ -27,6 +28,8 @@ class SdlTwodHost : public ztwod::Host {
   // `input` and `window` give the mouse; both may be null (tests).
   SdlTwodHost(mech3::GameEngine* engine, SdlInput* input, platform::Window* window);
   ~SdlTwodHost() override;
+  void enable_hud_text(bool enabled) { hud_text_enabled_ = enabled; }
+  std::shared_ptr<const platform::HudImage> hud_text_image(const zimg::Texture*, float, uint16_t) override;
 
 
   // zImage: a refcounted cache over zimg::fetch_image (0x005179d0 / 0x00517b10).
@@ -113,6 +116,22 @@ class SdlTwodHost : public ztwod::Host {
     int32_t bk_mode = 2;  // OPAQUE, GDI's default
     zimg::Texture* image = nullptr;
   };
+  struct HudTextLine {
+    std::string text, face;
+    int em{}, weight{}, italic{}, x{}, y{}, baseline{}, width{}, height{}, background_mode{};
+    ztwod::Rect clip{};
+    uint32_t colour{}, background{};
+  };
+  struct HudTextSource {
+    uint64_t pixels_hash{}, cached_signature{};
+    int cached_scale{};
+    std::vector<uint16_t> base;
+    std::vector<HudTextLine> lines;
+    std::shared_ptr<const platform::HudImage> cached;
+  };
+  bool hud_text_enabled_{};
+  std::map<const zimg::Texture*, HudTextSource> hud_text_sources_;
+  std::map<std::string, TTF_Font*> hud_fonts_;
   struct Named {
     ztwod::NamedFont fields;
     int refs = 0;

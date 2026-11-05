@@ -181,52 +181,6 @@ std::vector<uint32_t> image_pixels(const platform::prepared::Image &image,
     return pixels;
 }
 
-std::vector<std::uint32_t> sharp_layer(const Texture &texture, unsigned width, unsigned height) {
-    // SDL samples premultiplied pixels with a narrowed bilinear footprint, then
-    // unpremultiplies. Pre-filter just this 2D layer at its actual raster size.
-    auto coordinate = [](unsigned at, unsigned input, unsigned output) {
-        const float scale = std::max(float(output) / float(input), 1.0f);
-        const float texel = (float(at) + .5f) * float(input) / float(output);
-        const float centre = std::floor(texel) + .5f;
-        const float delta = texel - centre;
-        const float radius = .5f - .5f / scale;
-        return centre + (delta - std::clamp(delta, -radius, radius)) * scale - .5f;
-    };
-    std::vector<std::uint32_t> result(std::size_t(width) * height);
-    auto pixel = [&](int x, int y) {
-        x = std::clamp(x, 0, int(texture.width) - 1);
-        y = std::clamp(y, 0, int(texture.height) - 1);
-        return texture.pixels[std::size_t(y) * texture.width + x];
-    };
-    for (unsigned y = 0; y < height; ++y) {
-        const float sy = coordinate(y, texture.height, height);
-        const int top = int(std::floor(sy));
-        for (unsigned x = 0; x < width; ++x) {
-            const float sx = coordinate(x, texture.width, width);
-            const int left = int(std::floor(sx));
-            const float fx = sx - float(left), fy = sy - float(top);
-            const auto a = pixel(left, top), b = pixel(left + 1, top);
-            const auto c = pixel(left, top + 1), d = pixel(left + 1, top + 1);
-            const auto channel = [&](unsigned shift) {
-                const auto value = [&](std::uint32_t p) { return float((p >> shift) & 255); };
-                return std::lerp(std::lerp(value(a), value(b), fx),
-                                 std::lerp(value(c), value(d), fx), fy);
-            };
-            const float alpha = channel(24);
-            std::uint32_t rgba = std::uint32_t(std::lround(alpha)) << 24;
-            if (alpha > 0) {
-                for (unsigned shift : {0U, 8U, 16U}) {
-                    rgba |=
-                        std::uint32_t(std::lround(std::min(255.f, channel(shift) * 255.f / alpha)))
-                        << shift;
-                }
-            }
-            result[std::size_t(y) * width + x] = rgba;
-        }
-    }
-    return result;
-}
-
 class FrameRenderer final : public VulkanFrameRenderer {
   public:
     explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
@@ -293,13 +247,11 @@ class FrameRenderer final : public VulkanFrameRenderer {
         if (cpu_profile_) {
             const double milliseconds = 1000.0 / SDL_GetPerformanceFrequency();
             std::fprintf(stderr,
-                         "CPU renderer profile (includes warmup): %llu presents, %llu sharp calls, "
-                         "%llu sharp pixels, sharp %.4f ms, %llu render calls, render %.4f ms, "
+                         "CPU renderer profile (includes warmup): %llu presents, %llu GPU sharp draws, "
+                         "%llu render calls, render %.4f ms, "
                          "transport %.4f ms\n",
                          static_cast<unsigned long long>(presented_frames_),
-                         static_cast<unsigned long long>(sharp_calls_),
-                         static_cast<unsigned long long>(sharp_pixels_),
-                         sharp_ticks_ * milliseconds,
+                         static_cast<unsigned long long>(gpu_sharp_draws_),
                          static_cast<unsigned long long>(render_calls_),
                          render_ticks_ * milliseconds, transport_ticks_ * milliseconds);
         }
@@ -520,8 +472,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
         draw.first = first;
         draw.count = drawn;
         draw.texture = state.texture < 0 ? -1 : int(bind_texture(state.texture, state.sharp));
+        const bool sharp = state.sharp && state.texture >= 0 && !textures_.at(state.texture).held_copy;
         draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
-                       (state.address_v == 3 ? 3U : 1U) << 8 | (state.sharp ? 0U : 3U);
+                       (state.address_v == 3 ? 3U : 1U) << 8 | (state.sharp && !sharp ? 0U : 3U);
         if (!hud)
             draw.sampler |= 0x10000U;
         draw.key = {uint8_t(state.blend || state.multiply),
@@ -536,6 +489,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
         draw.push.target[1] = float(scene_.height);
         std::copy(fog_.begin(), fog_.end(), draw.push.fog);
         draw.push.mode[0] = 2 | (draw.texture >= 0 ? 4 : 0) | (state.fog ? 16 : 0);
+        if (sharp)
+            draw.push.mode[0] |= 64;
         constexpr unsigned texture = 2U << 8;
         constexpr unsigned diffuse = 0;
         draw.push.mode[1] = draw.texture < 0     ? 2 | diffuse
@@ -556,6 +511,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
         }
         scene_.order.push_back({false, unsigned(scene_.draws.size())});
         scene_.draws.push_back(std::move(draw));
+        if (sharp) ++gpu_sharp_draws_;
     }
 
   public:
@@ -808,23 +764,14 @@ class FrameRenderer final : public VulkanFrameRenderer {
         if (index != no_binding) {
             return index;
         }
-        const auto w = sharp ? scene_.width : entry.width;
-        const auto h = sharp ? scene_.height : entry.height;
+        const auto w = entry.width;
+        const auto h = entry.height;
         const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
         vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {}, {}};
         if (!renderer_->current(ref.key, ref.hash, w, h)) {
             // Held readback is already straight RGBA at the output extent. Its
             // nearest SSAA sampling must preserve alpha-zero RGB as well.
-            if (sharp && !entry.held_copy) {
-                CpuInterval interval(cpu_profile_ ? &sharp_ticks_ : nullptr);
-                ref.pixels32 = sharp_layer(entry, w, h);
-                if (cpu_profile_) {
-                    ++sharp_calls_;
-                    sharp_pixels_ += std::uint64_t(w) * h;
-                }
-            } else {
-                ref.pixels32 = entry.pixels;
-            }
+            ref.pixels32 = entry.pixels;
         }
         index = unsigned(scene_.textures.size());
         scene_.textures.push_back(std::move(ref));
@@ -889,8 +836,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
     int held_width_{}, held_height_{};
     bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
     const bool cpu_profile_ = cpu_profile_requested();
-    std::uint64_t sharp_ticks_{}, render_ticks_{}, transport_ticks_{};
-    std::uint64_t sharp_calls_{}, sharp_pixels_{}, render_calls_{};
+    std::uint64_t render_ticks_{}, transport_ticks_{};
+    std::uint64_t gpu_sharp_draws_{}, render_calls_{};
 };
 
 } // namespace

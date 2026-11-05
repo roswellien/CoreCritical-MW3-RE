@@ -39,6 +39,7 @@ endif()
 # (SDL3, with Godot as the fallback) talks to it through src/platform.
 add_library(mw3core STATIC
   src/platform/prepared_visuals.cpp
+  src/platform/prepared_hud.cpp
   src/crt/msvc_math.cpp
   src/crt/msvc_rand.cpp
   src/crt/msvc_string.cpp
@@ -302,6 +303,9 @@ add_library(mw3core STATIC
 )
 target_include_directories(mw3core PUBLIC src)
 target_include_directories(mw3core PRIVATE third_party)
+if(MSVC)
+  target_compile_options(mw3core PRIVATE /EHsc)
+endif()
 # pl_mpeg (third_party/pl_mpeg): as written, its warnings not ours.
 set_source_files_properties(third_party/pl_mpeg/pl_mpeg.c PROPERTIES COMPILE_OPTIONS "$<IF:$<C_COMPILER_ID:MSVC>,/w,-w>")
 # tinfl (third_party/miniz, miniz's inflate) likewise.
@@ -591,6 +595,7 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_install.cpp
     src/frontend/sdl/sdl_music.cpp
     src/frontend/sdl/sdl_platform.cpp
+    src/frontend/sdl/gpu_hud.cpp
     src/frontend/sdl/sdl_render3d.cpp
     src/frontend/sdl/sdl_sound.cpp
     src/frontend/sdl/sdl_vfw.cpp
@@ -599,14 +604,13 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_child.cpp
   )
   target_link_libraries(mw3sdl PUBLIC mw3core SDL3::SDL3 enet miniupnpc)
+  if(MSVC)
+    target_compile_options(mw3sdl PRIVATE /EHsc)
+  endif()
   if(MW3_CORE_CRITICAL_VULKAN)
     add_subdirectory(src/frontend/core_critical)
     target_link_libraries(mw3sdl PRIVATE mw3ccvulkan)
     target_compile_definitions(mw3sdl PRIVATE CC_MW3_RE_ADAPTER=1)
-    if(MSVC)
-      target_compile_options(mw3core PRIVATE /EHsc)
-      target_compile_options(mw3sdl PRIVATE /EHsc)
-    endif()
   endif()
   # Windows: the Direct3D 12 shaders (sdl_render3d.hlsl), DXIL by the
   # Windows SDK's dxc, as headers the renderer includes.
@@ -682,12 +686,12 @@ if(SDL3_FOUND)
       src/frontend/sdl/first_run_import.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MSVC)
+      target_compile_options(mw3text PRIVATE /EHsc)
+      target_compile_options(mw3 PRIVATE /EHsc)
+    endif()
     if(MW3_CORE_CRITICAL_VULKAN)
       target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
-      if(MSVC)
-        target_compile_options(mw3text PRIVATE /EHsc)
-        target_compile_options(mw3 PRIVATE /EHsc)
-      endif()
     endif()
     target_compile_definitions(mw3 PRIVATE MW3_VERSION="${MW3_VERSION}")
     # The launcher's art (assets/launcher) in a development build; a package
@@ -765,6 +769,17 @@ if(SDL3_FOUND)
       tests/test_net_upnp.cpp
     )
     target_link_libraries(mw3sdltests PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    add_executable(mw3hud_checks tests/test_gpu_hud.cpp)
+    target_link_libraries(mw3hud_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MSVC)
+      target_compile_options(mw3hud_checks PRIVATE /EHsc)
+    endif()
+    add_test(NAME mw3hud_checks COMMAND mw3hud_checks)
+    if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+      add_custom_command(TARGET mw3hud_checks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3hud_checks> $<TARGET_FILE_DIR:mw3hud_checks>
+        COMMAND_EXPAND_LISTS)
+    endif()
     target_compile_definitions(mw3sdltests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                                  MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
                                                  MW3_BIN="$<TARGET_FILE:mw3>"

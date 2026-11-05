@@ -26,7 +26,7 @@ Out vs(In i) {
   o.uv = i.uv;
   return o;
 }
-// opts.x fog on, opts.y alpha modulate, opts.zw a sharp draw's frame pixels a texel
+// opts.x fog on, opts.y alpha modulate, opts.z sharp sampling enabled
 cbuffer F : register(b0, space3) { float4 fog; float4 opts; };
 Texture2D<float4> t : register(t0, space2);
 SamplerState s : register(s0, space2);
@@ -34,16 +34,17 @@ float4 finish(float4 c, Out i) {
   if (opts.x > 0.5) c.rgb = lerp(fog.rgb, c.rgb, i.specular.a);
   return c;
 }
-float4 sample_sharp(float2 uv, float2 scale) {
+float4 sample_sharp(float2 uv) {
   float2 size;
   t.GetDimensions(size.x, size.y);
+  float2 scale = max(float2(1.0, 1.0), 1.0 / max(fwidth(uv) * size, float2(0.000001, 0.000001)));
   float2 texel = uv * size, base = floor(texel), d = texel - base - 0.5;
   float2 r = 0.5 - 0.5 / scale;
   float4 c = t.Sample(s, (base + (d - clamp(d, -r, r)) * scale + 0.5) / size);
   return c.a > 0.0 ? float4(c.rgb / c.a, c.a) : c;
 }
 float4 fs_tex(Out i) : SV_Target0 {
-  float4 tex = opts.z > 0.0 ? sample_sharp(i.uv, opts.zw) : t.Sample(s, i.uv);
+  float4 tex = opts.z > 0.0 ? sample_sharp(i.uv) : t.Sample(s, i.uv);
   float4 c = float4(tex.rgb * i.diffuse.rgb, opts.y > 0.5 ? tex.a * i.diffuse.a : tex.a);
   return finish(c, i);
 }

@@ -64,6 +64,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <exception>
 
 #include "frontend/sdl/campaign_chain.h"
 #include "frontend/sdl/modes_chain.h"
@@ -156,6 +157,8 @@ struct Args {
   // The bug fixes (zfix bugs; fixes.md, The bug fixes switch): mw3.cfg's
   // bugfixes=0/1 (default 1), --original turns them off whatever it says.
   bool play_original = false;
+  sdlfe::HudOptions hud;
+  bool hud_mode_given = false, hud_artwork_given = false, hud_text_given = false;
   int cfg_bugfixes = 1;
   int cfg_throttle_reverse = 1;  // mw3.cfg's throttle_reverse= (ours, W56: zfix.h)
   bool first_start = false;   // the install found by the search, not mw3.cfg's (ours: the first start's notes)
@@ -232,6 +235,7 @@ void usage() {
       "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--win N] [--lab-mech N]\n"
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun AZIMUTH ELEVATION]\n"
+      "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
@@ -350,6 +354,13 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--windowed") a.windowed = true;
     else if (s == "--no-import") a.no_import = true;
     else if (s == "--cc-vulkan") a.backend = sdlfe::RendererBackend::core_critical_dxgi, a.no_launcher = true;
+    else if (s == "--cc-hud" && next(1)) a.hud.mode = argv[++i], a.hud_mode_given = true;
+    else if (s == "--cc-hud-artwork" && next(1)) a.hud.artwork = argv[++i], a.hud_artwork_given = true;
+    else if (s == "--cc-hud-text" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") return false;
+      a.hud.text = value == "1", a.hud_text_given = true;
+    }
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
@@ -422,6 +433,10 @@ void read_config(const std::string& dir, Args& a) {
     if (line.rfind("install=", 0) == 0) a.cfg_install = line.substr(8);
     else if (line.rfind("mw1_game=", 0) == 0) a.cfg_mw1_game = line.substr(9);
     else if (line.rfind("assets=", 0) == 0) a.assets.push_back(line.substr(7));
+    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7);
+    else if (line.rfind("cc_hud_artwork=", 0) == 0 && !a.hud_artwork_given) a.hud.artwork = line.substr(15);
+    else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
+    else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
     else if (line.rfind("mod=", 0) == 0) a.cfg_mods.push_back(line.substr(4));
     else if (line.rfind("joystick=", 0) == 0) a.cfg_joystick = line.substr(9);
     else if (line.rfind("joystick_axes=", 0) == 0) a.cfg_joystick_axes = line.substr(14);
@@ -853,16 +868,12 @@ int main(int argc, char** argv) {
       };
     }
   }
-#if defined(CC_MW3_RE_ADAPTER)
   int result = 1;
   try {
     result = run(a, vfw.get());
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
   }
-#else
-  const int result = run(a, vfw.get());
-#endif
   g_net_pass = nullptr;
   vfw.reset();
   SDL_Quit();  // after every SDL object above is gone
@@ -913,7 +924,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   sound_clock.c = &movie_clock;
   const bool stepped = !a.movie.empty() && a.nosound;
   sdlfe::SdlAlert alert(window.sdl(), a.hidden);
-  sdlfe::SdlScreen2D screen(window.render());
+  sdlfe::SdlScreen2D screen(window.render(), a.hud, window.sdl(), &window.shape());
   std::unique_ptr<platform::SoundOutput> sound;
   if (a.nosound) {
     auto silent = std::make_unique<platform::SilentSoundOutput>();
@@ -994,6 +1005,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   {
     mech3::GameEngine engine(p, "mech3.exe" + a.original);
     sdlfe::SdlTwodHost host(&engine, &input, &window);
+    host.enable_hud_text(a.hud.mode == "core-critical" && a.hud.text);
     ztwod::set_host(&host);
     mech3::reset_states();
     mech3::Mech3App app(&engine);

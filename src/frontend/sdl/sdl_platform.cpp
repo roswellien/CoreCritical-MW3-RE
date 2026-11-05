@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
+#include <algorithm>
 
 #include "frontend/sdl/sdl_input.h"
 #include "gamez/zgame/zgameapp.h"
@@ -256,9 +258,32 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   render_->set_viewport(vx, vy, vw, vh);
 }
 
+SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_Window* window, const FrameShape* shape)
+    : render_(render), hud_window_(window), hud_shape_(shape) {
+  if (options.mode != "original" && options.mode != "core-critical")
+    throw std::runtime_error("--cc-hud supports original or core-critical");
+  if (options.mode == "core-critical") {
+    if (!render_) throw std::runtime_error("Core Critical HUD requires a renderer");
+    hud_ = std::make_unique<GpuHud>(*render_, options);
+  }
+}
+SdlScreen2D::~SdlScreen2D() = default;
+void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height, int pitch) {
+  if (!hud_) return;
+  int output_height = height;
+  if (hud_window_) {
+    int output_width = 0;
+    SDL_GetWindowSizeInPixels(hud_window_, &output_width, &output_height);
+    if (hud_shape_ && hud_shape_->fit && hud_shape_->frame_w > 0)
+      output_height = std::min(output_height, int(int64_t(output_width) * hud_shape_->frame_h / hud_shape_->frame_w));
+  }
+  hud_->begin(target, width, height, pitch, output_height);
+}
+void SdlScreen2D::cancel_overlay_16() { if (hud_) hud_->cancel(); }
 void SdlScreen2D::overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                              const uint8_t* alpha, const uint16_t* colour) {
   if (!render_ || width <= 0 || height <= 0) return;
+  if (hud_ && hud_->finish()) return;
   render_->flush();
   // Nothing drawn (every pixel still the key): nothing to lay over the frame.
   // A frame's locks often draw nothing (performance.md); the conversion,

@@ -92,6 +92,22 @@ void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
     require(pixel(16, 16) == 0xff80007f,
             "The sharp HUD layer lost its premultiplied color or alpha");
 
+    // A cropped 4x1 resource drawn over 13x32 pixels has different X/Y
+    // densities. A full-resource/window ratio incorrectly blurs this edge.
+    const uint8_t cropped[] = {0, 255, 0, 255, 128, 0, 0, 128,
+                               0, 0, 0, 0, 0, 255, 0, 255};
+    hud.texture = renderer->create_texture(4, 1, cropped, 4);
+    const platform::TLVertex sprite[] = {{.25f, 0, 0, 1, 0xffffffff, 0, .25f, 0},
+                                         {13.25f, 0, 0, 1, 0xffffffff, 0, .75f, 0},
+                                         {13.25f, 32, 0, 1, 0xffffffff, 0, .75f, 1},
+                                         {.25f, 32, 0, 1, 0xffffffff, 0, .25f, 1}};
+    renderer->clear(true, 0, 0, 255);
+    renderer->draw(platform::Primitive::kFan, sprite, 4, hud);
+    renderer->release_texture(hud.texture);
+    require(pixel(5, 16) == 0xff80007f && pixel(6, 16) == 0xff60009f &&
+                pixel(8, 16) == 0xff0000ff,
+            "Sharp sprite density, crop or transparent-edge color changed");
+
     renderer->clear(true, 200, 100, 50);
     const uint8_t shadow_color[] = {128, 255, 128, 128};
     platform::DrawState shadow{};
