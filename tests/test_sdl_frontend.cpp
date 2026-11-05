@@ -2504,6 +2504,9 @@ TEST(sdl_program_campaign_chain) {
   std::printf("  vehicles killed: %d salvaged their weapons, %d none on the coin, %d unarmed\n", veh_weapons, veh_coin, veh_unarmed);
   EXPECT(veh_weapons >= 5 && veh_weapons + veh_coin > veh_unarmed);
   EXPECT(lk.find("mw3: chain done at op 2 mission 1 after 4 wins") != std::string::npos);
+  // The debriefing's rows are the mission's objectives, scored (campaign.md section 3).
+  EXPECT(lk.find("rows after op 1 mission 1: Primary Objectives | Take Com. Center Offline | 2500 | ") != std::string::npos);
+  EXPECT(lk.find("Secondary Objectives | Destroy Smoke Jaguar Forces | ") != std::string::npos);
   EXPECT(lk.find("mw3: 0 original functions reached that are not ported") != std::string::npos);
   // The retries (campaign.md section 14, The retry): a lost mission is
   // briefed again (0x0047ac20 reads the loss), its animations reset
@@ -2639,6 +2642,21 @@ TEST(sdl_program_action_chain) {
   for (size_t at = 0; (at = log.find("mw3: modes case ", at)) != std::string::npos; ++at)
     if (log.compare(log.find(':', at + 16), 7, ": world") != 0) std::printf("  %s\n", log.substr(at + 11, log.find('\n', at) - at - 11).c_str());
   EXPECT(won == 12 && cleared == 8 && lost == 20 && not_won == 0);  // 12 cases end on their objectives, 8 on waves
+  // A round of waves left by QUIT (not ended, so a round less): 1000 a wave
+  // and a hundred for each round left at each, by the wave it stopped on.
+  int wave_scores = 0, wave_scores_ok = 0;
+  for (size_t at = 0; (at = log.find(" cleared at core frame", at)) != std::string::npos; ++at) {
+    const size_t start = log.rfind("waves ", at), rows = log.find("debriefing rows", at), eol = log.find('\n', rows);
+    int first = 0, defeated = 0, total = -1;
+    std::sscanf(log.c_str() + start, "waves %d", &first);
+    const std::string line = log.substr(rows, eol - rows);
+    if (const size_t m = line.find("Mechs Defeated | "); m != std::string::npos) defeated = std::atoi(line.c_str() + m + 17);
+    if (const size_t m = line.find("Mission Total | "); m != std::string::npos) total = std::atoi(line.c_str() + m + 16);
+    ++wave_scores;
+    wave_scores_ok += total == 2000 + (first + 1) * 100 + first * 100 + defeated;
+  }
+  std::printf("  %d rounds of waves, %d scored by their waves\n", wave_scores, wave_scores_ok);
+  EXPECT(wave_scores == 8 && wave_scores_ok == 8);
   EXPECT(log.find("mw3: modes done: 20 cases, 20 tallied as expected, 0 not") != std::string::npos);
   EXPECT(log.find("mw3: 0 original functions reached that are not ported") != std::string::npos);
 }

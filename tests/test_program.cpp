@@ -11142,6 +11142,110 @@ TEST(mod_world_plays_in_instant_action_headless) {
   mech3::options() = mech3::Options{};
 }
 
+// A campaign's debriefing by the real hooks (tests/probe_debriefing.cpp stubs
+// them; campaign.md section 3): c1m1 and c1m2 played from the menus, won with
+// the objectives the test marks. The rows are the mission's own lists, 2500 a
+// done one, a hidden one neither listed nor scored; the campaign's score and
+// the rank (a step per 100,000) count them from the score the pilot had.
+TEST(campaign_debriefing_scores_the_missions_objectives_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("debrief_objectives_write"));
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::options() = mech3::Options{};
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    int stage = 0, core_frames = 0;
+    std::string rows[2], rank[2];
+    int32_t kept[2] = {-1, -1};
+    int mission = 0;
+    engine.on_present = [&](int) {
+      if (stage == 0 && app.current() == &mech3::states().main && mech3::main_menu()) {
+        const_cast<mech3::MainMenu*>(mech3::main_menu())->buttons[1].on_left_up();  // NEW CAMPAIGN
+        stage = 1;
+      } else if (stage == 1) {
+        auto* ps = dynamic_cast<mech3::PilotState*>(app.current());
+        if (!ps || !ps->screen) return;
+        ps->screen->new_bar.set_text("Scorer");
+        ps->screen->new_bar.on_return();
+        ps->screen->on_button(0x18, 0, 0);  // ACCEPT
+        stage = 2;
+      } else if (stage == 2) {
+        mech3::BriefingScreen* b = mech3::briefing_screen();
+        if (!b || app.current() != &mech3::states().load || !b->loaded) return;
+        b->on_button(mech3::BriefingScreen::kBtnLaunch, 0, 0);
+        core_frames = 0;
+        stage = 3;
+      } else if (stage == 3 && app.current() == &mech3::states().core) {
+        if (++core_frames != 30) return;
+        const mech3::Objectives& o = mech3::mission_objectives();
+        std::vector<mech3::Objective*> first, second;
+        if (o.primary) for (const auto& i : o.primary->items) first.push_back(i.get());
+        if (o.secondary) for (const auto& i : o.secondary->items) second.push_back(i.get());
+        if (first.size() >= 2) first[0]->done = 1;
+        if (mission == 0) {
+          // c1m1: a score the pilot already had, the second objective left undone.
+          if (mech3::CampaignGame* c = mech3::current_pilot()->campaign()) c->c4 = 99000;
+        } else if (first.size() >= 2 && !second.empty()) {
+          // c1m2: its second objective hidden though done, the secondary done.
+          first[1]->done = 1, first[1]->visible = 0;
+          second[0]->done = 1;
+        }
+        mech3::missions().ended = 1;
+        mech3::missions().on_command(0x71);
+        stage = 4;
+      } else if (stage == 4 && app.current() == &mech3::states().end_win) {
+        auto* d = dynamic_cast<mech3::DebriefScreen*>(engine.screen_of(mech3::states().end_win.screen_));
+        if (!d) return;
+        rows[mission] = mech3::debrief_rows(*d);
+        rank[mission] = d->rank.labels.empty() ? "" : d->rank.labels[0]->text;
+        mech3::CampaignGame* c = mech3::current_pilot()->campaign();
+        kept[mission] = c ? c->c4 : -1;  // the Win State's copy, already made
+        d->on_button(mech3::DebriefScreen::kContinue, 0, 0);
+        stage = ++mission == 2 ? 5 : 2;
+      }
+    };
+    CountingPump pump;
+    pump.limit = 3000;
+    pump.stop = [&] { return stage == 5; };
+    app.run(pump);
+    std::printf("  c1m1: %s\n  c1m2: %s\n", rows[0].c_str(), rows[1].c_str());
+    EXPECT(stage == 5);
+    EXPECT(rows[0].rfind("Primary Objectives | Take Com. Center Offline | 2500 | Destroy Fixed Emplacements | Failed | "
+                         "Secondary Objectives | Campaign Total | 101500 | Mission Total | 2500 | ", 0) == 0);
+    EXPECT(rows[1].rfind("Primary Objectives | Capture Enemy Barracks | 2500 | Secondary Objectives | "
+                         "Destroy Smoke Jaguar Forces | 2500 | Campaign Total | 106500 | Mission Total | 5000 | ", 0) == 0);
+    EXPECT(kept[0] == 101500 && kept[1] == 106500);
+    EXPECT(rank[0] == zutl::messages().get_text(0x1d9));  // over 100,000: the rank moved on the objectives' points
+    EXPECT(engine.unported_counts().count("0x0045e080") == 0);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
+}
+
 // Instant Action through the menus (frontend-plan item 12b): INSTANT ACTION,
 // a new pilot, the Action screen (menus.md 13) set to Battle Progression
 // with a Champion lancemate, ACCEPT, the briefing's LAUNCH. Wave 1 (a
@@ -11178,8 +11282,8 @@ TEST(instant_action_menus_to_wave1_tallies_headless) {
     mech3::set_app(&app);
     EXPECT(app.init_instance());
     int stage = 0, core_frames = 0, wave2_at = -1;
-    std::string wave_row, enemy_row, config_row, header;
-    int32_t store_items = -1, made_enemies = 0;
+    std::string wave_row, enemy_row, config_row, header, debrief_rows;
+    int32_t store_items = -1, made_enemies = 0, round_mode = -1, round_wave = -1, round_won = -1;
     bool reopened = false, waves_offered = false, dummy_seen = false, saved_at_launch = false;
     std::vector<void*> killed;
     mech3::ActionGame* game = nullptr;
@@ -11252,6 +11356,8 @@ TEST(instant_action_menus_to_wave1_tallies_headless) {
       } else if (stage == 5 && app.current() == &mech3::states().end_win) {
         auto* d = dynamic_cast<mech3::DebriefScreen*>(engine.screen_of(mech3::states().end_win.screen_));
         if (!d) return;
+        engine.action_rounds(&round_mode, &round_wave, &round_won);
+        debrief_rows = mech3::debrief_rows(*d);
         d->on_button(mech3::DebriefScreen::kAbort, 0, 0);
         dummy_seen = true;
         stage = 6;
@@ -11284,6 +11390,12 @@ TEST(instant_action_menus_to_wave1_tallies_headless) {
     EXPECT(header == zutl::format_message(0x231, {"1", zutl::messages().get_text(0x284)}));
     EXPECT(game && game->player_kills == 2 && game->lancemate_kills == 0 && game->enemy_kills == 0);
     EXPECT(game && game->waves == 1 && game->mode == 2 && game->x74 == 0 && game->x78 == 1);
+    // The debriefing by the real hook (0x0047b430): Progression, one wave won
+    // and left with the mission ended on wave 2: 1000 + 2 x 100, and the lance's.
+    EXPECT(round_mode == 2 && round_wave == 2 && round_won == 1);
+    int defeated = 0;
+    EXPECT(std::sscanf(debrief_rows.c_str(), "%*[^|]| %*[^|]| %d", &defeated) == 1 && defeated > 0);
+    EXPECT(debrief_rows.find("Mission Total | " + std::to_string(1200 + defeated)) != std::string::npos);
     mech3::missions().cleanup(false);
     app.stop_game();
     app.exit_instance();

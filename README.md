@@ -28,6 +28,13 @@ original.
   at it; it now uses the value the original team's own Pirate's Moon sets. This
   changes slightly how feet sit on slopes and when a foot counts as in water.
   This is part of bug fixes.
+- **The debriefing's scores.** A campaign debriefing now lists the mission's
+  objectives, each worth 2500 when done, and counts them in the mission and
+  campaign totals and the rank; before, it listed none and scored none. Instant
+  Action's Battle Waves and Progression now score 1000 a wave plus a bonus for
+  how far you got, as the original does, in place of a flat 1000, so a round that
+  clears no wave scores nothing but its kills. Scores you already have stay as
+  saved; new missions add to them.
 
 **1.0.3 (2026-11-05)**
 
