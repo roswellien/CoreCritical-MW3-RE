@@ -25,6 +25,7 @@
 #include "gamez/zrender/zrndr_tint.h"
 #include "mech3/game_setup.h"
 #include "mech3/source_map.h"
+#include "gamez/zutil/zutl_path.h"
 
 namespace sdlfe {
 
@@ -273,8 +274,8 @@ struct Sounds {
     for (const char* arc : {"soundsL.zbd", "soundsH.zbd"}) {
       zutl_zar::Archive a;
       zutl_zar::init(a);
-      const std::string path = (fs::path(install) / "zbd" / arc).string();
-      if (!fs::is_regular_file(path) || !zutl_zar::open(a, path.c_str())) {
+      const std::string path = zutl::any_case(install, std::string("zbd/") + arc);
+      if (path.empty() || !fs::is_regular_file(path) || !zutl_zar::open(a, path.c_str())) {
         zutl_zar::destroy(a);
         continue;
       }
@@ -959,7 +960,7 @@ void Launcher::notes_refresh() {
   lacks_music_ = lacks_movies_ = false;
   if (!install_.ok) return;
   const fs::path music = o_.write_dir.empty() ? fs::path("music") : fs::path(o_.write_dir) / "music";
-  lacks_music_ = !have_music({music.string(), (fs::path(install_.dir) / "music").string()});
+  lacks_music_ = !have_music({music.string(), (zutl::any_case(install_.dir, "music").empty() ? fs::path(install_.dir) / "music" : fs::path(zutl::any_case(install_.dir, "music"))).string()});
   lacks_movies_ = !have_movies(install_.dir, o_.write_dir);
   const std::string dir = fs::path(music).make_preferred().string();
   for (const std::string& n : launcher_notes(install_.version, !lacks_music_, !lacks_movies_, dir))

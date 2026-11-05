@@ -463,6 +463,8 @@ Noted but not yet ported:
   Whether modern Windows reports this correctly is unchecked; the rebuild asks
   its `directx_version` hook and ignores the answer.
 
+- **An install in any letter case** (FIX (A); `zutl::any_case`): the original's names meet Windows, where case does not matter. On a case-sensitive disk each part of a path is taken exact if it is there, else by its letters; each mount keeps its place in the order. `docs/assets-layer.md`.
+
 ## Original bugs still to fix
 
 Bugs whose intent is clear, fixed as the port reaches the code:

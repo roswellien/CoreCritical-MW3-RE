@@ -744,7 +744,7 @@ int main(int argc, char** argv) {
   zutl::set_write_dir(a.write_dir);
   zutl::mounts().confined = true;  // ours: names from data and the network stay inside these folders
   std::error_code ec;
-  if (!std::filesystem::exists(a.install + "/zbd/reader.zbd", ec)) {
+  if (zutl::any_case(a.install, "zbd/reader.zbd").empty()) {
     const std::string msg = "No MechWarrior 3 install at \"" + a.install +
                             "\". Start mw3 with the folder that holds Mech3.exe and zbd (README.txt).";
     std::fprintf(stderr, "mw3: %s\n", msg.c_str());

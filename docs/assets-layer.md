@@ -67,3 +67,15 @@ needed). Planned, finer steps, each in the reader it belongs to:
 3. **Models** by node or part name, for the high-res layer planned for after
    the port (CLAUDE.md): a replacement keeps the original part tree, pivots
    and firepoints; gameplay keeps the original geometry.
+
+## Letter case
+
+The game's names were written for Windows, so nothing makes them match a file's
+case ("mech3Msg.dll" against the disc's `Mech3Msg.dll`). `zutl::any_case` takes
+each part of a path exact if it is there, else one differing only by case, and
+`find`, `find_all`, `find_in_mods` and `list` use it per mount, so a mount earlier
+in the order still wins though its copy is in another case. The write dir stays
+exact: the game made those names itself. What checks an install without the
+mounts (`install_valid`, `check_install`, the launcher's sounds and notes, the
+movie import) uses it too. It scans a folder only after an exact miss, so a right-cased
+install costs nothing and there is no list of names to go stale.

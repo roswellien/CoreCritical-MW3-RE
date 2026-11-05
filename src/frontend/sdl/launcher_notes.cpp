@@ -1,4 +1,5 @@
 #include "frontend/sdl/launcher_notes.h"
+#include "gamez/zutil/zutl_path.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -29,7 +30,7 @@ bool have_movies(const std::string& install, const std::string& write_dir) {
   std::error_code ec;
   for (const std::string& d : {install, write_dir}) {
     if (d.empty()) continue;
-    for (const auto& e : std::filesystem::directory_iterator(std::filesystem::path(d) / "video", ec)) {
+    for (const auto& e : std::filesystem::directory_iterator(zutl::any_case(d, "video"), ec)) {
       std::string x = e.path().extension().string();
       for (char& c : x) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
       if (x == ".avi" || x == ".fmv") return true;
