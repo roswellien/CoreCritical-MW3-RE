@@ -21,6 +21,14 @@ struct Renderer : platform::Render3D {
     std::shared_ptr<const cc::geometry::Resource> submitted;
     unsigned legacy_draws{}, unsupported{};
     bool accept = true;
+    bool prepared = false;
+    cc::geometry::Submission submit_prepared_geometry(const platform::ModelDrawContext &context,
+                                                      const cc::geometry::Fog &) override {
+      if (!prepared) return cc::geometry::Submission::unsupported;
+      require(context.source_vertices == 3 && context.source_polygons == 1,
+              "Early prepared source work was not accounted for");
+      return cc::geometry::Submission::submitted;
+    }
     cc::geometry::Mode geometry_mode() const override { return mode; }
     cc::geometry::Submission submit_model_geometry(
         std::shared_ptr<const cc::geometry::Resource> source, const platform::ModelDrawContext &,
@@ -89,6 +97,14 @@ int main() try {
     std::memset(work.tl, 0x7c, sizeof work.tl);
     const auto before = buffers;
     const auto before_work = work;
+    renderer.prepared = true;
+    require(zmod::draw_model(&node, 0x3f) == 0 && !model.render_geometry && !renderer.submitted &&
+                renderer.legacy_draws == 0 &&
+                !std::memcmp(before.cam, buffers.cam, sizeof buffers.cam) &&
+                !std::memcmp(before.normals, buffers.normals, sizeof buffers.normals) &&
+                !std::memcmp(before_work.tl, work.tl, sizeof work.tl),
+            "Prepared early handoff still registered stock geometry or ran CPU producer loops");
+    renderer.prepared = false;
     require(zmod::draw_model(&node, 0x3f) == 0, "Original model return changed");
     require(renderer.submitted && renderer.legacy_draws == 0,
             "Early owned submission was bypassed");

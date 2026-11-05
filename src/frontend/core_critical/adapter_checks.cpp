@@ -19,6 +19,14 @@
 #include <string_view>
 
 namespace {
+bool threaded_checks = false;
+std::unique_ptr<cc_mw3_re::VulkanFrameRenderer>
+make_check_renderer(SDL_Window *window, sdlfe::RendererBackend backend,
+                    const sdlfe::CoreCriticalQuality &quality = {},
+                    sdlfe::CoreCriticalAssets assets = {}) {
+    assets.render_thread = threaded_checks;
+    return cc_mw3_re::make_renderer(window, backend, quality, assets);
+}
 
 void require(bool condition, const char *message) {
     if (!condition) {
@@ -36,7 +44,7 @@ void quad(platform::Render3D &renderer, float low, float high, float depth, uint
 }
 
 void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
-    auto renderer = cc_mw3_re::make_renderer(window, backend);
+    auto renderer = make_check_renderer(window, backend);
     renderer->set_viewport(0, 0, 32, 32);
     renderer->clear(true, 0, 0, 255);
     renderer->begin_scene();
@@ -191,20 +199,20 @@ void check_quality(SDL_Window *window, sdlfe::RendererBackend backend,
           sdlfe::CoreCriticalQuality{"off", "16junk"}}) {
         bool rejected = false;
         try {
-            auto unsupported = cc_mw3_re::make_renderer(window, backend, invalid);
+            auto unsupported = make_check_renderer(window, backend, invalid);
         } catch (const std::exception &error) {
             rejected = std::string_view(error.what()).find("--cc-") == 0;
         }
         require(rejected, "An unsupported quality request was silently accepted");
     }
-    auto original = cc_mw3_re::make_renderer(window, backend);
+    auto original = make_check_renderer(window, backend);
     original->set_viewport(0, 0, 64, 64);
     original->clear(true, 0, 0, 0);
     std::vector<uint32_t> original_pixels;
     int original_width = 0, original_height = 0;
     require(original->read_back(&original_pixels, &original_width, &original_height),
             "The original-quality renderer did not initialize");
-    auto renderer = cc_mw3_re::make_renderer(window, backend, quality);
+    auto renderer = make_check_renderer(window, backend, quality);
     renderer->set_viewport(0, 0, 64, 64);
     renderer->clear(true, 0, 0, 0);
     std::vector<uint8_t> checker(64 * 64 * 4, 255);
@@ -405,7 +413,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
         zcls::Node *node;
         ~ModelPointer() { node->model = nullptr; }
     } model_pointer{panel};
-    auto renderer = cc_mw3_re::make_renderer(window, backend, quality, options);
+    auto renderer = make_check_renderer(window, backend, quality, options);
     struct RenderBinding {
         platform::Render3D *previous = zvid::render3d();
         ~RenderBinding() { zvid::set_render3d(previous); }
@@ -518,7 +526,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
         std::ofstream(folder / "normals.bin", std::ios::binary)
             << prepared_fixture::normals(normal, absent);
         options.lighting = mode;
-        renderer = cc_mw3_re::make_renderer(window, backend, quality, options);
+        renderer = make_check_renderer(window, backend, quality, options);
         renderer->set_viewport(0, 0, 64, 64);
         zvid::set_render3d(renderer.get());
         return frame();
@@ -629,6 +637,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 } // namespace
 
 #include "geometry_checks.inc"
+#include "prepared_gpu_checks.inc"
 
 int main(int argc, char **argv) {
     bool geometry_check = false;
@@ -636,7 +645,9 @@ int main(int argc, char **argv) {
     sdlfe::CoreCriticalQuality quality;
     for (int i = 1; i < argc; ++i) {
         const std::string_view option(argv[i]);
-        if (option == "--wsi")
+        if (option == "--render-thread")
+            threaded_checks = true;
+        else if (option == "--wsi")
             native_wsi = true;
         else if (option == "--prepared")
             prepared_check = true;
@@ -670,7 +681,7 @@ int main(int argc, char **argv) {
             bool rejected = false;
             try {
                 auto renderer =
-                    cc_mw3_re::make_renderer(invalid, sdlfe::RendererBackend::core_critical_wsi);
+                    make_check_renderer(invalid, sdlfe::RendererBackend::core_critical_wsi);
             } catch (const std::exception &error) {
                 rejected = std::string_view(error.what()).find("SDL Vulkan surface:") == 0;
             }
@@ -692,6 +703,7 @@ int main(int argc, char **argv) {
                                          int((reference[frame][pixel]>>shift)&255)) <= 2,
                                 "GPU/reference transform, fog, clipping or normal debug mismatch");
             }
+            check_gpu_prepared(window, backend);
         }
         else if (prepared_check)
             check_prepared(window, backend, quality, material_check);

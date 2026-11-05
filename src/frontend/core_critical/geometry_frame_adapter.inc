@@ -67,6 +67,7 @@ cc::geometry::Submission submit_model_geometry(std::shared_ptr<const cc::geometr
     auto instance = std::make_shared<vk::ModelInstance>();
     instance->geometry = cached.geometry;
     instance->source = source;
+    instance->gpu_vertices = true;
     instance->camera = matrix_rows(camera);
     instance->sun_world = matrix_rows(world);
     instance->sun_normal = mw34::sun::normal_matrix(world);

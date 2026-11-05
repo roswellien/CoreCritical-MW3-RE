@@ -16,6 +16,7 @@ struct AssetStatistics {
     std::uint64_t geometry_uploads{};
     std::uint64_t lit_draws{}, normal_draws{};
     std::uint64_t retired_geometry_buffers{};
+    std::uint64_t gpu_prepared_vertices{}, early_prepared_models{}, prepared_cpu_fallback_batches{};
 };
 
 class VulkanFrameRenderer : public sdlfe::FrameRenderer {

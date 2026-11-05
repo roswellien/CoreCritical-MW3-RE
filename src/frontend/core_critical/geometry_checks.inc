@@ -1,7 +1,7 @@
 void check_strict_geometry(SDL_Window *window, sdlfe::RendererBackend backend) {
     sdlfe::CoreCriticalAssets options;
     options.geometry = "gpu";
-    auto renderer = cc_mw3_re::make_renderer(window, backend, {}, options);
+    auto renderer = make_check_renderer(window, backend, {}, options);
     renderer->set_viewport(0, 0, 32, 32);
     renderer->begin_scene();
     renderer->clear(true, 0, 0, 0);
@@ -35,7 +35,7 @@ std::vector<std::vector<std::uint32_t>> check_native_geometry(SDL_Window *window
                                                               bool cpu_reference = false) {
     sdlfe::CoreCriticalAssets options;
     options.geometry = cpu_reference ? "cpu-reference" : "partial";
-    auto renderer = cc_mw3_re::make_renderer(window, backend, {}, options);
+    auto renderer = make_check_renderer(window, backend, {}, options);
     renderer->set_viewport(0, 0, 32, 32);
     std::array<float, 12> matrix{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
     platform::ModelDrawContext context;
@@ -118,7 +118,7 @@ std::vector<std::vector<std::uint32_t>> check_native_geometry(SDL_Window *window
                 "Expired native GPU resources were not retired after completion");
     renderer.reset();
     options.geometry_debug_normals = true;
-    renderer = cc_mw3_re::make_renderer(window, backend, {}, options);
+    renderer = make_check_renderer(window, backend, {}, options);
     renderer->set_viewport(0, 0, 32, 32);
     positions[2] = positions[5] = positions[8] = 3;
     two_sided = true;

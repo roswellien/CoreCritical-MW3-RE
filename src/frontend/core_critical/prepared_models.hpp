@@ -30,7 +30,8 @@ class PreparedModels {
     bool empty() const { return models_.empty(); }
     bool has_binding(const platform::ModelDrawContext& context) const;
     const platform::prepared::Image *named_texture(const char *name) const;
-    PreparedModelDraw draw(const platform::ModelDrawContext &context) const;
+    PreparedModelDraw draw(const platform::ModelDrawContext &context,
+                           bool rigid_only = false) const;
 
   private:
     struct Model {

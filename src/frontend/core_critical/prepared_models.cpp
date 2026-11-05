@@ -233,7 +233,8 @@ const platform::prepared::Image *PreparedModels::named_texture(const char *name)
     return nullptr;
 }
 
-PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context) const {
+PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context,
+                                       bool rigid_only) const {
     sdlfe::CpuInterval interval(cpu_profile_ ? &cpu_statistics_.selection_ticks : nullptr);
     if (cpu_profile_) ++cpu_statistics_.calls;
     PreparedModelDraw output;
@@ -249,6 +250,12 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
             selected = &model;
     if (!selected)
         return output;
+    // Admission must not run mixed-bone vertex deformation merely to discover
+    // that this early GPU route cannot consume it.
+    if (rigid_only && selected->mesh.version == 4)
+        for (const auto &batch : selected->mesh.batches)
+            if (!batch.donor_indices.empty())
+                return output;
     const Node *root = node;
     for (unsigned depth = 0; !root->source_asset_root; ++depth) {
         if (depth >= 64 || root->parent_count() != 1 ||

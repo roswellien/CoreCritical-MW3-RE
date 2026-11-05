@@ -81,6 +81,7 @@ SdlWindow::~SdlWindow() {
 
 uint32_t SdlWindow::create(const std::string& title, int width, int height) {
   if (!window_) return 0;
+  if (render_) render_->drain();
   windowed_w_ = width, windowed_h_ = height;
   if (fullscreen_) return SDL_SetWindowTitle(window_, title.empty() ? "MechWarrior 3" : title.c_str()), kHwnd;
   SDL_SetWindowSize(window_, width, height);
@@ -94,6 +95,7 @@ void SdlWindow::set_title(const std::string& title) {
 }
 void SdlWindow::show() {
   if (!window_ || hidden_) return;
+  if (render_) render_->drain();
   if (fullscreen_) SDL_SetWindowFullscreen(window_, true), SDL_SyncWindow(window_);
   // Brought forward and given the keyboard (the Mac's app activated, as SDL
   // does by default; Windows' foreground taken even from another process),
@@ -105,6 +107,7 @@ void SdlWindow::show() {
 // (pillarboxed in a window of another shape), and a window opened without
 // --window takes it (sdl_fit.h default_window).
 void SdlWindow::frame_size(int width, int height, int canvas_w, int canvas_h) {
+  if (render_) render_->drain();
   shape_.frame_w = width, shape_.frame_h = height;
   shape_.canvas_w = canvas_w, shape_.canvas_h = canvas_h;
   shape_.fit = zfix::options().any_resolution;
@@ -135,6 +138,7 @@ bool SdlWindow::first_start_size(int* w, int* h) {
 }
 void SdlWindow::switch_fullscreen(bool on) {
   if (!window_ || hidden_ || on == fullscreen_) return;
+  if (render_) render_->drain();
   fullscreen_ = on;
   if (on) {
     SDL_SetWindowFullscreen(window_, true);

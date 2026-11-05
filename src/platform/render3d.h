@@ -53,6 +53,7 @@ struct ModelDrawContext {
   float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
   float opacity = 1;
   bool ordinary = false, morphing = false, overlay = false;
+  uint32_t source_vertices = 0, source_polygons = 0;
 };
 
 class Render3D {
@@ -61,6 +62,10 @@ class Render3D {
   // What the load screen names as the video driver (ours; 0x005799f0 named the DirectDraw driver).
   virtual const char* driver_name() const { return "Default"; }
   virtual cc::geometry::Mode geometry_mode() const { return cc::geometry::Mode::legacy; }
+  virtual cc::geometry::Submission submit_prepared_geometry(const ModelDrawContext&,
+                                                            const cc::geometry::Fog&) {
+    return cc::geometry::Submission::unsupported;
+  }
   virtual cc::geometry::Submission submit_model_geometry(
       std::shared_ptr<const cc::geometry::Resource>, const ModelDrawContext&,
       const std::vector<cc::geometry::Material>&, const cc::geometry::Fog&) {
@@ -119,6 +124,9 @@ class Render3D {
   }
   virtual void set_fog_color(uint8_t r, uint8_t g, uint8_t b) = 0;  // FOGCOLOR (0x0057bcf0)
   virtual void reset_scene_resources() {}
+  // Complete queued host rendering and surface asynchronous failures before a
+  // window mutation, readback, world teardown or final timing report.
+  virtual void drain() {}
   virtual void present() = 0;      // Flip, or the windowed Blt (0x0057a850 / 0x00577130)
   // FIX (A): the back buffer read back (DirectDraw's Lock read it in the exe;
   // a GPU frame has to be downloaded): 0xAARRGGBB, top row first, at the

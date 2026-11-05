@@ -75,6 +75,42 @@ bool submit_geometry(zcls::Node &node) {
             throw std::runtime_error("Strict GPU geometry: unsupported model family");
         return false;
     };
+    auto &stack = zmth::matrix_stack();
+    if (!stack.top) return unsupported();
+    const auto &projection = zmth::projection();
+    platform::ModelDrawContext context;
+    context.node = &node;
+    context.model_to_world = stack.below().m;
+    context.model_to_camera = stack.matrix().m;
+    context.near_z = projection.near_z;
+    context.clip_near = draw_state().clip.near_z;
+    context.far_z = projection.far_z;
+    context.fx_near = projection.fx_near;
+    context.fy_near = projection.fy_near;
+    context.cx = projection.cx;
+    context.cy = projection.cy;
+    context.opacity = draw_state().opacity;
+    context.ordinary = model.count(0) == 0;
+    context.morphing = model.count(0x20) != 0;
+    context.overlay = draw_state().overlay != 0;
+    context.source_vertices = model.count(0x14);
+    context.source_polygons = model.count(0x10);
+    const auto &source_fog = fog();
+    cc::geometry::Fog fog_state;
+    fog_state.enabled = source_fog.on != 0;
+    std::copy_n(source_fog.color, 3, fog_state.color.begin());
+    fog_state.near_range = source_fog.near_range;
+    fog_state.inverse_range = source_fog.inv_range;
+    fog_state.low_altitude = source_fog.alt_low;
+    fog_state.inverse_altitude = source_fog.inv_alt;
+    // Prepared assets own their materials. Admit their rigid draw before stock
+    // registration and all native vertex/polygon loops, retaining effect-bearing
+    // producers until their side effects have an explicit GPU contract.
+    if (context.ordinary && !context.morphing && !context.overlay && !model.count(0x1c) &&
+        !draw_state().second_pass && context.opacity == 1.f &&
+        renderer->submit_prepared_geometry(context, fog_state) ==
+            cc::geometry::Submission::submitted)
+      return true;
     if (!source_supported(model))
         return unsupported();
     if (!model.render_geometry) {
@@ -118,31 +154,6 @@ bool submit_geometry(zcls::Node &node) {
         }
         materials.push_back(material);
     }
-    auto &stack = zmth::matrix_stack();
-    if (!stack.top)
-        return unsupported();
-    const auto &projection = zmth::projection();
-    platform::ModelDrawContext context;
-    context.node = &node;
-    context.model_to_world = stack.below().m;
-    context.model_to_camera = stack.matrix().m;
-    context.near_z = projection.near_z;
-    context.clip_near = draw_state().clip.near_z;
-    context.far_z = projection.far_z;
-    context.fx_near = projection.fx_near;
-    context.fy_near = projection.fy_near;
-    context.cx = projection.cx;
-    context.cy = projection.cy;
-    context.opacity = draw_state().opacity;
-    context.ordinary = true;
-    const auto &source_fog = fog();
-    cc::geometry::Fog fog_state;
-    fog_state.enabled = source_fog.on != 0;
-    std::copy_n(source_fog.color, 3, fog_state.color.begin());
-    fog_state.near_range = source_fog.near_range;
-    fog_state.inverse_range = source_fog.inv_range;
-    fog_state.low_altitude = source_fog.alt_low;
-    fog_state.inverse_altitude = source_fog.inv_alt;
     if (renderer->submit_model_geometry(model.render_geometry, context, materials, fog_state) !=
         cc::geometry::Submission::submitted)
         return unsupported();

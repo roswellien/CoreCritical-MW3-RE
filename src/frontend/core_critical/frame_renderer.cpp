@@ -1,10 +1,11 @@
 #include "frame_renderer.hpp"
-#include "prepared_draw_cache.hpp"
 #include "frontend/sdl/cpu_interval.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "prepared_draw.hpp"
+#include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
+#include "render_worker.hpp"
 #include "renderer/geometry/reference.hpp"
 
 #include "frontend/sdl/sdl_child.h"
@@ -15,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cfenv>
 #include <cmath>
 #include <cstdio>
@@ -201,27 +203,54 @@ class FrameRenderer final : public VulkanFrameRenderer {
             throw std::runtime_error("The Core Critical factory requires a Vulkan backend");
         configure_bridge(native_wsi_);
         initialize_renderer();
+        if (assets.render_thread) {
+            worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
+                // Process only synchronous window messages, without consuming
+                // input or reentering the game. DXGI may send one while waiting.
+                MSG message{};
+                ::PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+            });
+            std::fprintf(stderr, "Core Critical render worker: enabled (8 jobs, 128 MiB)\n");
+        }
     }
 
     bool ok() const override { return true; }
-    std::uint64_t presentation_count() const override { return presented_frames_; }
+    std::uint64_t presentation_count() const override {
+        if (worker_)
+            worker_->drain();
+        return presented_frames_.load();
+    }
+    void drain() override {
+        flush();
+        if (worker_)
+            worker_->drain();
+    }
     QualityStatistics quality_statistics() const override {
+        if (worker_)
+            worker_->drain();
         return {retired_quality_.fxaa_passes + renderer_->fxaa_passes,
                 retired_quality_.anisotropic_samplers + renderer_->af_samplers,
                 retired_quality_.mip_levels + renderer_->mip_levels_uploaded};
     }
     AssetStatistics asset_statistics() const override {
+        if (worker_)
+            worker_->drain();
         return {prepared_batches_,
                 retired_model_draws_ + renderer_->model_draws,
                 cpu_clipped_triangles_,
                 named_textures_,
                 retired_model_uploads_ + renderer_->model_uploads,
-                retired_lit_draws_ + renderer_->sun_world_draws + renderer_->sun_tl_draws,
+                retired_lit_draws_ + renderer_->sun_world_draws + renderer_->sun_model_draws +
+                    renderer_->sun_tl_draws,
                 retired_normal_draws_ + renderer_->normal_draws,
-                retired_geometry_buffers_ + renderer_->retired_model_buffers};
+                retired_geometry_buffers_ + renderer_->retired_model_buffers,
+                gpu_prepared_vertices_,
+                early_prepared_models_,
+                prepared_cpu_fallback_batches_};
     }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
+#include "prepared_gpu_adapter.inc"
 
     bool wants_model_context() const override { return !prepared_.empty(); }
     bool replaces_model_geometry() const override { return suppress_model_draws_; }
@@ -251,16 +280,32 @@ class FrameRenderer final : public VulkanFrameRenderer {
     void reset_scene_resources() override { reset_pending_ = true; }
 
     ~FrameRenderer() override {
+        try {
+            drain();
+        } catch (const std::exception &error) {
+            std::fprintf(stderr, "Core Critical render worker shutdown: %s\n", error.what());
+        }
+        if (worker_) {
+            worker_->stop();
+            const auto statistics = worker_->statistics();
+            std::fprintf(stderr,
+                         "Render worker: %zu submitted, %zu completed, %zu peak jobs, "
+                         "%zu peak bytes, %zu producer waits\n",
+                         statistics.submitted, statistics.completed, statistics.peak_jobs,
+                         statistics.peak_bytes, statistics.waits);
+            worker_.reset(); // All later summary reads and destruction belong to this thread.
+        }
         if (cpu_profile_) {
             const double milliseconds = 1000.0 / SDL_GetPerformanceFrequency();
-            std::fprintf(stderr,
-                         "CPU renderer profile (includes warmup): %llu presents, %llu GPU sharp draws, "
-                         "%llu render calls, render %.4f ms, "
-                         "transport %.4f ms\n",
-                         static_cast<unsigned long long>(presented_frames_),
-                         static_cast<unsigned long long>(gpu_sharp_draws_),
-                         static_cast<unsigned long long>(render_calls_),
-                         render_ticks_ * milliseconds, transport_ticks_ * milliseconds);
+            std::fprintf(
+                stderr,
+                "CPU renderer profile (includes warmup): %llu presents, %llu GPU sharp draws, "
+                "%llu render calls, render %.4f ms, "
+                "transport %.4f ms\n",
+                static_cast<unsigned long long>(presented_frames_.load()),
+                static_cast<unsigned long long>(gpu_sharp_draws_),
+                static_cast<unsigned long long>(render_calls_), render_ticks_ * milliseconds,
+                transport_ticks_ * milliseconds);
             const auto &models = prepared_.cpu_statistics();
             std::fprintf(stderr,
                          "CPU prepared profile (includes warmup, nested intervals): %llu calls, "
@@ -270,12 +315,24 @@ class FrameRenderer final : public VulkanFrameRenderer {
                          models.selection_ticks * milliseconds, models.retarget_ticks * milliseconds,
                          models.deform_ticks * milliseconds, prepared_emit_ticks_ * milliseconds,
                          append_ticks_ * milliseconds);
+            if (worker_render_ticks_ || worker_present_ticks_)
+                std::fprintf(stderr, "CPU worker profile: render %.4f ms, present %.4f ms\n",
+                             worker_render_ticks_ * milliseconds,
+                             worker_present_ticks_ * milliseconds);
             std::fprintf(stderr,
                          "CPU prepared vertices: %llu vertices, stage %.4f ms, assembly %.4f ms\n",
                          static_cast<unsigned long long>(prepared_cpu_.vertices),
                          prepared_cpu_.stage_ticks * milliseconds,
                          prepared_cpu_.assembly_ticks * milliseconds);
         }
+        if (geometry_mode_ != cc::geometry::Mode::legacy)
+            std::fprintf(stderr,
+                         "Prepared geometry: %llu GPU vertices, %llu reference CPU vertices, "
+                         "%llu early models, %llu CPU fallback batches\n",
+                         (unsigned long long)gpu_prepared_vertices_,
+                         (unsigned long long)prepared_reference_vertices_,
+                         (unsigned long long)early_prepared_models_,
+                         (unsigned long long)prepared_cpu_fallback_batches_);
         if (geometry_mode_ != cc::geometry::Mode::legacy)
             std::fprintf(stderr,"Geometry handoff: %llu submitted models, %llu CPU vertex preparations skipped, %llu CPU polygon preparations skipped, %llu unsupported models, %llu CPU 3D draw calls observed\n",
                 (unsigned long long)geometry_statistics_.submitted_models,
@@ -557,48 +614,17 @@ class FrameRenderer final : public VulkanFrameRenderer {
         if (sharp) ++gpu_sharp_draws_;
     }
 
-  public:
-    void flush() override {
-        if (scene_.order.empty()) {
-            return;
-        }
-        CpuInterval interval(cpu_profile_ ? &render_ticks_ : nullptr);
-        if (cpu_profile_)
-            ++render_calls_;
-        const bool initialize =
-            scene_.width != resident_width_ || scene_.height != resident_height_;
-        if (initialize) {
-            const auto size = std::size_t(scene_.width) * scene_.height;
-            scene_.color.assign(size, 0);
-            scene_.depth.assign(size, 0);
-        }
-        renderer_->render(scene_, initialize, false);
-        resident_width_ = scene_.width;
-        resident_height_ = scene_.height;
-        // Reuse hot submission storage, like the SDL renderer. Reset every
-        // scene value and release its resource references while keeping capacity.
-        vk::Scene next{};
-        next.vertices.swap(scene_.vertices);
-        next.vertices.clear();
-        next.draws.swap(scene_.draws);
-        next.draws.clear();
-        next.textures.swap(scene_.textures);
-        next.textures.clear();
-        next.order.swap(scene_.order);
-        next.order.clear();
-        next.clears.swap(scene_.clears);
-        next.clears.clear();
-        scene_ = std::move(next);
-        for (auto &entry : textures_) {
-            entry.scene_index = entry.sharp_index = no_binding;
-        }
-    }
+#include "frame_submission.inc"
 
     bool read_back(std::vector<uint32_t> *argb, int *width, int *height) override {
         std::vector<uint8_t> bgra;
         unsigned w = 0, h = 0;
         flush();
-        renderer_->capture_fullres_bgra(bgra, w, h);
+        const auto capture = [&] { renderer_->capture_fullres_bgra(bgra, w, h); };
+        if (worker_)
+            worker_->call(capture);
+        else
+            capture();
         if (bgra.empty()) {
             return false;
         }
@@ -661,50 +687,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
     }
     void drop_frame() override { held_.clear(); }
 
-    void present() override {
-        flush();
-        if (!resident_width_) {
-            return;
-        }
-        if (!capture_path_.empty()) {
-            save_capture();
-            return;
-        }
-        if ((SDL_GetWindowFlags(window_) & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) != 0) {
-            return;
-        }
-        CpuInterval interval(cpu_profile_ ? &transport_ticks_ : nullptr);
-        const auto before = renderer_->presents;
-        if (!window_bound_) {
-            std::vector<uint32_t> argb;
-            int width = 0, height = 0;
-            if (!read_back(&argb, &width, &height)) {
-                throw std::runtime_error("First Vulkan frame could not be read back");
-            }
-            const auto rgba = rgba_copy(argb);
-            if (!renderer_->present(hwnd_, reinterpret_cast<const uint8_t *>(rgba.data()), width,
-                                    height, width * 4, false, true)) {
-                throw std::runtime_error(
-                    "Could not bind the selected Core Critical Vulkan presenter");
-            }
-            window_bound_ = renderer_->presents != before;
-        } else if (!renderer_->present_resident(hwnd_, resident_width_, resident_height_)) {
-            throw std::runtime_error("Core Critical resident present failed");
-        }
-        if (renderer_->presents != before) {
-            presented_frames_ += renderer_->presents - before;
-            if (!presented_) {
-                std::fprintf(stderr, "%s first frame: %s (upload)\n", driver_name(),
-                             renderer_->device_name.c_str());
-                sdlfe::mark_ready();
-            } else if (!reported_resident_ && renderer_->resident_presents != 0) {
-                std::fprintf(stderr, "%s resident frame: %llu Vulkan draws\n", driver_name(),
-                             static_cast<unsigned long long>(renderer_->draws));
-                reported_resident_ = true;
-            }
-            presented_ = true;
-        }
-    }
+#include "frame_presentation.inc"
 
   private:
     int32_t prepared_texture(const platform::prepared::Image &image) {
@@ -741,6 +724,15 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void emit_prepared(const PreparedBatchDraw &source, const platform::ModelDrawContext &context) {
         CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
+        if (geometry_mode_ != cc::geometry::Mode::legacy && source.deformed.empty()) {
+            emit_gpu_prepared(source, context, prepared_fog());
+            return;
+        }
+        if (geometry_mode_ == cc::geometry::Mode::gpu)
+            throw std::runtime_error(
+                "Strict GPU geometry: prepared deformation is not implemented");
+        if (geometry_mode_ != cc::geometry::Mode::legacy)
+            ++prepared_cpu_fallback_batches_;
         const auto staged = prepared_draw_cache_.get(
             source, context, viewport_, scene_.width, scene_.height,
             prepared_geometry(*source.batch), lighting_.enabled,
@@ -773,19 +765,22 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void ensure_extent() {
         if (reset_pending_) {
-            flush();
+            drain();
             retired_draws_ += renderer_->draws;
             retired_presents_ += renderer_->resident_presents;
             retired_quality_ = quality_statistics();
             retired_model_draws_ += renderer_->model_draws;
             retired_model_uploads_ += renderer_->model_uploads;
-            retired_lit_draws_ += renderer_->sun_world_draws + renderer_->sun_tl_draws;
+            retired_lit_draws_ +=
+                renderer_->sun_world_draws + renderer_->sun_model_draws + renderer_->sun_tl_draws;
             retired_normal_draws_ += renderer_->normal_draws;
             retired_geometry_buffers_ += renderer_->retired_model_buffers;
             initialize_renderer();
+            submitted_textures_.clear();
             window_bound_ = false;
             resident_width_ = resident_height_ = 0;
             scene_ = {};
+            present_window_width_ = present_window_height_ = 0;
             reset_pending_ = false;
         }
         if (scene_.width) {
@@ -803,6 +798,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
         scene_.height = unsigned(std::max(1.0f, fit.h));
         scene_.has_depth = true;
         if (scene_.width != resident_width_ || scene_.height != resident_height_) {
+            if (worker_)
+                worker_->drain();
             append_clear(true, 0, 0, 0);
         }
     }
@@ -829,7 +826,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
         const auto h = entry.height;
         const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
         vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {}, {}};
-        if (!renderer_->current(ref.key, ref.hash, w, h)) {
+        const auto current = submitted_textures_.find(ref.key);
+        if (current == submitted_textures_.end() ||
+            current->second != std::array<std::uint64_t, 3>{ref.hash, w, h}) {
             // Held readback is already straight RGBA at the output extent. Its
             // nearest SSAA sampling must preserve alpha-zero RGB as well.
             ref.pixels32 = entry.pixels;
@@ -882,6 +881,12 @@ class FrameRenderer final : public VulkanFrameRenderer {
     };
     std::map<std::uint64_t,NativeGeometry> native_geometry_;
     std::unique_ptr<vk::Renderer> renderer_;
+    // Declared after renderer_: join before destroying the backend, including
+    // unwinding. Only the producer accesses textures and builds the next scene.
+    std::unique_ptr<RenderWorker> worker_;
+    std::mutex recycle_mutex_;
+    std::vector<vk::Scene> recycled_scenes_;
+    std::map<std::uint64_t, std::array<std::uint64_t, 3>> submitted_textures_;
     const sdlfe::FrameShape *shape_{};
     vk::Scene scene_{};
     std::array<int, 4> viewport_{0, 0, 640, 480};
@@ -890,7 +895,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
     std::vector<uint32_t> held_;
     std::string capture_path_;
     std::uint64_t texture_version_{}, retired_draws_{}, retired_presents_{};
-    std::uint64_t presented_frames_{};
+    std::atomic<std::uint64_t> presented_frames_{}, resident_draws_{};
     std::uint64_t retired_geometry_buffers_{};
     QualityStatistics retired_quality_{};
     std::map<const platform::prepared::Image *, int32_t> prepared_textures_;
@@ -904,12 +909,16 @@ class FrameRenderer final : public VulkanFrameRenderer {
     std::uint64_t retired_lit_draws_{}, retired_normal_draws_{};
     unsigned texture_limit_{}, resident_width_{}, resident_height_{};
     int held_width_{}, held_height_{};
+    LONG present_window_width_{}, present_window_height_{};
     bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
     const bool cpu_profile_ = cpu_profile_requested();
     std::uint64_t render_ticks_{}, transport_ticks_{};
+    std::uint64_t worker_render_ticks_{}, worker_present_ticks_{};
     std::uint64_t gpu_sharp_draws_{}, render_calls_{};
     std::uint64_t prepared_emit_ticks_{}, append_ticks_{};
     PreparedDrawCpuStatistics prepared_cpu_;
+    std::uint64_t gpu_prepared_vertices_{}, prepared_reference_vertices_{},
+        early_prepared_models_{}, prepared_cpu_fallback_batches_{};
     const bool prepared_cache_enabled_ = [] {
         const auto *value = std::getenv("MW3_CC_PREPARED_CACHE");
         if (!value || !std::strcmp(value, "1")) return true;

@@ -112,6 +112,7 @@ struct ModelInstance {
     std::uint32_t color{};
     float diagnostic_fog_factor{1.f};
     bool world{};
+    bool gpu_vertices{}; // Projection, depth clipping and fog require no CPU TL stream.
     std::array<float, 12> sun_normal{}, sun_world{};
     bool sun_eligible{};
     std::uint64_t shadow_source{};
@@ -440,7 +441,19 @@ class Renderer {
     // guest upload. The caller completes any pending world-quality work first; queue order
     // sequences the image accesses. false asks the provider to use its upload presentation path;
     // true also covers hidden/minimized windows, where no image needs to be presented.
-    bool present_resident(HWND hwnd, unsigned w, unsigned h) {
+    // Call on the window owner, with submissions drained, before asynchronous
+    // presentation. SetWindowPos can synchronously message the owning thread.
+    void resize_present_window(HWND hwnd) {
+        if (child) {
+            RECT rc{}, cc{};
+            ::GetClientRect(hwnd, &rc);
+            ::GetClientRect(child, &cc);
+            if (cc.right != rc.right || cc.bottom != rc.bottom)
+                ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
+                               SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+    bool present_resident(HWND hwnd, unsigned w, unsigned h, bool manage_window = true) {
         finish_world();
         if (!::IsWindowVisible(hwnd))
             return true;
@@ -453,15 +466,8 @@ class Renderer {
                   "wait present");
             presentInFlight = false;
         }
-        if (child) {
-            RECT rc{};
-            ::GetClientRect(hwnd, &rc);
-            RECT cc{};
-            ::GetClientRect(child, &cc);
-            if (cc.right != rc.right || cc.bottom != rc.bottom)
-                ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                               SWP_NOZORDER | SWP_NOACTIVATE);
-        }
+        if (manage_window)
+            resize_present_window(hwnd);
         if (!swapchainReady())
             return true;
         unsigned index = 0;
@@ -1621,7 +1627,8 @@ class Renderer {
             const bool model = bool(d.model), lit = !s.hud && sun_lit(d);
             const VkPipelineLayout layout = (model || lit) ? modelLayout : pipelineLayout;
             f.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipeline(d.key, model, d.model && d.model->world, lit, d.model && d.model->source != nullptr,
+                                pipeline(d.key, model, d.model && d.model->world, lit,
+                                         d.model && d.model->gpu_vertices,
                                          (d.push.mode[3] & 0x80000000U) != 0));
             f.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
                                       &drawSets[o.index], 0, nullptr);
@@ -1672,7 +1679,7 @@ class Renderer {
                     mp.base.factor[0] = float((i.color >> 16) & 255) / 255.f;
                     mp.base.factor[1] = float((i.color >> 8) & 255) / 255.f;
                     mp.base.factor[2] = float(i.color & 255) / 255.f;
-                    mp.base.factor[3] = i.source ? i.geometry_near : i.diagnostic_fog_factor;
+                    mp.base.factor[3] = i.gpu_vertices ? i.geometry_near : i.diagnostic_fog_factor;
                 }
                 f.vkCmdPushConstants(cmd, layout,
                                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
