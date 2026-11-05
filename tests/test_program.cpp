@@ -14231,10 +14231,11 @@ TEST(mission_c1m4_dominic_takes_the_order_and_the_lance_turns_headless) {
     // in the 2 s before the order (was 53 frames), 103 frames aiming (phase 2,
     // was 2) before each burst, and the player taken for 186 frames, not 385,
     // the plan in hand kept to its end before the next pick; before, 53 / 1009
-    // / 1139, 71.189, 385, phases 2 2 1009 126.
+    // / 1139, 71.189, 385, phases 2 2 1009 126. The throttle's snap by the frame
+    // (fixes.md): he eases a little longer at these 16 ms frames; closest was 86.592.
     if (!std::getenv("MW3_LANCE_AT") && !std::getenv("MW3_LANCE_DIR") && data_is_12()) {
       EXPECT(seen.fired_before == 0 && seen.fired_after == 901 && seen.on_enemy == 1133);
-      EXPECT(std::fabs(seen.d0 - 399.597f) < 1e-3f && std::fabs(seen.closest - 86.592f) < 1e-3f);
+      EXPECT(std::fabs(seen.d0 - 399.597f) < 1e-3f && std::fabs(seen.closest - 86.789f) < 1e-3f);
       EXPECT(seen.enemies_before == 0xfffffffcu && seen.enemies_after == 0x7ffffffeu);
       EXPECT(seen.on_player == 186);  // his next pick, once the player is 30 m off
       EXPECT(seen.phases[2] == 103 && seen.phases[3] == 3 && seen.phases[4] == 901 && seen.phases[5] == 132);
@@ -14727,8 +14728,9 @@ TEST(mission_c1m4_dominic_stops_at_a_no_go_patch_headless) {
     // on 17 m into the patch as he slows, is sent back out to its pushed-out
     // outline (from inside: the nearest point) and stops there, 5.7 m east of
     // the patch (exact: the run repeats with reset_process_state's fixed seed).
+    // 5.72693 before the throttle's snap went by the frame, the same frames inside.
     EXPECT(seen.inside == 287 && seen.first_in == 837 && seen.last_in == 1123);
-    EXPECT(std::fabs(seen.west - 1004.9f) < 0.05f && std::fabs(east_gap - 5.72693f) < 1e-3f);
+    EXPECT(std::fabs(seen.west - 1004.9f) < 0.05f && std::fabs(east_gap - 5.79883f) < 1e-3f);
     mech3::missions().cleanup(false);
     app.stop_game();
     app.exit_instance();

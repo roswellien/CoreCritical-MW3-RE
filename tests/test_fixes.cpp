@@ -402,6 +402,55 @@ TEST(fix_throttle_keys_per_second) {
   EXPECT(throttle_after_half_second(144, false) == 1.0f);  // the exe: 0.025 a frame, full in 0.28 s
 }
 
+// The time the throttle (not its target) takes to reach `at` with the key
+// held, the mech's easing at 0.5/s.
+float throttle_reaches(float fps, float at, bool per_second = true) {
+  zfix::options().per_second = per_second;
+  static mech3::Mech m;
+  static mech3::PlayerControls c;
+  m = mech3::Mech{};
+  c = mech3::PlayerControls{};
+  m.throttle_up = 0.5f;
+  c.owner = &m;
+  m.controls = &c;
+  mech3::controls_calls().command = [](int cmd) { return cmd == 0x18 ? 2u : 0u; };
+  mech3::controls_calls().joy_present = [] { return false; };
+  int frames = 0;
+  while (c.throttle < at && frames < fps * 30) c.update(1.0f / fps), ++frames;
+  mech3::controls_calls() = mech3::ControlsCalls{};
+  zfix::options().per_second = true;
+  return frames / fps;
+}
+
+// The snap at 0.009 (0x00426960) was inside the keys' step below 12 ms: above
+// 83 fps the throttle jumped to its target every frame, no easing at all, and a
+// mech reached a wall nearly 2 s sooner. The same curve at any rate now.
+TEST(fix_throttle_easing_same_at_any_rate) {
+  const float at30 = throttle_reaches(30, 0.8f);
+  std::printf("  throttle to 0.8 (s):");
+  for (const float fps : {30.0f, 62.5f, 83.0f, 91.0f, 100.0f, 125.0f, 144.0f, 250.0f}) {
+    const float t = throttle_reaches(fps, 0.8f);
+    std::printf(" %g fps %.3f", fps, t);
+    EXPECT(std::fabs(t - at30) < 0.08f);
+  }
+  std::printf("; the exe's at 144 fps %.3f\n", throttle_reaches(144, 0.8f, false));
+  EXPECT(at30 > 1.5f);
+  EXPECT(throttle_reaches(30, 0.8f) == throttle_reaches(30, 0.8f, false));  // the exe's at 30 fps
+  // Slower than that the gap stays the exe's 0.009; a gap of 0.012 eases.
+  static mech3::Mech m;
+  static mech3::PlayerControls c;
+  m = mech3::Mech{};
+  c = mech3::PlayerControls{};
+  m.throttle_up = 0.5f;
+  c.owner = &m;
+  c.throttle = 0.5f, c.throttle_target = 0.512f;
+  c.MechControls::update(1.0f / 15);
+  EXPECT(c.throttle > 0.5f && c.throttle < 0.512f);
+  c.throttle = 0.5f, c.throttle_target = 0.508f;
+  c.MechControls::update(1.0f / 15);
+  EXPECT(c.throttle == 0.508f);
+}
+
 TEST(fix_action_momentum_per_second) {
   const float want = 10.0f * std::pow(0.6f, 30.0f);
   EXPECT(std::fabs(carried_momentum(30, true) - want) < want * 1e-3f);
