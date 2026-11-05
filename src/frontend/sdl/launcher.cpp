@@ -15,6 +15,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -410,6 +411,10 @@ class Launcher {
   void look_at(const std::string& path);
   void search();
   void use_install(const std::string& dir, const std::string& version, const std::string& summary);
+  bool data_elsewhere() const;
+  void ask_move(const std::string& to);
+  void start_move();
+  void moved(const mech3::setup::Result& r);
   void play();
   int movies_to_convert() const;
   void convert_movies(std::function<void()> then);
@@ -874,8 +879,7 @@ void Launcher::draw(float dt) {
       text_.draw_wrapped(canvas_, confirm_text_, 16, kWhite, W / 2, 150, 460);
       break;
     case kDataScreen: {
-      const int after = text_.draw_wrapped(canvas_, "Your settings, pilots, saved games and converted movies are in:", 16, kWhite, W / 2, 130, 480);
-      (void)after;
+      text_.draw_wrapped(canvas_, "Your settings, pilots, saved games and converted movies are in:", 16, kWhite, W / 2, 130, 480);
       text_.draw_wrapped(canvas_, text_.fit(o_.write_dir, 14, 480), 14, kAmber, W / 2, 176, 480);
       if (!status_.empty())
         text_.draw_wrapped(canvas_, status_, 13, status_good_ ? kAmber : SDL_Color{240, 190, 180, 255}, W / 2, 350, 480);
@@ -1446,6 +1450,7 @@ LauncherChoice Launcher::run() {
       screen_ = kSetupScreen, from_files_ = o_.screen == "files";
     if (o_.screen == "pick") status_ = "Not found on this computer or in a disc drive. Pick it: a disc image, a download, or Mech3.exe.";
     if (o_.screen == "notes" || o_.screen == "disc") screen_ = kNotes;
+    if (o_.screen == "data") screen_ = kDataScreen;
     if (o_.screen == "disc") status_ = "No disc in a drive. Pick its image (.cue .iso) or any file of the disc.";
     if (o_.screen == "work") {
       screen_ = kWorking;
