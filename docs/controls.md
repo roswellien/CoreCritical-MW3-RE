@@ -171,6 +171,11 @@ a tapped throttle-down key with the lever behind stop, or Backspace or button 10
 with it ahead, left up meaning reverse until the mission's end, while Backspace
 with it behind stop did nothing. The keys' throttle keeps the flag. A lever that
 reads high at its top runs backwards until Invert is unticked in Assign Axis.
+Open: a Thrustmaster player (model unknown, a Reddit comment, no log) said the
+reversed option changed nothing. Not reproduced: Invert flips the lever through
+the screens, saved and restarted, on Z and a slider, reading either way. The
+T.16000M lever reading low at its top is an assumption, never checked on a stick
+and with no public source, so the default stays.
 
 FIX (B): the throttle keys' 0.025 is per 1/30 s (`zfix::frame_steps`;
 fixes.md).
