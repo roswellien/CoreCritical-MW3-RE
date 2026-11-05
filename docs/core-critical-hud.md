@@ -11,7 +11,7 @@ It does not use original-executable hooks or guest addresses.
 The default is `--cc-hud original`. To select the enhanced drawing path:
 
 ```text
-mw3 --cc-vulkan --cc-hud core-critical --cc-hud-artwork PATH_TO_INSTALLED_HUD_PACK
+mw3 --windowed --cc-vulkan --cc-hud core-critical --cc-hud-artwork PATH_TO_INSTALLED_HUD_PACK
 ```
 
 Supply the usual verified local install, fonts and isolated write profile. The
