@@ -28,6 +28,10 @@ original.
   at it; it now uses the value the original team's own Pirate's Moon sets. This
   changes slightly how feet sit on slopes and when a foot counts as in water.
   This is part of bug fixes.
+- **Collisions at any frame rate.** Leaning on a wall, ramming a mech or a vehicle,
+  or being crushed now does the same damage and slows you the same at any frame
+  rate; before, at 120 fps a contact did about four times what it does at 30. At
+  30 fps nothing changes.
 - **The target keys tell the HUD again.** Choosing a target with E, W or their
   Ctrl and Shift forms now does what Z and Q already did: the target triangle
   pulses, the target's mech sound plays, and a missile lock starts over on the new
