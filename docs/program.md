@@ -83,6 +83,11 @@ build/mw3 [install-dir] [options] [-nofmv] [-seasick] [-cdN]
   the files that move copied, one by one (never `remove_all`), when the pointer
   names the new folder and it has every one; folders only when that empties
   them. Logs stay behind: they are in use, and each start makes new ones.
+  Anything in the folder it cannot read stops the move before the switch.
+  The top level's `.DS_Store`, `Thumbs.db` and `desktop.ini` count as not data,
+  neither copied nor removed. On Windows a destination's name must be plain ASCII for
+  now: the dialog gives UTF-8, and `fs::path` reads narrow strings in the ANSI code page
+  (installs have the same limit).
   `MW3_USUAL_FOLDER`, `MW3_LAUNCHER_MOVE_TO`, `MW3_LAUNCHER_MOVE_OLD`: for checks.
 - **A crash says why** (ours, `crash_report.cpp`; not in hidden runs): a
   crash signal, a Windows exception or an uncaught exception puts a line in

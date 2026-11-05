@@ -64,8 +64,12 @@ struct Removed {
 Removed remove_old(const std::string& from, const std::string& to, const std::vector<std::string>& copied,
                    const std::string& usual);
 
-// Tests: a drive's free bytes, when set.
+// Only plain ASCII in the path: what plan asks of a destination on Windows.
+bool plain_name(const std::string& path);
+
+// Tests: a drive's free bytes, when set; a call right after the pointer switches.
 const uint64_t*& free_for_test();
+std::function<void()>& after_switch_for_test();
 
 // `path` under `from` as the same place under `to`; else as it was.
 std::string moved_path(const std::string& path, const std::string& from, const std::string& to);

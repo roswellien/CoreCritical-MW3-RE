@@ -164,6 +164,93 @@ TEST(data_folder_failed_or_cancelled_changes_nothing) {
 }
 #endif
 
+#if !defined(_WIN32)
+// A subfolder that cannot be read ends the walk without an error on the
+// iterator's own terms: the move must stop, not lose what is in it.
+TEST(data_folder_an_unreadable_subfolder_stops_the_move) {
+  if (geteuid() == 0) return;
+  Scene s("unreadable");
+  const std::string to = s.root + "/drive/mine", locked = s.usual + "/saves";
+  put(locked + "/game.sav", "a save");
+  chmod(locked.c_str(), 0);
+  const Plan p = plan(s.usual, to, s.usual);
+  const Moved m = move_data(s.usual, to, s.usual, nullptr);
+  chmod(locked.c_str(), 0755);
+  EXPECT(!p.error.empty() && p.error.find("Cannot read a folder") != std::string::npos);
+  EXPECT(!m.ok && !m.error.empty() && pointer_is_unset(s) && !fs::exists(to));
+  EXPECT(read(locked + "/game.sav") == "a save");
+}
+
+// A target that cannot be listed may hold anything.
+TEST(data_folder_a_target_that_cannot_be_listed_is_refused) {
+  if (geteuid() == 0) return;
+  Scene s("unlisted");
+  const std::string to = s.root + "/theirs";
+  put(to + "/their_file.txt", "keep me");
+  chmod(to.c_str(), 0);
+  const Plan p = plan(s.usual, to, s.usual);
+  chmod(to.c_str(), 0755);
+  EXPECT(!p.error.empty());
+  EXPECT(read(to + "/their_file.txt") == "keep me");
+}
+
+// A link to a folder is not walked: its files would be lost at the switch.
+TEST(data_folder_a_link_to_a_folder_stops_the_move) {
+  Scene s("link");
+  std::error_code ec;
+  put(s.root + "/elsewhere/track02.ogg", "music");
+  fs::create_directory_symlink(s.root + "/elsewhere", s.usual + "/music", ec);
+  EXPECT(!ec);
+  EXPECT(plan(s.usual, s.root + "/drive/mine", s.usual).error.find("music") != std::string::npos);
+}
+#endif
+
+// A switch that turns out wrong: the pointer as it was, then the copy away.
+TEST(data_folder_a_failed_switch_puts_the_pointer_back) {
+  Scene s("switch");
+  const std::string to = s.root + "/drive/mine";
+  after_switch_for_test() = [&] { fs::remove(to + "/" + kMarker); };
+  const Moved none = move_data(s.usual, to, s.usual, nullptr);
+  after_switch_for_test() = nullptr;
+  EXPECT(!none.ok && none.error.find("Nothing was changed") != std::string::npos);
+  EXPECT(pointer_is_unset(s) && resolve(s.usual).dir == s.usual && resolve(s.usual).error.empty());
+  EXPECT(!fs::exists(to));
+  // With a pointer already there, from a folder it names to another.
+  const Moved first = move_data(s.usual, to, s.usual, nullptr);
+  EXPECT(first.ok);
+  const std::string other = s.root + "/drive2/mine";
+  after_switch_for_test() = [&] { fs::remove(other + "/" + kMarker); };
+  const Moved second = move_data(to, other, s.usual, nullptr);
+  after_switch_for_test() = nullptr;
+  EXPECT(!second.ok && resolve(s.usual).dir == to && resolve(s.usual).error.empty());
+  EXPECT(!fs::exists(other) && read(to + "/pilots/a.pil") == "pilot");
+}
+
+// A file manager's leavings do not block moving back, and nothing touches them.
+TEST(data_folder_a_file_managers_leavings_are_not_data) {
+  Scene s("leavings");
+  const std::string to = s.root + "/drive/mine";
+  put(s.usual + "/.DS_Store", "finder");
+  put(s.usual + "/pilots/.DS_Store", "in the player's own folder: copied, so removed with it");
+  const Moved m = move_data(s.usual, to, s.usual, nullptr);
+  EXPECT(m.ok && !fs::exists(to + "/.DS_Store"));
+  EXPECT(remove_old(s.usual, to, m.copied, s.usual).error.empty());
+  EXPECT(read(s.usual + "/.DS_Store") == "finder");  // not copied, so not removed
+  EXPECT(fs::exists(to + "/pilots/.DS_Store") && !fs::exists(s.usual + "/pilots"));
+  put(s.usual + "/Thumbs.db", "explorer");
+  put(s.usual + "/desktop.ini", "explorer");
+  const Moved b = move_data(to, s.usual, s.usual, nullptr);
+  EXPECT(b.ok && b.error.empty() && pointer_is_unset(s));
+  EXPECT(read(s.usual + "/Thumbs.db") == "explorer" && read(s.usual + "/.DS_Store") == "finder");
+  EXPECT(fs::exists(s.usual + "/pilots/a.pil"));
+}
+
+TEST(data_folder_plain_names) {
+  EXPECT(plain_name("E:/Games/MechWarrior 3 Data"));
+  EXPECT(!plain_name("E:/Jeux \xc3\xa9"));
+  EXPECT(plain_name(""));
+}
+
 // A copy cut off (power, a crash): the pointer never moved, the old folder is
 // in use, and the half copy, flagged, may be finished by a new move.
 TEST(data_folder_an_interrupted_copy_leaves_the_old_folder_in_use) {

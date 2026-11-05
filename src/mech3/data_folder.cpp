@@ -1,11 +1,12 @@
 #include "mech3/data_folder.h"
 
 #include <algorithm>
-#include <cerrno>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -41,16 +42,20 @@ bool log_name(const std::string& name) {
 }
 
 // What is not the player's data at a folder's top: this feature's own two files, and logs.
+// And what a file manager leaves behind (Finder, Explorer), which no move copies or removes.
 bool not_data(const std::string& name) {
-  return name == kPointer || name == kMarker || name == kCopying || log_name(name);
+  std::string low = name;
+  for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return name == kPointer || name == kMarker || name == kCopying || log_name(name) || low == ".ds_store" ||
+         low == "thumbs.db" || low == "desktop.ini";
 }
 
-// Any of the player's data in the folder.
+// Any of the player's data in the folder; a folder that cannot be listed may hold some.
 bool holds_data(const std::string& dir) {
   std::error_code ec;
   for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
     if (!not_data(it->path().filename().string())) return true;
-  return false;
+  return static_cast<bool>(ec);
 }
 
 // `from`'s files as paths relative to it, without the ones that stay.
@@ -63,16 +68,28 @@ std::vector<std::string> files_of(const std::string& from, uint64_t* bytes, std:
     *error = "Cannot read " + from + ": " + ec.message();
     return out;
   }
+  // Anything that cannot be read or copied stops the move: it would be lost at the switch.
   for (; it != end; it.increment(ec)) {
-    if (ec) {
-      *error = "Cannot read " + from + ": " + ec.message();
-      return out;
-    }
-    if (!it->is_regular_file(ec)) continue;
     const std::string rel = it->path().lexically_relative(root).generic_string();
     if (rel.find('/') == std::string::npos && not_data(rel)) continue;
+    const bool link = it->is_symlink(ec);
+    if (!ec && !link && it->is_directory(ec)) continue;
+    if (ec || !it->is_regular_file(ec)) {
+      *error = "Cannot move " + rel + " (not a plain file, a link to a folder, or unreadable). Nothing was changed.";
+      return out;
+    }
+    const uintmax_t size = it->file_size(ec);
+    if (ec) {
+      *error = "Cannot read " + rel + ": " + ec.message() + ". Nothing was changed.";
+      return out;
+    }
     out.push_back(rel);
-    *bytes += it->file_size(ec);
+    *bytes += size;
+  }
+  // An increment that fails ends the walk here, with what is left of the folder unread.
+  if (ec) {
+    *error = "Cannot read a folder in " + from + ": " + ec.message() + ". Nothing was changed.";
+    return out;
   }
   std::sort(out.begin(), out.end());
   return out;
@@ -130,6 +147,15 @@ bool rewrite_config(const std::string& from, const std::string& to) {
 
 }  // namespace
 
+bool plain_name(const std::string& path) {
+  return std::all_of(path.begin(), path.end(), [](char c) { return static_cast<unsigned char>(c) <= 0x7f; });
+}
+
+std::function<void()>& after_switch_for_test() {
+  static std::function<void()> hook;
+  return hook;
+}
+
 const uint64_t*& free_for_test() {
   static const uint64_t* value = nullptr;
   return value;
@@ -179,6 +205,12 @@ Plan plan(const std::string& from, const std::string& to, const std::string& usu
   Plan p;
   std::error_code ec;
   if (same(from, to)) return p.error = "Your data is already in that folder.", p;
+#if defined(_WIN32)
+  // SDL's dialog gives UTF-8 and fs::path reads narrow strings in the ANSI code
+  // page, so another name would come out garbled (docs/program.md, The data folder).
+  if (!same(to, usual) && !plain_name(to))
+    return p.error = "For now the folder's name must use plain English letters: " + to, p;
+#endif
   if (within(to, from)) return p.error = "That folder is inside your data folder. Pick one outside it.", p;
   if (within(from, to)) return p.error = "Your data folder is inside that folder. Pick another.", p;
   if (fs::exists(to, ec) && !fs::is_directory(to, ec)) return p.error = "That is a file, not a folder: " + to, p;
@@ -286,19 +318,43 @@ Moved move_data(const std::string& from, const std::string& to, const std::strin
   // The switch, last: a new name moved into place, or the usual folder needing none.
   // Cut off before it, the pointer still names the old folder, which stays in use.
   const fs::path pointer = fs::path(usual) / kPointer;
+  const fs::path next = fs::path(usual) / (std::string(kPointer) + ".new");
+  // As it was, to put back if the switch turns out wrong.
+  const bool had_pointer = fs::exists(pointer, ec);
+  std::string old_pointer;
+  if (had_pointer) {
+    std::ifstream f(pointer, std::ios::binary);
+    std::stringstream text;
+    text << f.rdbuf();
+    old_pointer = text.str();
+  }
   bool switched;
   if (to_usual) {
     fs::remove(pointer, ec);
     switched = !ec;
   } else {
     fs::create_directories(usual, ec);
-    const fs::path next = fs::path(usual) / (std::string(kPointer) + ".new");
     switched = write_text(next, to + "\n");
     if (switched) fs::rename(next, pointer, ec), switched = !ec;
     if (!switched) fs::remove(next, ec);
   }
+  if (after_switch_for_test()) after_switch_for_test()();
   const Resolved now = resolve(usual);
   if (!switched || !now.error.empty() || !same(now.dir, to)) {
+    // The pointer back first: undo takes away the folder it may be naming.
+    bool back;
+    if (had_pointer) {
+      back = write_text(next, old_pointer);
+      if (back) fs::rename(next, pointer, ec), back = !ec;
+      if (!back) fs::remove(next, ec);
+    } else {
+      fs::remove(pointer, ec);
+      back = !ec && !fs::exists(pointer, ec);
+    }
+    if (!back) {  // both copies stay: the pointer may name this one
+      m.copied.clear();
+      return m.error = "Cannot switch over to " + to + ", or switch back. Both copies are kept; check " + pointer.string() + ".", m;
+    }
     undo();
     return m.error = "Cannot switch over to " + to + " (the note in " + usual + " cannot be written). Nothing was changed.", m;
   }
