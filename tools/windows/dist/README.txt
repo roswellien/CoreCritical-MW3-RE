@@ -23,6 +23,9 @@ starts it. "MechWarrior 3" in the Start menu goes straight into the game.
 (Or, from the zip: unzip this folder anywhere (not inside your MechWarrior 3
 folder) and run mw3launcher.exe, or mw3.exe for the game alone.)
 
+The setup asks for the folder every time. Installing a new version to a
+different folder leaves the old folder's files there; delete them yourself.
+
 On the first start:
 - It looks for your MechWarrior 3 install (where the original installer put
   it, then Program Files\MicroProse\MechWarrior 3 and usual folders such as

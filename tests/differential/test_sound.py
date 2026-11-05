@@ -2,7 +2,7 @@
 
     cmake --build build && .venv/bin/python tests/differential/test_sound.py [--quick] [--seed N]
 
-The original's zSound runs in Unicorn with the FPU at 24 bits (as in play) on
+The original's zSound runs in Unicorn with the FPU at 24 bits (the probe's fpu53 off) on
 the real sounds.zrd (read by the original zReader) and the real soundsH.zbd /
 soundsL.zbd and loose WAVs, its DirectSound replaced by Python COM objects
 that model DirectSound and record every call; the port runs on the same
