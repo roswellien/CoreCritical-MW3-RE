@@ -94,6 +94,37 @@ fixtures with `ctest --test-dir build-win -R '^mw3ccvulkan_quality_' --output-on
 Run the upstream comparison with `SDL_GPU_DRIVER=direct3d12`, a separate
 profile, and `--no-launcher` in place of the Core Critical switch.
 
+Prepared visuals can be selected explicitly, using local Core Critical mesh and
+albedo components:
+
+```powershell
+& .\build-win\mw3.exe --cc-vulkan-wsi --window 960x720 --cc-model madcat 0 $meshLod0 $texturesLod0 --cc-model madcat 1 $meshLod1 $texturesLod1 --cc-aa fxaa --cc-af 16 --install $game --write-dir $trial --no-launcher
+```
+
+`--cc-model CHASSIS LOD MESH BWTEX1` is repeatable. It binds the named native
+library entry (`mech_<chassis>.flt` or `mech_<chassis>_1.flt`) to a validated
+BWMESH1–6/BWTEX1 pair. Rigid batches use immutable Vulkan geometry and current
+native controls; donor rigs retain Core Critical's visual retargeting solver.
+Mixed-bone seams and near/far-plane crossings use the adapter's CPU deformation
+and clipping path. Original model production, animation and gameplay continue;
+only the selected visual geometry is replaced. Optional `--cc-textures BWTEX1`
+replaces exact named native albedos, retaining the native alpha mask on reload.
+Invalid files, duplicate selections and incompatible control bindings fail with
+an error. No asset payload is bundled with the executable or this repository.
+
+This is component admission, not admission of a complete installed pack. BWNRM2
+normal maps, BWSFM1 surfaces, skin selection and pack capability negotiation are
+still pending. Morphing, non-unit node opacity, overlay, detached and changed source meshes
+retain their native geometry; those damage/cockpit paths need further parity
+validation. Prepared lighting currently uses the existing directional visual
+shade and native fog samples; advanced per-pixel materials remain separate work.
+
+Run asset-free reader and GPU fixtures with
+`ctest --test-dir build-win -R '^(mw3prepared_checks|mw3ccvulkan_prepared_)' --output-on-failure`.
+The reader fixture also builds without SDL on Linux and macOS. The Core Critical
+GPU adapter remains Windows-only; these portable readers do not establish a
+Linux, macOS or Android renderer port.
+
 The adapter and renderer sources derive from the Core Critical project.
 Their MIT notice is in [src/frontend/core_critical/LICENSE](../src/frontend/core_critical/LICENSE).
 

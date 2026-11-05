@@ -240,6 +240,9 @@ void shadow_passes(int32_t count, const D3DTexture* texture) {
 // the value printed is the list's count, not count + 1).
 OverlayPoly* overlay_slot(int32_t type, int32_t count, const D3DTexture* texture, int line,
                           const char* need = "need") {
+  // A replacement is already queued by the backend. Deferred source polygons
+  // must not escape that model scope and draw again after end_model_draw().
+  if (g_render && g_render->replaces_model_geometry()) return nullptr;
   OverlayList& o = g_overlay;
   if (o.count >= OverlayList::kMax) {
     char msg[64];
@@ -342,6 +345,7 @@ D3DTexture*& default_texture() { return g_default; }
 
 // Inlined at each transparent draw (lines 0x591 and 0x599 of zvid_ddd3d.c).
 TLVertex* queue_transparent(int32_t primitive, int32_t count, const D3DTexture* texture) {
+  if (g_render && g_render->replaces_model_geometry()) return nullptr;
   TransparentQueue& q = g_queue;
   char msg[64];
   if (q.count >= TransparentQueue::kMaxPolys) {
@@ -959,7 +963,7 @@ D3DTexture* create_texture(const char* name, const zimg::Texture& image, int32_t
   std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
   texture_rgba(image, alpha, rgba.data());
   auto* t = new D3DTexture;
-  t->handle = g_render ? g_render->create_texture(w, h, rgba.data(), static_cast<uint8_t>(type)) : -1;
+  t->handle = g_render ? g_render->create_named_texture(name, w, h, rgba.data(), static_cast<uint8_t>(type)) : -1;
   t->type = type;
   t->address_u = clamp_u ? 3 : 1;
   t->address_v = clamp_v ? 3 : 1;

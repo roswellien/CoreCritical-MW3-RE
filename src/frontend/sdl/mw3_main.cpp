@@ -137,6 +137,7 @@ std::string campaign_summary() {
 struct Args {
   sdlfe::RendererBackend backend = sdlfe::RendererBackend::sdl;
   sdlfe::CoreCriticalQuality quality;
+  sdlfe::CoreCriticalAssets cc_assets;
   SDL_Window* launcher_window = nullptr;  // the launcher's, for the game to take (one window; ours)
   std::string install, write_dir, mission, variant, dialog_file, dialog_name, shot, movie;
   std::string cfg_install;  // mw3.cfg's install= (the command line's wins)
@@ -229,6 +230,7 @@ void usage() {
       "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] [--assets DIR]... [--write-dir DIR] [--version]\n"
       "    [--mission NAME | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] [--vehicle-ahead M [--vehicle-hold]] [--turret-ahead M] [--mech-ahead M] [--dialog FILE NAME]\n"
       "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--win N] [--lab-mech N]\n"
+      "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
       "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
@@ -350,6 +352,13 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
     else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
     else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
+    else if (s == "--cc-textures" && next(1)) a.cc_assets.textures = argv[++i];
+    else if (s == "--cc-model" && next(4)) {
+      sdlfe::PreparedModelBinding binding;
+      binding.chassis = argv[++i], binding.lod = argv[++i];
+      binding.mesh = argv[++i], binding.textures = argv[++i];
+      a.cc_assets.models.push_back(std::move(binding));
+    }
     else if (s == "--no-launcher") a.no_launcher = true;
     else if (s == "--ready-file" && next(1)) a.ready_file = argv[++i];
     else if (s == "--wide-menus") a.wide_menus = 1;
@@ -855,11 +864,11 @@ namespace {
 int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlWindow window;
   if (a.backend == sdlfe::RendererBackend::sdl &&
-      (a.quality.antialiasing != "off" || a.quality.anisotropy != "1"))
+      (a.quality.antialiasing != "off" || a.quality.anisotropy != "1" || !a.cc_assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical quality options require a Core Critical Vulkan backend\n"), 1;
   if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
     return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
-  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality)) return 1;
+  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality, a.cc_assets)) return 1;
   sdlfe::SdlInput input;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)

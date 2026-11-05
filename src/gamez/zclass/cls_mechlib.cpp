@@ -118,6 +118,20 @@ Node* mechlib_load(MechLib& lib, const char* name) {
     return nullptr;
   }
   mechlib_resolve(lib, root);
+  if (root) {
+    auto identity = std::make_shared<SourceAsset>();
+    identity->name = name;
+    std::vector<Node*> pending{root};
+    for (size_t i = 0; i < pending.size(); ++i) {
+      Node* node = pending[i];
+      node->source_asset = identity;
+      ++identity->nodes[node->name()];
+      node->source_asset_root = node == root;
+      node->source_model_vertices = node->model ? node->model->count(0x14) : 0;
+      for (int32_t child = 0; child < node->child_count(); ++child)
+        pending.push_back(node->children[child]);
+    }
+  }
   // 0x004fc8b0 (an edge pass per model) is not ported: only one video mode sets the flag.
   if (root) lib.trees.push_back(root);
   return root;

@@ -1,4 +1,7 @@
 #include "frame_renderer.hpp"
+#include "gamez/zmodel/gmod_fog.h"
+#include "gamez/zmodel/gmod_fogcalc.h"
+#include "prepared_models.hpp"
 
 #include "frontend/sdl/sdl_child.h"
 #include "vk_scene.hpp"
@@ -8,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +28,18 @@ namespace vk = mw34::vkscene;
 using platform::DrawState;
 using platform::Primitive;
 using platform::TLVertex;
+
+class VisualFloatScope {
+  public:
+    VisualFloatScope() {
+        if (std::fegetenv(&saved_) != 0)
+            throw std::runtime_error("Cannot preserve the native floating-point environment");
+    }
+    ~VisualFloatScope() { std::fesetenv(&saved_); }
+
+  private:
+    std::fenv_t saved_;
+};
 
 void set_option(const char *name, const char *value) {
     if (_putenv_s(name, value) != 0) {
@@ -92,8 +108,77 @@ struct Texture {
     unsigned scene_index = no_binding;
     unsigned sharp_index = no_binding;
     bool held_copy{};
+    const platform::prepared::Image *replacement{};
+    unsigned source_width{}, source_height{};
     std::vector<std::uint32_t> pixels;
 };
+
+std::vector<uint32_t> image_pixels(const platform::prepared::Image &image,
+                                   const uint8_t *source = nullptr, unsigned source_width = 0,
+                                   unsigned source_height = 0) {
+    std::vector<uint32_t> pixels(image.pixels.size());
+    for (unsigned y = 0; y < image.height; ++y)
+        for (unsigned x = 0; x < image.width; ++x) {
+            const auto value = image.pixels[std::size_t(y) * image.width + x];
+            unsigned alpha = 255;
+            if (source) {
+                const auto sx =
+                    std::min(source_width - 1, unsigned((uint64_t(x) * 2 + 1) * source_width /
+                                                        (uint64_t(image.width) * 2)));
+                const auto sy =
+                    std::min(source_height - 1, unsigned((uint64_t(y) * 2 + 1) * source_height /
+                                                         (uint64_t(image.height) * 2)));
+                alpha = source[(std::size_t(sy) * source_width + sx) * 4 + 3];
+            }
+            pixels[std::size_t(y) * image.width + x] =
+                alpha == 0 ? 0
+                           : ((value >> 11) * 255 / 31) | (((value >> 5) & 63) * 255 / 63) << 8 |
+                                 ((value & 31) * 255 / 31) << 16 | alpha << 24;
+        }
+    return pixels;
+}
+
+struct PreparedVertex {
+    std::array<float, 3> camera{};
+    std::array<float, 3> color{};
+    float visibility{}, u{}, v{};
+};
+
+std::array<float, 12> matrix_rows(const platform::prepared::Matrix &matrix) {
+    std::array<float, 12> result{};
+    for (unsigned i = 0; i < result.size(); ++i) {
+        result[i] = float(matrix[i]);
+        if (!std::isfinite(result[i]))
+            throw std::runtime_error("Prepared transform exceeds float range");
+    }
+    return result;
+}
+
+std::vector<PreparedVertex> clip_depth(std::vector<PreparedVertex> input, float plane,
+                                       bool near_plane) {
+    std::vector<PreparedVertex> result;
+    for (size_t i = 0; i < input.size(); ++i) {
+        const auto &a = input[i], &b = input[(i + 1) % input.size()];
+        const bool inside_a = near_plane ? a.camera[2] >= plane : a.camera[2] <= plane;
+        const bool inside_b = near_plane ? b.camera[2] >= plane : b.camera[2] <= plane;
+        if (inside_a)
+            result.push_back(a);
+        if (inside_a != inside_b) {
+            const float t = (plane - a.camera[2]) / (b.camera[2] - a.camera[2]);
+            PreparedVertex vertex;
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                vertex.camera[axis] = std::lerp(a.camera[axis], b.camera[axis], t);
+                vertex.color[axis] = std::lerp(a.color[axis], b.color[axis], t);
+            }
+            vertex.camera[2] = plane;
+            vertex.visibility = std::lerp(a.visibility, b.visibility, t);
+            vertex.u = std::lerp(a.u, b.u, t);
+            vertex.v = std::lerp(a.v, b.v, t);
+            result.push_back(vertex);
+        }
+    }
+    return result;
+}
 
 std::vector<std::uint32_t> sharp_layer(const Texture &texture, unsigned width, unsigned height) {
     // SDL samples premultiplied pixels with a narrowed bilinear footprint, then
@@ -144,12 +229,13 @@ std::vector<std::uint32_t> sharp_layer(const Texture &texture, unsigned width, u
 class FrameRenderer final : public VulkanFrameRenderer {
   public:
     explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
-                           const sdlfe::CoreCriticalQuality &quality)
+                           const sdlfe::CoreCriticalQuality &quality,
+                           const sdlfe::CoreCriticalAssets &assets)
         : window_(window),
           hwnd_(static_cast<HWND>(SDL_GetPointerProperty(
               SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))),
           native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
-          quality_(parse_quality(quality)) {
+          quality_(parse_quality(quality)), prepared_(assets) {
         if (!hwnd_) {
             throw std::runtime_error("SDL window has no Win32 handle");
         }
@@ -165,6 +251,32 @@ class FrameRenderer final : public VulkanFrameRenderer {
         return {retired_quality_.fxaa_passes + renderer_->fxaa_passes,
                 retired_quality_.anisotropic_samplers + renderer_->af_samplers,
                 retired_quality_.mip_levels + renderer_->mip_levels_uploaded};
+    }
+    AssetStatistics asset_statistics() const override {
+        return {prepared_batches_, retired_model_draws_ + renderer_->model_draws,
+                cpu_clipped_triangles_, named_textures_,
+                retired_model_uploads_ + renderer_->model_uploads};
+    }
+    bool wants_model_context() const override { return !prepared_.empty(); }
+    bool replaces_model_geometry() const override { return suppress_model_draws_; }
+    void end_model_draw() noexcept override { suppress_model_draws_ = false; }
+    void begin_model_draw(const platform::ModelDrawContext &context) override {
+        // Visual retargeting/fog must not leak exception flags or rounding state
+        // into the native polygon producer that resumes after this callback.
+        VisualFloatScope float_scope;
+        suppress_model_draws_ = false;
+        ensure_extent();
+        const auto draws = prepared_.draw(context);
+        if (!draws.replace)
+            return;
+        if (scene_.hud && !scene_.draws.empty()) {
+            flush();
+            ensure_extent();
+        }
+        scene_.hud = false;
+        for (const auto &draw : draws.batches)
+            emit_prepared(draw, context);
+        suppress_model_draws_ = true;
     }
     const char *driver_name() const override {
         return native_wsi_ ? "Core Critical Vulkan/SDL WSI" : "Core Critical Vulkan/DXGI";
@@ -183,6 +295,15 @@ class FrameRenderer final : public VulkanFrameRenderer {
             static_cast<unsigned long long>(quality.fxaa_passes),
             static_cast<unsigned long long>(quality.anisotropic_samplers),
             static_cast<unsigned long long>(quality.mip_levels));
+        const auto assets = asset_statistics();
+        if (assets.prepared_batches || assets.named_textures)
+            std::fprintf(stderr,
+                         "Prepared visuals: %llu batches, %llu GPU model draws, %llu CPU-clipped "
+                         "triangles, %llu named texture uploads\n",
+                         static_cast<unsigned long long>(assets.prepared_batches),
+                         static_cast<unsigned long long>(assets.gpu_model_draws),
+                         static_cast<unsigned long long>(assets.cpu_clipped_triangles),
+                         static_cast<unsigned long long>(assets.named_textures));
     }
 
     void capture_next(const char *path) override { capture_path_ = path; }
@@ -219,6 +340,18 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void update_texture(int32_t handle, int width, int height, const uint8_t *rgba) override {
         auto &entry = textures_.at(handle);
+        std::vector<uint32_t> replacement;
+        if (entry.replacement) {
+            if (!rgba || unsigned(width) != entry.source_width ||
+                unsigned(height) != entry.source_height)
+                throw std::runtime_error("Named texture reload changed its source dimensions");
+            replacement =
+                image_pixels(*entry.replacement, rgba, entry.source_width, entry.source_height);
+            rgba = reinterpret_cast<const uint8_t *>(replacement.data());
+            width = int(entry.width);
+            height = int(entry.height);
+            ++named_textures_;
+        }
         if (!rgba || unsigned(width) != entry.width || unsigned(height) != entry.height) {
             throw std::runtime_error("Invalid mw3-re texture upload");
         }
@@ -228,6 +361,24 @@ class FrameRenderer final : public VulkanFrameRenderer {
         entry.pixels.resize(std::size_t(width) * height);
         std::memcpy(entry.pixels.data(), rgba, entry.pixels.size() * sizeof(std::uint32_t));
         entry.version = ++texture_version_;
+    }
+
+    int32_t create_named_texture(const char *name, int width, int height, const uint8_t *rgba,
+                                 uint8_t type) override {
+        const auto *replacement = prepared_.named_texture(name);
+        if (!replacement)
+            return create_texture(width, height, rgba, type);
+        if (!rgba || width <= 0 || height <= 0)
+            throw std::runtime_error("Invalid named texture input");
+        const auto pixels = image_pixels(*replacement, rgba, unsigned(width), unsigned(height));
+        const auto handle = create_texture(int(replacement->width), int(replacement->height),
+                                           reinterpret_cast<const uint8_t *>(pixels.data()), type);
+        auto &entry = textures_[handle];
+        entry.replacement = replacement;
+        entry.source_width = unsigned(width);
+        entry.source_height = unsigned(height);
+        ++named_textures_;
+        return handle;
     }
 
     void release_texture(int32_t handle) override {
@@ -251,6 +402,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void draw(Primitive primitive, const TLVertex *vertices, int count,
               const DrawState &state) override {
+        if (suppress_model_draws_)
+            return;
         append_draw(primitive, vertices, count, state, state.sharp || state.depth_always);
     }
 
@@ -359,8 +512,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
         draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
         if (!scene_.order.empty() && !scene_.order.back().clear) {
             auto &previous = scene_.draws.back();
-            if (previous.depth_only == draw.depth_only && previous.texture == draw.texture &&
-                previous.sampler == draw.sampler && previous.key.packed() == draw.key.packed() &&
+            if (!previous.model && previous.depth_only == draw.depth_only &&
+                previous.texture == draw.texture && previous.sampler == draw.sampler &&
+                previous.key.packed() == draw.key.packed() &&
                 std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
                 previous.count += drawn;
                 return;
@@ -503,10 +657,148 @@ class FrameRenderer final : public VulkanFrameRenderer {
     }
 
   private:
+    int32_t prepared_texture(const platform::prepared::Image &image) {
+        const auto found = prepared_textures_.find(&image);
+        if (found != prepared_textures_.end())
+            return found->second;
+        const auto pixels = image_pixels(image);
+        const auto handle = create_texture(int(image.width), int(image.height),
+                                           reinterpret_cast<const uint8_t *>(pixels.data()), 1);
+        prepared_textures_.emplace(&image, handle);
+        return handle;
+    }
+
+    std::shared_ptr<const vk::ModelGeometry>
+    prepared_geometry(const platform::prepared::Batch &batch) {
+        const auto found = prepared_geometry_.find(&batch);
+        if (found != prepared_geometry_.end())
+            return found->second;
+        auto geometry = std::make_shared<vk::ModelGeometry>();
+        geometry->key = 0x4343000000000000ULL + prepared_geometry_.size() + 1;
+        geometry->vertices.reserve(batch.vertices.size());
+        for (const auto &vertex : batch.vertices)
+            geometry->vertices.push_back({vertex[0], vertex[1], vertex[2], vertex[3], vertex[4],
+                                          vertex[5], vertex[6], vertex[7]});
+        geometry->hash = 0xcbf29ce484222325ULL;
+        const auto *bytes = reinterpret_cast<const uint8_t *>(geometry->vertices.data());
+        for (size_t i = 0; i < geometry->vertices.size() * sizeof(vk::ModelVertex); ++i) {
+            geometry->hash ^= bytes[i];
+            geometry->hash *= 0x100000001b3ULL;
+        }
+        prepared_geometry_.emplace(&batch, geometry);
+        return geometry;
+    }
+
+    void emit_prepared(const PreparedBatchDraw &source, const platform::ModelDrawContext &context) {
+        if (!(context.near_z > 0) || !(context.far_z > context.near_z))
+            throw std::runtime_error("Prepared model requires valid native clip planes");
+        const auto camera = matrix_rows(source.camera);
+        const auto &vertices = source.deformed.empty() ? source.batch->vertices : source.deformed;
+        const float near_clip = std::max(context.near_z, context.clip_near);
+        bool gpu = source.deformed.empty();
+        std::vector<PreparedVertex> staged;
+        staged.reserve(vertices.size());
+        for (const auto &vertex : vertices) {
+            PreparedVertex output;
+            std::array<float, 3> normal{};
+            for (unsigned row = 0; row < 3; ++row) {
+                output.camera[row] =
+                    ((camera[row * 4] * vertex[0] + camera[row * 4 + 1] * vertex[1]) +
+                     camera[row * 4 + 2] * vertex[2]) +
+                    camera[row * 4 + 3];
+                normal[row] = (camera[row * 4] * vertex[3] + camera[row * 4 + 1] * vertex[4]) +
+                              camera[row * 4 + 2] * vertex[5];
+                if (!std::isfinite(output.camera[row]) || !std::isfinite(normal[row]))
+                    throw std::runtime_error("Prepared vertex transform is nonfinite");
+            }
+            const float length = std::hypot(normal[0], normal[1], normal[2]);
+            if (!(length > 0))
+                throw std::runtime_error("Prepared vertex has a degenerate transformed normal");
+            const float light =
+                .35f + .65f * std::max(0.f, (.3f * normal[0] + .6f * normal[1] - .74f * normal[2]) /
+                                                length);
+            for (unsigned channel = 0; channel < 3; ++channel)
+                output.color[channel] =
+                    std::floor(float((source.batch->color >> (16 - channel * 8)) & 255) * light);
+            output.visibility = zmod::fog().on ? 1.f - zmod::fog_at(output.camera.data()) : 1.f;
+            output.u = vertex[6];
+            output.v = vertex[7];
+            gpu = gpu && output.camera[2] >= near_clip && output.camera[2] <= context.far_z;
+            staged.push_back(output);
+        }
+        vk::Draw draw{};
+        draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
+        draw.texture = int(bind_texture(prepared_texture(*source.texture), false));
+        draw.sampler = 3U | (1U << 4) | (1U << 8) | 0x10000U;
+        draw.key = {0, 5, 6, 1, 7, 1, 1, 0};
+        draw.push.target[0] = float(scene_.width);
+        draw.push.target[1] = float(scene_.height);
+        std::copy(std::begin(zmod::fog().color), std::end(zmod::fog().color), draw.push.fog);
+        draw.push.mode[0] = 2U | 4U | (zmod::fog().on ? 16U : 0U);
+        draw.push.mode[1] = 4U | (2U << 8);
+        draw.push.mode[2] = 2;
+        draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
+        const auto append = [&](const PreparedVertex &vertex, bool project) {
+            uint32_t color = source.batch->color & 0xff000000U;
+            for (unsigned channel = 0; channel < 3; ++channel)
+                color |= uint32_t(std::clamp(vertex.color[channel], 0.f, 255.f))
+                         << (16 - channel * 8);
+            const auto fog = uint32_t(std::clamp(vertex.visibility * 255.f, 0.f, 255.f));
+            TLVertex tl{0, 0, 0, 1, color, fog << 24, vertex.u, vertex.v};
+            if (project) {
+                tl.rhw = tl.sz = context.near_z / vertex.camera[2];
+                tl.sx =
+                    ((context.fx_near * vertex.camera[0]) * tl.rhw + context.cx - viewport_[0]) *
+                    scene_.width / float(viewport_[2]);
+                tl.sy =
+                    ((context.fy_near * vertex.camera[1]) * tl.rhw + context.cy - viewport_[1]) *
+                    scene_.height / float(viewport_[3]);
+            }
+            const auto *bytes = reinterpret_cast<const uint8_t *>(&tl);
+            scene_.vertices.insert(scene_.vertices.end(), bytes, bytes + sizeof tl);
+        };
+        if (gpu) {
+            for (const auto &vertex : staged)
+                append(vertex, false);
+            auto instance = std::make_shared<vk::ModelInstance>();
+            instance->geometry = prepared_geometry(*source.batch);
+            instance->camera = camera;
+            instance->projection = {context.near_z,
+                                    context.fx_near * scene_.width / viewport_[2],
+                                    context.fy_near * scene_.height / viewport_[3],
+                                    (context.cx - viewport_[0]) * scene_.width / viewport_[2] - .5f,
+                                    (context.cy - viewport_[1]) * scene_.height / viewport_[3] -
+                                        .5f,
+                                    context.far_z};
+            instance->sun_world = matrix_rows(source.world);
+            instance->sun_normal = mw34::sun::normal_matrix(source.world);
+            instance->world = instance->sun_eligible = true;
+            draw.model = std::move(instance);
+        } else {
+            for (size_t i = 0; i < staged.size(); i += 3) {
+                auto clipped =
+                    clip_depth({staged[i], staged[i + 1], staged[i + 2]}, near_clip, true);
+                clipped = clip_depth(std::move(clipped), context.far_z, false);
+                for (size_t j = 1; j + 1 < clipped.size(); ++j) {
+                    append(clipped[0], true);
+                    append(clipped[j], true);
+                    append(clipped[j + 1], true);
+                    ++cpu_clipped_triangles_;
+                }
+            }
+        }
+        draw.count = unsigned(scene_.vertices.size() / sizeof(TLVertex)) - draw.first;
+        if (draw.count) {
+            scene_.order.push_back({false, unsigned(scene_.draws.size())});
+            scene_.draws.push_back(std::move(draw));
+            ++prepared_batches_;
+        }
+    }
+
     void initialize_renderer() {
         auto source = native_wsi_ ? sdl_surface(window_) : vk::Renderer::WindowSurface{};
         renderer_ = std::make_unique<vk::Renderer>(vk::Renderer::ColorTarget::rgba8,
-                                                   std::move(source), quality_);
+                                                   std::move(source), quality_, !prepared_.empty());
         texture_limit_ = renderer_->max_texture_dimension(hwnd_);
         if (!native_wsi_ && !renderer_->dxgi_presenting()) {
             throw std::runtime_error("Core Critical DXGI transport is unavailable");
@@ -519,6 +811,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
             retired_draws_ += renderer_->draws;
             retired_presents_ += renderer_->resident_presents;
             retired_quality_ = quality_statistics();
+            retired_model_draws_ += renderer_->model_draws;
+            retired_model_uploads_ += renderer_->model_uploads;
             initialize_renderer();
             window_bound_ = false;
             resident_width_ = resident_height_ = 0;
@@ -608,6 +902,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
     HWND hwnd_;
     const bool native_wsi_;
     const vk::Renderer::Quality quality_;
+    PreparedModels prepared_;
     std::unique_ptr<vk::Renderer> renderer_;
     const sdlfe::FrameShape *shape_{};
     vk::Scene scene_{};
@@ -619,6 +914,13 @@ class FrameRenderer final : public VulkanFrameRenderer {
     std::uint64_t texture_version_{}, retired_draws_{}, retired_presents_{};
     std::uint64_t presented_frames_{};
     QualityStatistics retired_quality_{};
+    std::map<const platform::prepared::Image *, int32_t> prepared_textures_;
+    std::map<const platform::prepared::Batch *, std::shared_ptr<const vk::ModelGeometry>>
+        prepared_geometry_;
+    std::uint64_t prepared_batches_{}, retired_model_draws_{}, cpu_clipped_triangles_{},
+        named_textures_{};
+    bool suppress_model_draws_{};
+    std::uint64_t retired_model_uploads_{};
     unsigned texture_limit_{}, resident_width_{}, resident_height_{};
     int held_width_{}, held_height_{};
     bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
@@ -628,8 +930,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
 std::unique_ptr<VulkanFrameRenderer> make_renderer(SDL_Window *window,
                                                    sdlfe::RendererBackend backend,
-                                                   const sdlfe::CoreCriticalQuality &quality) {
-    return std::make_unique<FrameRenderer>(window, backend, quality);
+                                                   const sdlfe::CoreCriticalQuality &quality,
+                                                   const sdlfe::CoreCriticalAssets &assets) {
+    return std::make_unique<FrameRenderer>(window, backend, quality, assets);
 }
 
 } // namespace cc_mw3_re

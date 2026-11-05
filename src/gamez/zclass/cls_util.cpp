@@ -82,6 +82,9 @@ int copy_node_model(Node* src, Node* dst) {
 // Mech3.exe 1.2 @ 0x004f9190. Name, flags, the bits of +0x2c, the model,
 // priority, action and zone; the user field (+0x40) is not copied.
 int copy_node_base(Node* src, Node* dst) {
+  dst->source_asset = src->source_asset;
+  dst->source_asset_root = src->source_asset_root;
+  dst->source_model_vertices = src->source_model_vertices;
   const uint32_t f = src->flags();
   auto bit = [f](int n) { return static_cast<int>((f >> n) & 1); };
   if (int r = node_set_name(dst, src->name())) return copy_error(0x400, 0x3fb, "description field.", r);

@@ -17,9 +17,9 @@
 namespace sdlfe {
 
 bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend backend,
-                     const CoreCriticalQuality& quality) {
+                     const CoreCriticalQuality& quality, const CoreCriticalAssets& assets) {
   if (backend == RendererBackend::sdl &&
-      (quality.antialiasing != "off" || quality.anisotropy != "1"))
+      (quality.antialiasing != "off" || quality.anisotropy != "1" || !assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical quality requires a Core Critical Vulkan backend\n"), false;
   hidden_ = hidden_for_good;
   if (backend != RendererBackend::sdl) {
@@ -30,7 +30,7 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
     window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
     if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
     try {
-      render_ = cc_mw3_re::make_renderer(window_, backend, quality);
+      render_ = cc_mw3_re::make_renderer(window_, backend, quality, assets);
       render_->set_shape(&shape_);
       return render_->ok();
     } catch (const std::exception& error) {

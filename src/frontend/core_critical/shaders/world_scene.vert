@@ -7,9 +7,9 @@ layout(location=2) in uint specular;
 layout(location=3) in vec2 uv;
 layout(location=0) out vec2 uvPerspective;
 layout(location=1) noperspective out vec2 uvAffine;
-layout(location=2) noperspective out vec4 colorSmooth;
+layout(location=2) out vec4 colorSmooth;
 layout(location=3) flat out vec4 colorFlat;
-layout(location=4) noperspective out vec4 specularSmooth;
+layout(location=4) out vec4 specularSmooth;
 layout(location=5) flat out vec4 specularFlat;
 layout(push_constant) uniform WorldPush {
     vec4 target; vec4 fogColor; vec4 factor; uvec4 mode;

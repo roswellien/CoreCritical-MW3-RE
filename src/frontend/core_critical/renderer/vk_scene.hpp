@@ -191,9 +191,9 @@ class Renderer {
     // An explicit format preference lets format-sensitive callers exercise the
     // RGBA fallback without changing device capabilities or process settings.
     explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
-                      WindowSurface source = {}, Quality quality = {1, 1, 1, false})
+                      WindowSurface source = {}, Quality quality = {1, 1, 1, false}, bool models = false)
         : require_rgba8(color_target == ColorTarget::rgba8), surface_source(std::move(source)),
-          quality_settings(quality) {
+          quality_settings(quality), use_gpu_models(models) {
         if (bool(surface_source.create) != bool(surface_source.destroy))
             throw std::runtime_error("Vulkan surface creation and destruction must have one owner");
         if (surface_source.create && surface_source.extensions.empty())
@@ -893,15 +893,7 @@ class Renderer {
         f.vkGetPhysicalDeviceProperties(gpu, &p);
         return p.limits.maxImageDimension2D;
     }
-    static bool gpu_models() {
-        static const bool on = [] {
-            const char *p = std::getenv("MW34_GPU_MODELS");
-            if (p && std::strcmp(p, "0") && std::strcmp(p, "1"))
-                throw std::runtime_error("MW34_GPU_MODELS must be 0 or 1");
-            return p && *p == '1';
-        }();
-        return on;
-    }
+    bool gpu_models() const { return use_gpu_models; }
     std::uint64_t model_uploads{}, model_uploaded_bytes{}, model_draws{}, world_gpu_draws{},
         effect_light_peak{}, fixture_light_peak{};
     std::uint64_t presents{};
@@ -1788,6 +1780,7 @@ class Renderer {
     const bool require_rgba8;
     const WindowSurface surface_source;
     const Quality quality_settings;
+    const bool use_gpu_models;
     DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off

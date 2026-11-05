@@ -24,6 +24,15 @@ struct CoreCriticalQuality {
   std::string anisotropy = "1";
 };
 
+struct PreparedModelBinding {
+  std::string chassis, lod, mesh, textures;
+};
+struct CoreCriticalAssets {
+  std::string textures;
+  std::vector<PreparedModelBinding> models;
+  bool empty() const { return textures.empty() && models.empty(); }
+};
+
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;

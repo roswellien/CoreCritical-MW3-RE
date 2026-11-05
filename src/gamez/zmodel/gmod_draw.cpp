@@ -1,4 +1,5 @@
 #include "gamez/zmodel/gmod_draw.h"
+#include "platform/render3d.h"
 
 #include <cmath>
 #include <cstring>
@@ -876,6 +877,9 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
   Model& m = *node->model;
   zmth::Mat34 local;  // [ebp-0xd0]
   zmth::push(&local);
+  struct MatrixScope {
+    ~MatrixScope() { zmth::pop(); }
+  } matrix_scope;
   fog_calc().verts = g_buf.cam;
   Lighting& l = lighting();  // the lighting reads the same buffers (0x7476a4, 0x7481a8, 0x747ca8)
   l.cam = clip3d_buffers().cam;
@@ -884,7 +888,6 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
   const int32_t type = field<int32_t>(m, 0);
   if (type == 2) {
     draw_points(m);
-    zmth::pop();
     s.default_model = 0;
     return 0;
   }
@@ -939,9 +942,32 @@ int32_t draw_model(zcls::Node* node, uint32_t mask) {
     }
   }
   const int32_t polys = field<int32_t>(m, 0x10);
+  struct ModelScope {
+    platform::Render3D* renderer = nullptr;
+    ~ModelScope() { if (renderer) renderer->end_model_draw(); }
+  } scope;
+  if (auto* renderer = zvid::render3d(); renderer && renderer->wants_model_context()) {
+    const auto& projection = zmth::projection();
+    auto& stack = zmth::matrix_stack();
+    if (stack.top > 0) {
+      platform::ModelDrawContext context;
+      context.node = node;
+      context.model_to_world = stack.below().m;
+      context.model_to_camera = stack.matrix().m;
+      context.near_z = projection.near_z, context.far_z = projection.far_z;
+      context.clip_near = s.clip.near_z;
+      context.fx_near = projection.fx_near, context.fy_near = projection.fy_near;
+      context.cx = projection.cx, context.cy = projection.cy;
+      context.opacity = s.opacity;
+      context.ordinary = type == 0;
+      context.morphing = morphing(m);
+      context.overlay = s.overlay != 0;
+      scope.renderer = renderer;
+      renderer->begin_model_draw(context);
+    }
+  }
   for (int32_t i = 0; i < polys; ++i) draw_polygon(m, m.polygons[i], needs, receiver, projected, cache, n);
   zvid::device_state().primitive = 6;
-  zmth::pop();
   return 0;
 }
 

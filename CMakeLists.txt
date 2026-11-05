@@ -38,6 +38,7 @@ endif()
 # The rebuilt game and engine. No platform or engine types in here: the front end
 # (SDL3, with Godot as the fallback) talks to it through src/platform.
 add_library(mw3core STATIC
+  src/platform/prepared_visuals.cpp
   src/crt/msvc_math.cpp
   src/crt/msvc_rand.cpp
   src/crt/msvc_string.cpp
@@ -520,6 +521,12 @@ add_library(mw3probe SHARED
 target_link_libraries(mw3probe PRIVATE mw3core)
 
 enable_testing()
+add_executable(mw3prepared_checks tests/test_prepared_visuals.cpp)
+target_link_libraries(mw3prepared_checks PRIVATE mw3core)
+if(MSVC)
+  target_compile_options(mw3prepared_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
 add_executable(mw3tests
   tests/main.cpp
   tests/test_znet.cpp

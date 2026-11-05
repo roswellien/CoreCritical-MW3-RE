@@ -42,14 +42,31 @@ struct DrawState {
   bool sharp = false;              // ours: the 2D layer, a texel a game pixel, premultiplied, scaled sharp
 };
 
+// A synchronous model-producer view, valid until end_model_draw(). Matrices use
+// GameZ row vectors. Original polygon/light/cache work still runs within the scope.
+struct ModelDrawContext {
+  const void* node = nullptr;
+  const float* model_to_world = nullptr;
+  const float* model_to_camera = nullptr;
+  float near_z = 0, clip_near = 0, far_z = 0, fx_near = 0, fy_near = 0, cx = 0, cy = 0;
+  float opacity = 1;
+  bool ordinary = false, morphing = false, overlay = false;
+};
+
 class Render3D {
  public:
   virtual ~Render3D() = default;
   // What the load screen names as the video driver (ours; 0x005799f0 named the DirectDraw driver).
   virtual const char* driver_name() const { return "Default"; }
+  virtual bool wants_model_context() const { return false; }
+  virtual void begin_model_draw(const ModelDrawContext&) {}
+  virtual void end_model_draw() noexcept {}
+  virtual bool replaces_model_geometry() const { return false; }
   // 0x0057b130's surfaces: RGBA8, width * height * 4 bytes. `type` is the
   // record's 1 opaque, 4 alpha plane, 5 one-bit alpha; returns a handle.
   virtual int32_t create_texture(int width, int height, const uint8_t* rgba, uint8_t type) = 0;
+  virtual int32_t create_named_texture(const char*, int width, int height, const uint8_t* rgba,
+                                       uint8_t type) { return create_texture(width, height, rgba, type); }
   virtual void release_texture(int32_t handle) = 0;
   // 0x0057baa0's reload: new pixels for a texture create_texture made, same size.
   virtual void update_texture(int32_t handle, int width, int height, const uint8_t* rgba) = 0;
