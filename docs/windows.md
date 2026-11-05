@@ -54,7 +54,7 @@ directory containing `vulkan/vulkan_core.h` and `GLSLANG` as the path to the
 shader compiler. It compiles the renderer's GLSL at build time.
 
 Build `mw3` and `mw3ccvulkan_checks`. Run the asset-free fixture with
-`ctest --test-dir build-win -R '^mw3ccvulkan_checks$' --output-on-failure`.
+`ctest --test-dir build-win -R '^mw3ccvulkan(_wsi)?_checks$' --output-on-failure`.
 Set `MW34_VK_VALIDATION=1` and point `VK_LAYER_PATH` at the installed
 Khronos validation layer when checking a development build.
 
@@ -67,8 +67,19 @@ for `$fonts`, and a fresh local directory for `$trial`. The windowed trial
 renders with Vulkan and presents through the same GPU's DXGI swapchain.
 It requires Vulkan 1.1 and a device that supports Win32 external memory and
 keyed mutex sharing with DXGI.
+
+Replace `--cc-vulkan` with `--cc-vulkan-wsi` to use an SDL-created Vulkan
+surface and a native Vulkan swapchain. This route selects a graphics queue
+that can present to that surface before creating scene resources. It requires
+Vulkan 1.1 and surface/swapchain support, without DXGI interop. A failure reports
+the surface or device error. The two Core Critical routes are explicit choices;
+omitting both switches selects the upstream renderer. Both trials require a
+window and bypass the launcher. Fullscreen toggling is disabled during the trial.
+
+The native WSI fixture checks scene operations, hidden/minimized readiness,
+restore, and repeated swapchain resizing on a desktop with a Vulkan device.
 Run the upstream comparison with `SDL_GPU_DRIVER=direct3d12`, a separate
-profile, and `--no-launcher` in place of `--cc-vulkan`.
+profile, and `--no-launcher` in place of the Core Critical switch.
 
 The adapter and renderer sources derive from the Core Critical project.
 Their MIT notice is in [src/frontend/core_critical/LICENSE](../src/frontend/core_critical/LICENSE).

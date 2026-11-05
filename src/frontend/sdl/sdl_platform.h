@@ -27,7 +27,8 @@ class SdlWindow : public platform::Window {
  public:
   // The window and GPU device; false with SDL's error printed. `adopt`: the
   // launcher's window, taken instead of a new one (ours, docs/launcher.md).
-  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr, bool cc_vulkan = false);
+  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr,
+            RendererBackend backend = RendererBackend::sdl);
   ~SdlWindow() override;
   uint32_t create(const std::string& title, int width, int height) override;
   void set_title(const std::string& title) override;

@@ -2,6 +2,7 @@
 
 #include "frontend/sdl/sdl_child.h"
 #include "vk_scene.hpp"
+#include <SDL3/SDL_vulkan.h>
 
 #undef DrawState // Win32's DrawState macro conflicts with platform::DrawState.
 
@@ -30,8 +31,8 @@ void set_option(const char *name, const char *value) {
     }
 }
 
-void configure_bridge() {
-    set_option("MW34_DXGI_PRESENT", "1");
+void configure_bridge(bool native_wsi) {
+    set_option("MW34_DXGI_PRESENT", native_wsi ? "0" : "1");
     set_option("MW34_WINDOW_MODE", "windowed");
     set_option("MW34_WORLD_SCALE_PERCENT", "100");
     set_option("MW34_REMASTER_WIDTH", "");
@@ -45,6 +46,27 @@ void configure_bridge() {
     set_option("MW34_SUN_SHADOWS", "0");
     set_option("MW34_EFFECT_LIGHTS", "0");
     set_option("MW34_FIXTURE_SHADOWS", "0");
+}
+
+vk::Renderer::WindowSurface sdl_surface(SDL_Window *window) {
+    if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN))
+        throw std::runtime_error("SDL Vulkan surface: window requires SDL_WINDOW_VULKAN");
+    Uint32 count = 0;
+    const auto *extensions = SDL_Vulkan_GetInstanceExtensions(&count);
+    if (!extensions)
+        throw std::runtime_error(std::string("SDL Vulkan extensions: ") + SDL_GetError());
+    vk::Renderer::WindowSurface source;
+    source.extensions.assign(extensions, extensions + count);
+    source.create = [window](VkInstance instance) {
+        VkSurfaceKHR surface{};
+        if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
+            throw std::runtime_error(std::string("SDL Vulkan surface: ") + SDL_GetError());
+        return surface;
+    };
+    source.destroy = [](VkInstance instance, VkSurfaceKHR surface) {
+        SDL_Vulkan_DestroySurface(instance, surface, nullptr);
+    };
+    return source;
 }
 
 constexpr unsigned no_binding = std::numeric_limits<unsigned>::max();
@@ -103,27 +125,33 @@ std::vector<std::uint32_t> sharp_layer(const Texture &texture, unsigned width, u
     return result;
 }
 
-class FrameRenderer final : public sdlfe::FrameRenderer {
+class FrameRenderer final : public VulkanFrameRenderer {
   public:
-    explicit FrameRenderer(SDL_Window *window)
+    explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend)
         : window_(window),
           hwnd_(static_cast<HWND>(SDL_GetPointerProperty(
-              SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))) {
+              SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))),
+          native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi) {
         if (!hwnd_) {
             throw std::runtime_error("SDL window has no Win32 handle");
         }
-        configure_bridge();
+        if (backend == sdlfe::RendererBackend::sdl)
+            throw std::runtime_error("The Core Critical factory requires a Vulkan backend");
+        configure_bridge(native_wsi_);
         initialize_renderer();
     }
 
     bool ok() const override { return true; }
-    const char *driver_name() const override { return "Core Critical Vulkan/DXGI"; }
+    std::uint64_t presentation_count() const override { return presented_frames_; }
+    const char *driver_name() const override {
+        return native_wsi_ ? "Core Critical Vulkan/SDL WSI" : "Core Critical Vulkan/DXGI";
+    }
     void set_shape(const sdlfe::FrameShape *shape) override { shape_ = shape; }
     void reset_scene_resources() override { reset_pending_ = true; }
 
     ~FrameRenderer() override {
         std::fprintf(
-            stderr, "Core Critical Vulkan/DXGI: %llu draws, %llu resident presents\n",
+            stderr, "%s: %llu draws, %llu resident presents\n", driver_name(),
             static_cast<unsigned long long>(retired_draws_ + renderer_->draws),
             static_cast<unsigned long long>(retired_presents_ + renderer_->resident_presents));
     }
@@ -370,20 +398,21 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
             const auto rgba = rgba_copy(argb);
             if (!renderer_->present(hwnd_, reinterpret_cast<const uint8_t *>(rgba.data()), width,
                                     height, width * 4, false, true)) {
-                throw std::runtime_error("Could not bind the Core Critical DXGI presenter");
+                throw std::runtime_error(
+                    "Could not bind the selected Core Critical Vulkan presenter");
             }
             window_bound_ = renderer_->presents != before;
         } else if (!renderer_->present_resident(hwnd_, resident_width_, resident_height_)) {
             throw std::runtime_error("Core Critical resident present failed");
         }
         if (renderer_->presents != before) {
+            presented_frames_ += renderer_->presents - before;
             if (!presented_) {
-                std::fprintf(stderr, "Core Critical Vulkan/DXGI first frame: %s (upload)\n",
+                std::fprintf(stderr, "%s first frame: %s (upload)\n", driver_name(),
                              renderer_->device_name.c_str());
                 sdlfe::mark_ready();
             } else if (!reported_resident_ && renderer_->resident_presents != 0) {
-                std::fprintf(stderr,
-                             "Core Critical Vulkan/DXGI resident frame: %llu Vulkan draws\n",
+                std::fprintf(stderr, "%s resident frame: %llu Vulkan draws\n", driver_name(),
                              static_cast<unsigned long long>(renderer_->draws));
                 reported_resident_ = true;
             }
@@ -393,9 +422,11 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
 
   private:
     void initialize_renderer() {
-        renderer_ = std::make_unique<vk::Renderer>(vk::Renderer::ColorTarget::rgba8);
+        auto source = native_wsi_ ? sdl_surface(window_) : vk::Renderer::WindowSurface{};
+        renderer_ =
+            std::make_unique<vk::Renderer>(vk::Renderer::ColorTarget::rgba8, std::move(source));
         texture_limit_ = renderer_->max_texture_dimension(hwnd_);
-        if (!renderer_->dxgi_presenting()) {
+        if (!native_wsi_ && !renderer_->dxgi_presenting()) {
             throw std::runtime_error("Core Critical DXGI transport is unavailable");
         }
     }
@@ -490,6 +521,7 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
 
     SDL_Window *window_;
     HWND hwnd_;
+    const bool native_wsi_;
     std::unique_ptr<vk::Renderer> renderer_;
     const sdlfe::FrameShape *shape_{};
     vk::Scene scene_{};
@@ -499,6 +531,7 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
     std::vector<uint32_t> held_;
     std::string capture_path_;
     std::uint64_t texture_version_{}, retired_draws_{}, retired_presents_{};
+    std::uint64_t presented_frames_{};
     unsigned texture_limit_{}, resident_width_{}, resident_height_{};
     int held_width_{}, held_height_{};
     bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
@@ -506,8 +539,9 @@ class FrameRenderer final : public sdlfe::FrameRenderer {
 
 } // namespace
 
-std::unique_ptr<sdlfe::FrameRenderer> make_renderer(SDL_Window *window) {
-    return std::make_unique<FrameRenderer>(window);
+std::unique_ptr<VulkanFrameRenderer> make_renderer(SDL_Window *window,
+                                                   sdlfe::RendererBackend backend) {
+    return std::make_unique<FrameRenderer>(window, backend);
 }
 
 } // namespace cc_mw3_re

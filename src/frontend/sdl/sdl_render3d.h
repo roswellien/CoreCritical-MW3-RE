@@ -16,6 +16,8 @@
 // SPIR-V and DXIL come with the Windows build.
 namespace sdlfe {
 
+enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
+
 class FrameRenderer : public platform::Render3D {
  public:
   virtual bool ok() const = 0;

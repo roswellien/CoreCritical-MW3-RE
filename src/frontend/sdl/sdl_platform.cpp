@@ -16,15 +16,17 @@
 
 namespace sdlfe {
 
-bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, bool cc_vulkan) {
+bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend backend) {
   hidden_ = hidden_for_good;
-  if (cc_vulkan) {
+  if (backend != RendererBackend::sdl) {
 #ifdef CC_MW3_RE_ADAPTER
     if (adopt) return std::fprintf(stderr, "mw3: Core Critical Vulkan requires its own window\n"), false;
-    window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
+    auto flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
+    if (backend == RendererBackend::core_critical_wsi) flags |= SDL_WINDOW_VULKAN;
+    window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
     if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
     try {
-      render_ = cc_mw3_re::make_renderer(window_);
+      render_ = cc_mw3_re::make_renderer(window_, backend);
       render_->set_shape(&shape_);
       return render_->ok();
     } catch (const std::exception& error) {

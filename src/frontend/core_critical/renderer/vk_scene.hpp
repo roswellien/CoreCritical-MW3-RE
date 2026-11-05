@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <utility>
 #include <cstddef>
 #include "world_binding.hpp"
 #include "sun_lighting.hpp"
@@ -176,11 +177,22 @@ struct Scene {
 // Scene and presentation submissions use separate command pools and fences on one queue.
 class Renderer {
   public:
+    struct WindowSurface {
+        std::vector<const char *> extensions;
+        std::function<VkSurfaceKHR(VkInstance)> create;
+        std::function<void(VkInstance, VkSurfaceKHR)> destroy;
+    };
     enum class ColorTarget { device_default, rgba8 };
     // An explicit format preference lets format-sensitive callers exercise the
     // RGBA fallback without changing device capabilities or process settings.
-    explicit Renderer(ColorTarget color_target = ColorTarget::device_default)
-        : require_rgba8(color_target == ColorTarget::rgba8) {}
+    explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
+                      WindowSurface source = {})
+        : require_rgba8(color_target == ColorTarget::rgba8), surface_source(std::move(source)) {
+        if (bool(surface_source.create) != bool(surface_source.destroy))
+            throw std::runtime_error("Vulkan surface creation and destruction must have one owner");
+        if (surface_source.create && surface_source.extensions.empty())
+            throw std::runtime_error("Vulkan surface requires instance extensions");
+    }
     bool alpha_target() const { return rgba; }
     std::string device_name;
     mw34::temporal::History camera_history;
@@ -211,10 +223,8 @@ class Renderer {
                  bool wide_world = false, bool rgba32 = false) {
         if (!::IsWindowVisible(hwnd))
             return true; // hidden: nothing to present
-        // The swapchain lives on a host-owned child window covering the game window's client area
-        // (the game window itself was associated with the system DirectDraw by the original's
-        // cooperative-level call). The child is disabled, hit-test transparent and sends no parent
-        // notifications, so the game window's messages and input are unchanged.
+        // SDL owns the native WSI surface. The legacy presenter uses a disabled,
+        // hit-test-transparent child covering the game window's client area.
         if (hwnd != presentParent) {
             if (device) {
                 dropSwapchain();
@@ -222,17 +232,17 @@ class Renderer {
             }
             if (child)
                 ::DestroyWindow(child);
-            child = makeChild(hwnd);
+            child = surface_source.create ? nullptr : makeChild(hwnd);
             presentParent = hwnd;
             if (!child && DxgiPresent::requested())
                 throw std::runtime_error("Cannot create the required DXGI presentation window");
-            if (!child)
+            if (!child && !surface_source.create)
                 return false;
             // A presenting instance selects the device that can present to this window (on hybrid
             // systems the display may belong to another adapter than the one rendering scenes).
             if (!device)
-                init(child);
-            else if (presentable && !surface(child))
+                init(surface_source.create ? hwnd : child);
+            else if (presentable && !surface(surface_source.create ? hwnd : child))
                 return false;
         }
         if (!presentable || (!windowSurface && !dxgi.active()))
@@ -245,7 +255,7 @@ class Renderer {
                   "wait present");
             presentInFlight = false;
         }
-        {
+        if (child) {
             RECT rc{};
             ::GetClientRect(hwnd, &rc);
             RECT cc{};
@@ -275,9 +285,14 @@ class Renderer {
                 r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE,
                                             &index);
             }
+            if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+                dropSwapchain();
+                return true;
+            }
             if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
                 check(r, "acquire swapchain image");
         }
+        const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
         const VkImage swap_target = dxgi.active() ? dxgi.image() : swapImages[index];
         check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
         VkCommandBufferBeginInfo bi{};
@@ -377,8 +392,14 @@ class Renderer {
         pi.pSwapchains = &swapchain;
         pi.pImageIndices = &index;
         r = f.vkQueuePresentKHR(queue, &pi);
+        // SUBOPTIMAL still queues a successful presentation and must signal readiness.
+        if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)
+            ++presents;
         if ((r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) ||
-            r == VK_SUBOPTIMAL_KHR) {
+            r == VK_SUBOPTIMAL_KHR || suboptimal_acquire) {
+            if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
+                r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
+                check(r, "present");
             check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
                   "wait present");
             dropSwapchain();
@@ -386,7 +407,6 @@ class Renderer {
         }
         check(r, "present");
         presentInFlight = true;
-        ++presents;
         return true;
     }
     // Presents the resident scene target (lazy residency on this device: the 3D scenes and the GPU
@@ -400,7 +420,8 @@ class Renderer {
         finish_world();
         if (!::IsWindowVisible(hwnd))
             return true;
-        if (hwnd != presentParent || !child || !presentable || (!windowSurface && !dxgi.active()) ||
+        if (hwnd != presentParent || (!child && !surface_source.create) || !presentable ||
+            (!windowSurface && !dxgi.active()) ||
             !colorImage.image || w != width || h != height)
             return false;
         if (presentInFlight) {
@@ -408,7 +429,7 @@ class Renderer {
                   "wait present");
             presentInFlight = false;
         }
-        {
+        if (child) {
             RECT rc{};
             ::GetClientRect(hwnd, &rc);
             RECT cc{};
@@ -431,9 +452,14 @@ class Renderer {
                 r = f.vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE,
                                             &index);
             }
+            if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+                dropSwapchain();
+                return true;
+            }
             if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
                 check(r, "acquire swapchain image");
         }
+        const bool suboptimal_acquire = r == VK_SUBOPTIMAL_KHR;
         const VkImage swap_target = dxgi.active() ? dxgi.image() : swapImages[index];
         check(f.vkResetCommandPool(device, presentPool, 0), "reset present pool");
         VkCommandBufferBeginInfo bi{};
@@ -540,8 +566,15 @@ class Renderer {
         pi.pSwapchains = &swapchain;
         pi.pImageIndices = &index;
         r = f.vkQueuePresentKHR(queue, &pi);
+        if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
+            ++presents;
+            ++resident_presents;
+        }
         if ((r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) ||
-            r == VK_SUBOPTIMAL_KHR) {
+            r == VK_SUBOPTIMAL_KHR || suboptimal_acquire) {
+            if (r != VK_SUBOPTIMAL_KHR && r != VK_ERROR_OUT_OF_DATE_KHR &&
+                r != VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
+                check(r, "present");
             check(f.vkWaitForFences(device, 1, &presentFence, VK_TRUE, 10000000000ULL),
                   "wait present");
             dropSwapchain();
@@ -549,8 +582,6 @@ class Renderer {
         }
         check(r, "present");
         presentInFlight = true;
-        ++presents;
-        ++resident_presents;
         return true;
     }
     std::uint64_t resident_presents{};
@@ -857,11 +888,11 @@ class Renderer {
             // Capability queries can precede the first Flip. Select against the
             // actual window now, before texture banks bind us to an adapter.
             if (::IsWindow(window)) {
-                child = makeChild(window);
-                if (!child)
+                child = surface_source.create ? nullptr : makeChild(window);
+                if (!child && !surface_source.create)
                     throw std::runtime_error("Cannot create Vulkan capability-query window");
                 presentParent = window;
-                init(child);
+                init(surface_source.create ? window : child);
             } else {
                 return unbound_texture_dimension();
             }
@@ -1763,6 +1794,7 @@ class Renderer {
         return limit;
     }
     const bool require_rgba8;
+    const WindowSurface surface_source;
     DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
@@ -2383,6 +2415,8 @@ class Renderer {
     // Requested quality features fail visibly if the device lacks their contracts.
     void init(HWND forPresent = nullptr) {
         const bool bridge_requested = DxgiPresent::requested();
+        if (surface_source.create && bridge_requested)
+            throw std::runtime_error("Native Vulkan WSI cannot use a DXGI presentation device");
         if (bridge_requested && exclusiveRequested())
             throw std::runtime_error("DXGI presentation bridge requires windowed or borderless mode");
         library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -2397,7 +2431,7 @@ class Renderer {
         VkApplicationInfo app{};
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "MW34 Direct3D scene renderer";
-        app.apiVersion = bridge_requested ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
+        app.apiVersion = VK_API_VERSION_1_1;
         VkInstanceCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ici.pApplicationInfo = &app;
@@ -2408,7 +2442,9 @@ class Renderer {
             ici.ppEnabledLayerNames = &layer;
         }
         std::vector<const char *> instanceExtensions;
-        {
+        if (surface_source.create) {
+            instanceExtensions = surface_source.extensions;
+        } else {
             auto enumerate = reinterpret_cast<PFN_vkEnumerateInstanceExtensionProperties>(
                 get(nullptr, "vkEnumerateInstanceExtensionProperties"));
             unsigned n = 0;
@@ -2449,7 +2485,13 @@ class Renderer {
             MW34_VK_WSI_FNS(MW34_VK_OPT)
         }
         VkSurfaceKHR probe{};
-        if (!bridge_requested && forPresent && !instanceExtensions.empty() && f.vkCreateWin32SurfaceKHR) {
+        if (surface_source.create && forPresent) {
+            windowSurface = surface_source.create(instance);
+            if (!windowSurface)
+                throw std::runtime_error("SDL did not create a Vulkan window surface");
+            probe = windowSurface;
+            presentWindow = forPresent;
+        } else if (!bridge_requested && forPresent && !instanceExtensions.empty() && f.vkCreateWin32SurfaceKHR) {
             VkWin32SurfaceCreateInfoKHR ci{};
             ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
             ci.hinstance = ::GetModuleHandleW(nullptr);
@@ -2463,6 +2505,7 @@ class Renderer {
         check(f.vkEnumeratePhysicalDevices(instance, &count, gpus.data()), "enumerate devices");
         // Prefer a discrete GPU with a graphics queue, then any device with one.
         int best = -1;
+        std::string surface_failure;
         for (auto g : gpus) {
             unsigned n = 0;
             f.vkGetPhysicalDeviceQueueFamilyProperties(g, &n, nullptr);
@@ -2475,12 +2518,21 @@ class Renderer {
                     if (forPresent && !bridge_requested) {
                         VkBool32 ok = VK_FALSE;
                         VkSurfaceCapabilitiesKHR c{};
-                        if (!probe ||
-                            f.vkGetPhysicalDeviceSurfaceSupportKHR(g, i, probe, &ok) !=
-                                VK_SUCCESS ||
-                            !ok ||
-                            f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g, probe, &c) != VK_SUCCESS)
+                        if (!probe)
                             continue;
+                        const auto support = f.vkGetPhysicalDeviceSurfaceSupportKHR(g, i, probe, &ok);
+                        if (support != VK_SUCCESS || !ok) {
+                            surface_failure = std::string(p.deviceName) + " surface support " +
+                                              std::to_string(int(support)) + " (supported=" +
+                                              std::to_string(ok) + ")";
+                            continue;
+                        }
+                        const auto capabilities = f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g, probe, &c);
+                        if (capabilities != VK_SUCCESS) {
+                            surface_failure = std::string(p.deviceName) + " surface capabilities " +
+                                              std::to_string(int(capabilities));
+                            continue;
+                        }
                     }
                     const int score = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 : 1;
                     if (score > best) {
@@ -2493,6 +2545,8 @@ class Renderer {
                 }
         }
         if (!gpu && forPresent && !bridge_requested) {
+            if (surface_source.create)
+                throw std::runtime_error("No Vulkan adapter can present to the SDL surface: " + surface_failure);
             if (probe)
                 f.vkDestroySurfaceKHR(instance, probe, nullptr);
             presentable = false;
@@ -2567,7 +2621,8 @@ class Renderer {
             }
             for (const auto &p : props) {
                 if (!std::strcmp(p.extensionName, swapExt))
-                    presentable = !instanceExtensions.empty() && f.vkCreateWin32SurfaceKHR;
+                    presentable = !instanceExtensions.empty() &&
+                                  (surface_source.create || f.vkCreateWin32SurfaceKHR);
                 if (exclusiveRequested() &&
                     !std::strcmp(p.extensionName, VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME))
                     exclusiveDevice = true;
@@ -2686,8 +2741,13 @@ class Renderer {
             if (presentable) {
                 windowSurface = probe;
                 presentWindow = forPresent;
-            } else
+            } else {
+                if (surface_source.create) {
+                    dropSurface();
+                    throw std::runtime_error("The Vulkan device cannot create an SDL swapchain");
+                }
                 f.vkDestroySurfaceKHR(instance, probe, nullptr);
+            }
         }
         VkCommandPoolCreateInfo cpi{};
         cpi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -3504,6 +3564,11 @@ class Renderer {
     }
     bool surface(HWND hwnd) {
         if (dxgi.active()) { presentWindow = hwnd; return true; }
+        if (surface_source.create) {
+            windowSurface = surface_source.create(instance);
+            presentWindow = hwnd;
+            return windowSurface != VK_NULL_HANDLE;
+        }
         VkWin32SurfaceCreateInfoKHR ci{};
         ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
         ci.hinstance = ::GetModuleHandleW(nullptr);
@@ -3520,8 +3585,10 @@ class Renderer {
         return true;
     }
     void dropSurface() {
-        if (windowSurface)
-            f.vkDestroySurfaceKHR(instance, windowSurface, nullptr);
+        if (windowSurface) {
+            if (surface_source.destroy) surface_source.destroy(instance, windowSurface);
+            else f.vkDestroySurfaceKHR(instance, windowSurface, nullptr);
+        }
         windowSurface = {};
         presentWindow = {};
     }
@@ -3718,6 +3785,7 @@ class Renderer {
     // image/buffer handles precede their backing memory; the loader is released last.
     void shutdown() {
         if (!device) {
+            dropSurface();
             if (instance && f.vkDestroyInstance)
                 f.vkDestroyInstance(instance, nullptr);
             if (library)

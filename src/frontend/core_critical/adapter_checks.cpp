@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <stdexcept>
+#include <string_view>
 
 namespace {
 
@@ -22,8 +23,8 @@ void quad(platform::Render3D &renderer, float low, float high, float depth, uint
     renderer.draw(platform::Primitive::kFan, vertices, 4, state);
 }
 
-void check_scene(SDL_Window *window) {
-    auto renderer = cc_mw3_re::make_renderer(window);
+void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
+    auto renderer = cc_mw3_re::make_renderer(window, backend);
     renderer->set_viewport(0, 0, 32, 32);
     renderer->clear(true, 0, 0, 255);
     renderer->begin_scene();
@@ -110,20 +111,78 @@ void check_scene(SDL_Window *window) {
     renderer->present();
     sdlfe::set_ready_file("");
     require(!std::filesystem::remove(ready), "A hidden frame signaled first presentation");
+    require(renderer->presentation_count() == 0, "A hidden frame counted as a presentation");
+
+    if (backend == sdlfe::RendererBackend::core_critical_wsi) {
+        require(SDL_ShowWindow(window) && SDL_SyncWindow(window), SDL_GetError());
+        require(SDL_MinimizeWindow(window) && SDL_SyncWindow(window), SDL_GetError());
+        SDL_PumpEvents();
+        require((SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0,
+                "The test window did not minimize");
+        sdlfe::set_ready_file(ready);
+        renderer->present();
+        require(!std::filesystem::exists(ready), "A minimized frame signaled first presentation");
+        require(renderer->presentation_count() == 0, "A minimized frame counted as a presentation");
+        require(SDL_RestoreWindow(window) && SDL_SyncWindow(window), SDL_GetError());
+        for (int i = 0; i < 30 && !std::filesystem::exists(ready); ++i) {
+            SDL_PumpEvents();
+            renderer->present();
+            SDL_Delay(10);
+        }
+        sdlfe::set_ready_file("");
+        require(std::filesystem::remove(ready), "A restored Vulkan window did not present");
+        require(renderer->presentation_count() > 0,
+                "A restored frame did not count as a presentation");
+        for (int size : {64, 48, 32}) {
+            require(SDL_SetWindowSize(window, size, size) && SDL_SyncWindow(window),
+                    SDL_GetError());
+            SDL_PumpEvents();
+            const auto before = renderer->presentation_count();
+            // Allow transient OUT_OF_DATE results while the window changes size.
+            for (int i = 0; i < 30 && renderer->presentation_count() == before; ++i) {
+                renderer->present();
+                SDL_PumpEvents();
+                SDL_Delay(10);
+            }
+            require(renderer->presentation_count() > before,
+                    "A resized Vulkan window did not complete a presentation");
+        }
+        require(pixel(8, 8) == 0xffc7c7c7, "Swapchain resizing changed the resident scene");
+    }
 }
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+    const bool native_wsi = argc == 2 && std::string_view(argv[1]) == "--wsi";
+    if (argc != 1 && !native_wsi) {
+        std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi]\n");
+        return 1;
+    }
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "%s\n", SDL_GetError());
         return 1;
     }
-    auto *window = SDL_CreateWindow("Core Critical adapter checks", 32, 32, SDL_WINDOW_HIDDEN);
+    auto *window = SDL_CreateWindow("Core Critical adapter checks", 32, 32,
+                                    SDL_WINDOW_HIDDEN | (native_wsi ? SDL_WINDOW_VULKAN : 0));
     int result = 0;
     try {
         require(window != nullptr, SDL_GetError());
-        check_scene(window);
+        if (native_wsi) {
+            auto *invalid = SDL_CreateWindow("Non-Vulkan window", 32, 32, SDL_WINDOW_HIDDEN);
+            require(invalid != nullptr, SDL_GetError());
+            bool rejected = false;
+            try {
+                auto renderer =
+                    cc_mw3_re::make_renderer(invalid, sdlfe::RendererBackend::core_critical_wsi);
+            } catch (const std::exception &error) {
+                rejected = std::string_view(error.what()).find("SDL Vulkan surface:") == 0;
+            }
+            SDL_DestroyWindow(invalid);
+            require(rejected, "Native WSI accepted a window without Vulkan surface support");
+        }
+        check_scene(window, native_wsi ? sdlfe::RendererBackend::core_critical_wsi
+                                       : sdlfe::RendererBackend::core_critical_dxgi);
     } catch (const std::exception &error) {
         std::fprintf(stderr, "%s\n", error.what());
         result = 1;
