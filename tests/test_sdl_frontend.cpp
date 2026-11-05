@@ -1836,11 +1836,14 @@ TEST(sdl_install_any_case_finds_the_files) {
   const zutl::Mounts saved = zutl::mounts();
   zutl::mounts() = {};
   zutl::mount(dir + "/a"), zutl::mount(dir + "/b");
+  zutl::mount(dir + "/UP/zbd");  // a mount named by the game, in the install's other case
+  const bool in_named_mount = !zutl::find("reader.zbd").empty();
   const std::string found = zutl::find("zbd\\one.zbd");
   const bool other_missing = zutl::find("zbd\\two.zbd").empty();
   zutl::mounts() = saved;
   EXPECT(found.find("/a/") != std::string::npos);
   EXPECT(other_missing);
+  EXPECT(in_named_mount);
 }
 
 TEST(sdl_install_is_found_and_saved) {

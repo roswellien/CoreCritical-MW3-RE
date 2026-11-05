@@ -130,6 +130,13 @@ bool game_text(const std::string& utf8, std::string* out) { return to_game(utf8,
 std::string any_case(const std::string& root, const std::string& rel) {
   std::string at = root;
   std::error_code ec;
+  // The root by its letters too: the game's own mounts are named ("<install>/zbd/c1").
+  if (!at.empty() && !std::filesystem::exists(at, ec)) {
+    const size_t slash = at.rfind('/');
+    if (slash == std::string::npos || slash == 0) return {};
+    at = any_case(at.substr(0, slash), at.substr(slash + 1));
+    if (at.empty()) return {};
+  }
   for (size_t i = 0; i < rel.size();) {
     const size_t end = std::min(rel.find('/', i), rel.size());
     const std::string part = rel.substr(i, end - i);

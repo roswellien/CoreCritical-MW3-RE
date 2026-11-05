@@ -75,7 +75,8 @@ case ("mech3Msg.dll" against the disc's `Mech3Msg.dll`). `zutl::any_case` takes
 each part of a path exact if it is there, else one differing only by case, and
 `find`, `find_all`, `find_in_mods` and `list` use it per mount, so a mount earlier
 in the order still wins though its copy is in another case. The write dir stays
-exact: the game made those names itself. What checks an install without the
+exact: the game made those names itself. A mount's own path goes the same way, as
+the game adds named ones ("<install>/zbd/c1"). What checks an install without the
 mounts (`install_valid`, `check_install`, the launcher's sounds and notes, the
 movie import) uses it too. It scans a folder only after an exact miss, so a right-cased
 install costs nothing and there is no list of names to go stale.
