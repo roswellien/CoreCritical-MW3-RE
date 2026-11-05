@@ -78,6 +78,19 @@ window and bypass the launcher. Fullscreen toggling is disabled during the trial
 
 The native WSI fixture checks scene operations, hidden/minimized readiness,
 restore, and repeated swapchain resizing on a desktop with a Vulkan device.
+
+Add `--cc-aa fxaa --cc-af 16` to enable world FXAA and 16x anisotropic
+filtering. `--cc-aa` accepts `off` (default), `fxaa`, `ssaa2` (a 2x1 sample
+grid) and `ssaa4` (2x2). `--cc-af` accepts `1` (default/off), `2`, `4`, `8`
+and `16`. These are process-start options for either Core Critical presenter;
+they require a restart to change. The upstream backend rejects enhanced requests.
+Unsupported values or GPU capabilities fail visibly.
+
+FXAA runs on world color before sharp HUD composition. AF uses generated mip
+levels and anisotropic world samplers; HUD sampling stays at level zero.
+SSAA resolves to the current SDL output dimensions, including readbacks and
+held frames. Resize recreates the target at its new extent. Run the quality
+fixtures with `ctest --test-dir build-win -R '^mw3ccvulkan_quality_' --output-on-failure`.
 Run the upstream comparison with `SDL_GPU_DRIVER=direct3d12`, a separate
 profile, and `--no-launcher` in place of the Core Critical switch.
 

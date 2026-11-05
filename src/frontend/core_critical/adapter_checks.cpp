@@ -1,6 +1,7 @@
 #include "frame_renderer.hpp"
 #include "frontend/sdl/sdl_child.h"
 
+#include <array>
 #include <cstdio>
 #include <filesystem>
 #include <stdexcept>
@@ -153,11 +154,192 @@ void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
 
 } // namespace
 
+namespace {
+void check_quality(SDL_Window *window, sdlfe::RendererBackend backend,
+                   const sdlfe::CoreCriticalQuality &quality) {
+    require(SDL_SetWindowSize(window, 64, 64) && SDL_SyncWindow(window), SDL_GetError());
+    for (const auto invalid :
+         {sdlfe::CoreCriticalQuality{"smaa", "1"}, sdlfe::CoreCriticalQuality{"fsr4", "1"},
+          sdlfe::CoreCriticalQuality{"off", "0"}, sdlfe::CoreCriticalQuality{"off", "3"},
+          sdlfe::CoreCriticalQuality{"off", "16junk"}}) {
+        bool rejected = false;
+        try {
+            auto unsupported = cc_mw3_re::make_renderer(window, backend, invalid);
+        } catch (const std::exception &error) {
+            rejected = std::string_view(error.what()).find("--cc-") == 0;
+        }
+        require(rejected, "An unsupported quality request was silently accepted");
+    }
+    auto original = cc_mw3_re::make_renderer(window, backend);
+    original->set_viewport(0, 0, 64, 64);
+    original->clear(true, 0, 0, 0);
+    std::vector<uint32_t> original_pixels;
+    int original_width = 0, original_height = 0;
+    require(original->read_back(&original_pixels, &original_width, &original_height),
+            "The original-quality renderer did not initialize");
+    auto renderer = cc_mw3_re::make_renderer(window, backend, quality);
+    renderer->set_viewport(0, 0, 64, 64);
+    renderer->clear(true, 0, 0, 0);
+    std::vector<uint8_t> checker(64 * 64 * 4, 255);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            for (int channel = 0; channel < 3; ++channel)
+                checker[(y * 64 + x) * 4 + channel] = ((x + y) & 1) ? 255 : 0;
+    platform::DrawState filtered{};
+    filtered.texture = renderer->create_texture(64, 64, checker.data(), 1);
+    const platform::TLVertex tiled[] = {{0, 0, .5f, 1, 0xffffffff, 0, 0, 0},
+                                        {64, 0, .5f, 1, 0xffffffff, 0, 16, 0},
+                                        {64, 64, .5f, 1, 0xffffffff, 0, 16, 16},
+                                        {0, 64, .5f, 1, 0xffffffff, 0, 0, 16}};
+    renderer->draw(platform::Primitive::kFan, tiled, 4, filtered);
+    renderer->release_texture(filtered.texture);
+    std::vector<uint32_t> pixels;
+    int width = 0, height = 0;
+    require(renderer->read_back(&pixels, &width, &height) && width == 64 && height == 64,
+            "Quality readback changed game-facing output dimensions");
+    if (quality.anisotropy != "1") {
+        const auto value = pixels[32 * 64 + 32] & 255U;
+        require(value >= 120 && value <= 135, "AF failed to filter the minified checker texture");
+        const auto stats = renderer->quality_statistics();
+        require(stats.anisotropic_samplers > 0 && stats.mip_levels >= 6,
+                "World filtering did not create anisotropic samplers and mip levels");
+    }
+
+    renderer->clear(true, 0, 0, 0);
+    const platform::TLVertex diagonal[] = {{33, 1, .5f, 1, 0xffffffff, 0, 0, 0},
+                                           {63, 56, .5f, 1, 0xffffffff, 0, 0, 0},
+                                           {33, 63, .5f, 1, 0xffffffff, 0, 0, 0}};
+    renderer->draw(platform::Primitive::kFan, diagonal, 3, {});
+    renderer->end_scene();
+    // A rasterized opaque glyph over the left half must stay byte-exact after AA.
+    std::vector<uint8_t> glyph(64 * 64 * 4);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 32; ++x) {
+            glyph[(y * 64 + x) * 4 + 1] = x + y / 2 < 28 ? 255 : 0;
+            glyph[(y * 64 + x) * 4 + 3] = 255;
+        }
+    platform::DrawState hud{};
+    hud.texture = renderer->create_texture(64, 64, glyph.data(), 4);
+    hud.sharp = hud.blend = hud.depth_always = true;
+    hud.depth_write = false;
+    hud.address_u = hud.address_v = 3;
+    quad(*renderer, 0, 64, 0, 0xffffffff, hud);
+    renderer->release_texture(hud.texture);
+    require(renderer->read_back(&pixels, &width, &height), "Quality frame did not read back");
+    unsigned intermediate = 0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) {
+            const auto pixel = pixels[y * 64 + x];
+            if (x < 32)
+                require(pixel == (x + y / 2 < 28 ? 0xff00ff00U : 0xff000000U),
+                        "World antialiasing changed sharp HUD pixels");
+            else if ((pixel & 255U) > 0 && (pixel & 255U) < 255)
+                ++intermediate;
+        }
+    if (quality.antialiasing != "off")
+        require(intermediate > 0, "World antialiasing did not smooth the authored diagonal");
+    if (quality.antialiasing == "fxaa")
+        require(renderer->quality_statistics().fxaa_passes >= 2, "World FXAA pass did not execute");
+    original->clear(true, 1, 2, 3);
+    require(original->read_back(&original_pixels, &original_width, &original_height) &&
+                original_width == 64 && original_height == 64 && original_pixels[0] == 0xff010203,
+            "Another renderer's quality changed the original renderer's readback");
+    require(original->quality_statistics().fxaa_passes == 0 &&
+                original->quality_statistics().anisotropic_samplers == 0,
+            "Quality settings leaked between renderer instances");
+    original.reset();
+    require(renderer->hold_frame(), "Could not hold an antialiased frame");
+    renderer->clear(true, 0, 0, 0);
+    require(renderer->restore_frame(), "Could not restore an antialiased frame");
+    std::vector<uint32_t> restored;
+    require(renderer->read_back(&restored, &width, &height) && pixels == restored,
+            "Held quality frame did not preserve its resolved pixels");
+    const auto hud_passes = renderer->quality_statistics().fxaa_passes;
+    renderer->clear_depth_rect(0, 0, 16, 16);
+    renderer->end_scene();
+    require(renderer->read_back(&restored, &width, &height) && pixels == restored &&
+                renderer->quality_statistics().fxaa_passes == hud_passes,
+            "A depth-only batch after HUD composition dirtied or filtered its color");
+    for (const uint8_t alpha : {uint8_t(128), uint8_t(0)}) {
+        const uint8_t translucent[] = {64, 32, 16, alpha};
+        platform::DrawState straight{};
+        straight.texture = renderer->create_texture(1, 1, translucent, 4);
+        renderer->clear(true, 0, 0, 0);
+        quad(*renderer, 0, 64, .5f, 0xffffffff, straight);
+        renderer->release_texture(straight.texture);
+        require(renderer->read_back(&restored, &width, &height) &&
+                    restored[32 * 64 + 32] == (uint32_t(alpha) << 24 | 0x00402010U),
+                "The straight-alpha held-frame input was not preserved");
+        require(renderer->hold_frame(), "Could not hold straight-alpha pixels");
+        renderer->clear(true, 0, 0, 0);
+        require(renderer->restore_frame(), "Could not restore straight-alpha pixels");
+        std::vector<uint32_t> copied;
+        require(renderer->read_back(&copied, &width, &height) && copied == restored,
+                "Held-frame restore changed straight-alpha or alpha-zero RGB");
+    }
+
+    auto depth_clear_case = [&](bool clear_depth) {
+        const auto before = renderer->quality_statistics().fxaa_passes;
+        renderer->clear(true, 0, 0, 0);
+        renderer->draw(platform::Primitive::kFan, diagonal, 3, {});
+        renderer->end_scene();
+        if (clear_depth)
+            renderer->clear_depth_rect(0, 0, 16, 16);
+        quad(*renderer, 0, 4, .5f, 0xff000000);
+        std::vector<uint32_t> result;
+        require(renderer->read_back(&result, &width, &height),
+                "Depth-clear frame did not read back");
+        if (quality.antialiasing == "fxaa")
+            require(renderer->quality_statistics().fxaa_passes - before == 1,
+                    "A depth-only clear triggered extra world FXAA");
+        return result;
+    };
+    const auto without_depth_clear = depth_clear_case(false);
+    require(depth_clear_case(true) == without_depth_clear,
+            "A depth-only rectangle clear changed unaffected color pixels");
+    const auto previous_stats = renderer->quality_statistics();
+    renderer->reset_scene_resources();
+    renderer->clear(true, 10, 20, 30);
+    require(renderer->read_back(&restored, &width, &height) && restored[0] == 0xff0a141e,
+            "A quality scene reload retained old pixels");
+    require(renderer->quality_statistics().fxaa_passes >= previous_stats.fxaa_passes,
+            "Quality counters were lost during scene reload");
+    require(SDL_ShowWindow(window) && SDL_SyncWindow(window), SDL_GetError());
+    for (const auto size : {std::array{64, 64}, std::array{48, 72}}) {
+        require(SDL_SetWindowSize(window, size[0], size[1]) && SDL_SyncWindow(window),
+                SDL_GetError());
+        SDL_PumpEvents();
+        renderer->clear(true, 10, 20, 30);
+        const auto before = renderer->presentation_count();
+        for (int i = 0; i < 30 && renderer->presentation_count() == before; ++i) {
+            renderer->present();
+            SDL_PumpEvents();
+            SDL_Delay(10);
+        }
+        require(renderer->presentation_count() > before,
+                "Quality presentation did not survive resize");
+        require(renderer->read_back(&restored, &width, &height) && width == size[0] &&
+                    height == size[1],
+                "Quality resize changed game-facing readback dimensions");
+    }
+}
+} // namespace
+
 int main(int argc, char **argv) {
-    const bool native_wsi = argc == 2 && std::string_view(argv[1]) == "--wsi";
-    if (argc != 1 && !native_wsi) {
-        std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi]\n");
-        return 1;
+    bool native_wsi = false, quality_check = false;
+    sdlfe::CoreCriticalQuality quality;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view option(argv[i]);
+        if (option == "--wsi")
+            native_wsi = true;
+        else if (option == "--quality" && i + 1 < argc) {
+            quality.antialiasing = argv[++i];
+            quality.anisotropy = "16";
+            quality_check = true;
+        } else {
+            std::fprintf(stderr, "usage: mw3ccvulkan_checks [--wsi] [--quality MODE]\n");
+            return 1;
+        }
     }
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "%s\n", SDL_GetError());
@@ -181,8 +363,12 @@ int main(int argc, char **argv) {
             SDL_DestroyWindow(invalid);
             require(rejected, "Native WSI accepted a window without Vulkan surface support");
         }
-        check_scene(window, native_wsi ? sdlfe::RendererBackend::core_critical_wsi
-                                       : sdlfe::RendererBackend::core_critical_dxgi);
+        const auto backend = native_wsi ? sdlfe::RendererBackend::core_critical_wsi
+                                        : sdlfe::RendererBackend::core_critical_dxgi;
+        if (quality_check)
+            check_quality(window, backend, quality);
+        else
+            check_scene(window, backend);
     } catch (const std::exception &error) {
         std::fprintf(stderr, "%s\n", error.what());
         result = 1;

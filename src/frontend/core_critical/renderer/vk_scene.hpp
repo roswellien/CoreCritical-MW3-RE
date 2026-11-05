@@ -137,6 +137,7 @@ struct Draw {
     std::uint64_t shadow_source{};
     std::function<bool()> shadow_valid;
     bool condition_schematic{};
+    bool depth_only{};
     std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
 };
 struct Clear {
@@ -182,16 +183,28 @@ class Renderer {
         std::function<VkSurfaceKHR(VkInstance)> create;
         std::function<void(VkInstance, VkSurfaceKHR)> destroy;
     };
+    struct Quality {
+        unsigned samples_x, samples_y, anisotropy;
+        bool fxaa;
+    };
     enum class ColorTarget { device_default, rgba8 };
     // An explicit format preference lets format-sensitive callers exercise the
     // RGBA fallback without changing device capabilities or process settings.
     explicit Renderer(ColorTarget color_target = ColorTarget::device_default,
-                      WindowSurface source = {})
-        : require_rgba8(color_target == ColorTarget::rgba8), surface_source(std::move(source)) {
+                      WindowSurface source = {}, Quality quality = {1, 1, 1, false})
+        : require_rgba8(color_target == ColorTarget::rgba8), surface_source(std::move(source)),
+          quality_settings(quality) {
         if (bool(surface_source.create) != bool(surface_source.destroy))
             throw std::runtime_error("Vulkan surface creation and destruction must have one owner");
         if (surface_source.create && surface_source.extensions.empty())
             throw std::runtime_error("Vulkan surface requires instance extensions");
+        if ((quality.samples_x != 1 && quality.samples_x != 2) ||
+            (quality.samples_y != 1 && quality.samples_y != 2) ||
+            (quality.samples_x == 1 && quality.samples_y != 1) ||
+            (quality.fxaa && (quality.samples_x != 1 || quality.samples_y != 1)) ||
+            (quality.anisotropy != 1 && quality.anisotropy != 2 && quality.anisotropy != 4 &&
+             quality.anisotropy != 8 && quality.anisotropy != 16))
+            throw std::runtime_error("Invalid Vulkan quality configuration");
     }
     bool alpha_target() const { return rgba; }
     std::string device_name;
@@ -491,7 +504,7 @@ class Renderer {
             VK_PIPELINE_STAGE_TRANSFER_BIT);
         // The frame keeps its aspect ratio (side or top bars are cleared to black when the window's
         // differs).
-        const auto ss = mw34::display::samples(std::getenv("MW34_REMASTER_AA"));
+        const auto ss = sample_grid();
         const double ow = double(rw) / ss.x, oh = double(rh) / ss.y;
         const auto destination = mw34::display::presentation_rect(ow, oh, swapExtent.width,
                                                                  swapExtent.height);
@@ -813,8 +826,8 @@ class Renderer {
                            h = remaster_setting("MW34_REMASTER_HEIGHT", 0);
             if ((w || h) && (w < 640 || h < 480 || w > 7680 || h > 4320))
                 throw std::runtime_error("Remaster output resolution outside 640x480..7680x4320");
-            if ((fxaa_enabled() || anisotropy() > 1) && !w)
-                throw std::runtime_error("AA/AF require an explicit native Remaster resolution");
+            // The SDL adapter supplies the current output extent with every scene.
+            // Quality features do not require a second, fixed environment resolution.
             return OutputResolution{w, h};
         }();
         return resolution;
@@ -827,33 +840,10 @@ class Renderer {
         return remaster_width() &&
                std::uint64_t(remaster_width()) * 3 > std::uint64_t(remaster_height()) * 4;
     }
-    static bool fxaa_enabled() {
-        static const bool on = [] {
-            const char *p = std::getenv("MW34_REMASTER_AA");
-            if (!p || !std::strcmp(p, "1") || !std::strcmp(p, "off"))
-                return false;
-            if (std::strcmp(p, "fxaa")) {
-                (void)mw34::display::samples(p);
-                return false;
-            }
-            for (const char *name : {"MW34_LAZY_RT", "MW34_GPU_HUD"}) {
-                const char *v = std::getenv(name);
-                if (!v || std::strcmp(v, "1"))
-                    throw std::runtime_error(
-                        "FXAA requires resident Vulkan rendering and the GPU HUD");
-            }
-            return true;
-        }();
-        return on;
-    }
-    static unsigned anisotropy() {
-        static const unsigned n = [] {
-            const unsigned n = remaster_setting("MW34_REMASTER_AF", 1);
-            if (n != 1 && n != 2 && n != 4 && n != 8 && n != 16)
-                throw std::runtime_error("MW34_REMASTER_AF supports 1, 2, 4, 8 or 16");
-            return n;
-        }();
-        return n;
+    bool fxaa_enabled() const { return quality_settings.fxaa; }
+    unsigned anisotropy() const { return quality_settings.anisotropy; }
+    mw34::display::Samples sample_grid() const {
+        return {quality_settings.samples_x, quality_settings.samples_y};
     }
     // Called before the performance overlay/presentation if no HUD followed the world.
     void finish_world() {
@@ -1633,7 +1623,9 @@ class Renderer {
             }
         }
         f.vkCmdEndRenderPass(cmd);
-        if (!s.hud && !s.draws.empty() && (!worldColor.image || reduced_world_active))
+        const bool writes_color = std::any_of(s.draws.begin(), s.draws.end(),
+            [](const Draw &draw) { return !draw.depth_only; });
+        if (!s.hud && writes_color && (!worldColor.image || reduced_world_active))
             quality_world_dirty = true;
         if (reduced_world_active) ++reduced_world_scenes;
         if (readback_out) {
@@ -1795,6 +1787,7 @@ class Renderer {
     }
     const bool require_rgba8;
     const WindowSurface surface_source;
+    const Quality quality_settings;
     DxgiPresent dxgi;
     // Keep the entry-point macro lists together for loader auditing.
     // clang-format off
@@ -2905,9 +2898,14 @@ class Renderer {
         }
         if (fxaa_enabled())
             init_quality();
-        if (fxaa_enabled() || anisotropy() > 1)
+        const auto grid = sample_grid();
+        const char *aa_name = "AA off";
+        if (fxaa_enabled()) aa_name = "FXAA (native resolution)";
+        else if (grid.y == 2) aa_name = "4-sample SSAA";
+        else if (grid.x == 2) aa_name = "2-sample SSAA";
+        if (fxaa_enabled() || anisotropy() > 1 || grid.x > 1)
             std::fprintf(stderr, "Remaster quality: %s, %ux AF, samplerAnisotropy %u, GPU %s\n",
-                         fxaa_enabled() ? "FXAA (native resolution)" : "AA off", anisotropy(),
+                         aa_name, anisotropy(),
                          enabled.samplerAnisotropy, device_name.c_str());
         if (std::getenv("MW34_SEH_LOG")) {
             VkPhysicalDeviceProperties diagnostic_props{};
@@ -3203,7 +3201,7 @@ class Renderer {
                 rh = remaster_height();
             }
         }
-        const auto samples = mw34::display::samples(std::getenv("MW34_REMASTER_AA"));
+        const auto samples = sample_grid();
         rw *= samples.x;
         rh *= samples.y;
         VkPhysicalDeviceProperties limits{};

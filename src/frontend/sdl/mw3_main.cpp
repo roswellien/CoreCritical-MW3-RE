@@ -44,6 +44,8 @@
 //   --windowed           a window, not fullscreen (also --window, or windowed=1 in mw3.cfg)
 //   --cc-vulkan          experimental Windows Vulkan/DXGI backend (requires a window)
 //   --cc-vulkan-wsi      experimental Vulkan swapchain on an SDL surface
+//   --cc-aa MODE         off, fxaa, ssaa2 or ssaa4 on the Core Critical backend
+//   --cc-af LEVEL        1, 2, 4, 8 or 16 on the Core Critical backend
 //   --verbose            list every unported function reached at exit
 #include "crt/msvc_rand.h"
 #include <SDL3/SDL.h>
@@ -134,6 +136,7 @@ std::string campaign_summary() {
 
 struct Args {
   sdlfe::RendererBackend backend = sdlfe::RendererBackend::sdl;
+  sdlfe::CoreCriticalQuality quality;
   SDL_Window* launcher_window = nullptr;  // the launcher's, for the game to take (one window; ours)
   std::string install, write_dir, mission, variant, dialog_file, dialog_name, shot, movie;
   std::string cfg_install;  // mw3.cfg's install= (the command line's wins)
@@ -226,7 +229,7 @@ void usage() {
       "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] [--assets DIR]... [--write-dir DIR] [--version]\n"
       "    [--mission NAME | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] [--vehicle-ahead M [--vehicle-hold]] [--turret-ahead M] [--mech-ahead M] [--dialog FILE NAME]\n"
       "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--win N] [--lab-mech N]\n"
-      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -345,6 +348,8 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--no-import") a.no_import = true;
     else if (s == "--cc-vulkan") a.backend = sdlfe::RendererBackend::core_critical_dxgi, a.no_launcher = true;
     else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
+    else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
+    else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
     else if (s == "--no-launcher") a.no_launcher = true;
     else if (s == "--ready-file" && next(1)) a.ready_file = argv[++i];
     else if (s == "--wide-menus") a.wide_menus = 1;
@@ -849,9 +854,12 @@ namespace {
 
 int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlWindow window;
+  if (a.backend == sdlfe::RendererBackend::sdl &&
+      (a.quality.antialiasing != "off" || a.quality.anisotropy != "1"))
+    return std::fprintf(stderr, "mw3: Core Critical quality options require a Core Critical Vulkan backend\n"), 1;
   if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
     return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
-  if (!window.init(a.hidden, a.launcher_window, a.backend)) return 1;
+  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality)) return 1;
   sdlfe::SdlInput input;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)

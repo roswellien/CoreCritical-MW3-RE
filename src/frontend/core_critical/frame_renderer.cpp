@@ -31,14 +31,29 @@ void set_option(const char *name, const char *value) {
     }
 }
 
+vk::Renderer::Quality parse_quality(const sdlfe::CoreCriticalQuality &quality) {
+    vk::Renderer::Quality result{1, 1, 1, false};
+    if (quality.antialiasing == "fxaa")
+        result.fxaa = true;
+    else if (quality.antialiasing == "ssaa2")
+        result.samples_x = 2;
+    else if (quality.antialiasing == "ssaa4")
+        result.samples_x = result.samples_y = 2;
+    else if (quality.antialiasing != "off")
+        throw std::runtime_error("--cc-aa supports off, fxaa, ssaa2 or ssaa4");
+    if (quality.anisotropy != "1" && quality.anisotropy != "2" && quality.anisotropy != "4" &&
+        quality.anisotropy != "8" && quality.anisotropy != "16")
+        throw std::runtime_error("--cc-af supports 1, 2, 4, 8 or 16");
+    result.anisotropy = unsigned(std::stoi(quality.anisotropy));
+    return result;
+}
+
 void configure_bridge(bool native_wsi) {
     set_option("MW34_DXGI_PRESENT", native_wsi ? "0" : "1");
     set_option("MW34_WINDOW_MODE", "windowed");
     set_option("MW34_WORLD_SCALE_PERCENT", "100");
     set_option("MW34_REMASTER_WIDTH", "");
     set_option("MW34_REMASTER_HEIGHT", "");
-    set_option("MW34_REMASTER_AA", "1");
-    set_option("MW34_REMASTER_AF", "1");
     set_option("MW34_TEMPORAL_INPUTS", "0");
     set_option("MW34_GPU_MODELS", "0");
     set_option("MW34_SUN", "0");
@@ -76,6 +91,7 @@ struct Texture {
     std::uint64_t version{};
     unsigned scene_index = no_binding;
     unsigned sharp_index = no_binding;
+    bool held_copy{};
     std::vector<std::uint32_t> pixels;
 };
 
@@ -127,11 +143,13 @@ std::vector<std::uint32_t> sharp_layer(const Texture &texture, unsigned width, u
 
 class FrameRenderer final : public VulkanFrameRenderer {
   public:
-    explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend)
+    explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
+                           const sdlfe::CoreCriticalQuality &quality)
         : window_(window),
           hwnd_(static_cast<HWND>(SDL_GetPointerProperty(
               SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))),
-          native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi) {
+          native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
+          quality_(parse_quality(quality)) {
         if (!hwnd_) {
             throw std::runtime_error("SDL window has no Win32 handle");
         }
@@ -143,6 +161,11 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     bool ok() const override { return true; }
     std::uint64_t presentation_count() const override { return presented_frames_; }
+    QualityStatistics quality_statistics() const override {
+        return {retired_quality_.fxaa_passes + renderer_->fxaa_passes,
+                retired_quality_.anisotropic_samplers + renderer_->af_samplers,
+                retired_quality_.mip_levels + renderer_->mip_levels_uploaded};
+    }
     const char *driver_name() const override {
         return native_wsi_ ? "Core Critical Vulkan/SDL WSI" : "Core Critical Vulkan/DXGI";
     }
@@ -150,10 +173,16 @@ class FrameRenderer final : public VulkanFrameRenderer {
     void reset_scene_resources() override { reset_pending_ = true; }
 
     ~FrameRenderer() override {
+        const auto quality = quality_statistics();
         std::fprintf(
-            stderr, "%s: %llu draws, %llu resident presents\n", driver_name(),
-            static_cast<unsigned long long>(retired_draws_ + renderer_->draws),
-            static_cast<unsigned long long>(retired_presents_ + renderer_->resident_presents));
+            stderr,
+            "%s: %llu draws, %llu resident presents, %llu FXAA passes, %llu AF samplers, %llu mip "
+            "levels\n",
+            driver_name(), static_cast<unsigned long long>(retired_draws_ + renderer_->draws),
+            static_cast<unsigned long long>(retired_presents_ + renderer_->resident_presents),
+            static_cast<unsigned long long>(quality.fxaa_passes),
+            static_cast<unsigned long long>(quality.anisotropic_samplers),
+            static_cast<unsigned long long>(quality.mip_levels));
     }
 
     void capture_next(const char *path) override { capture_path_ = path; }
@@ -222,10 +251,36 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void draw(Primitive primitive, const TLVertex *vertices, int count,
               const DrawState &state) override {
+        append_draw(primitive, vertices, count, state, state.sharp || state.depth_always);
+    }
+
+    void clear_depth_rect(int left, int top, int right, int bottom) override {
+        if (right <= left || bottom <= top)
+            return;
+        const float l = float(left), t = float(top), r = float(right), b = float(bottom);
+        const TLVertex vertices[] = {{l, t, 0, 1, 0, 0xff000000, 0, 0},
+                                     {r, t, 0, 1, 0, 0xff000000, 0, 0},
+                                     {r, b, 0, 1, 0, 0xff000000, 0, 0},
+                                     {l, b, 0, 1, 0, 0xff000000, 0, 0}};
+        DrawState state{};
+        state.blend = state.depth_write = state.depth_always = true;
+        // Preserve the inherited rasterized depth-only operation and its fractional
+        // viewport coverage, without treating it as a color/HUD composition boundary.
+        append_draw(Primitive::kFan, vertices, 4, state, scene_.hud, true);
+    }
+
+  private:
+    void append_draw(Primitive primitive, const TLVertex *vertices, int count,
+                     const DrawState &state, bool hud, bool depth_only = false) {
         if (count <= 0) {
             return;
         }
         ensure_extent();
+        if (!scene_.draws.empty() && scene_.hud != hud) {
+            flush();
+            ensure_extent();
+        }
+        scene_.hud = hud;
         const unsigned first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
         const auto add = [&](TLVertex vertex) {
             vertex.sx = (vertex.sx - viewport_[0]) * scene_.width / float(viewport_[2]);
@@ -274,11 +329,14 @@ class FrameRenderer final : public VulkanFrameRenderer {
         }
 
         vk::Draw draw{};
+        draw.depth_only = depth_only;
         draw.first = first;
         draw.count = drawn;
         draw.texture = state.texture < 0 ? -1 : int(bind_texture(state.texture, state.sharp));
         draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
                        (state.address_v == 3 ? 3U : 1U) << 8 | (state.sharp ? 0U : 3U);
+        if (!hud)
+            draw.sampler |= 0x10000U;
         draw.key = {uint8_t(state.blend || state.multiply),
                     uint8_t(state.multiply ? 1 : 5),
                     uint8_t(state.multiply ? 3 : 6),
@@ -301,8 +359,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
         draw.scissor = {{0, 0}, {scene_.width, scene_.height}};
         if (!scene_.order.empty() && !scene_.order.back().clear) {
             auto &previous = scene_.draws.back();
-            if (previous.texture == draw.texture && previous.sampler == draw.sampler &&
-                previous.key.packed() == draw.key.packed() &&
+            if (previous.depth_only == draw.depth_only && previous.texture == draw.texture &&
+                previous.sampler == draw.sampler && previous.key.packed() == draw.key.packed() &&
                 std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
                 previous.count += drawn;
                 return;
@@ -312,6 +370,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
         scene_.draws.push_back(std::move(draw));
     }
 
+  public:
     void flush() override {
         if (scene_.order.empty()) {
             return;
@@ -340,10 +399,31 @@ class FrameRenderer final : public VulkanFrameRenderer {
         if (bgra.empty()) {
             return false;
         }
-        *width = int(w);
-        *height = int(h);
-        argb->resize(std::size_t(w) * h);
-        std::memcpy(argb->data(), bgra.data(), bgra.size());
+        const mw34::display::Samples samples{quality_.samples_x, quality_.samples_y};
+        *width = int(w / samples.x);
+        *height = int(h / samples.y);
+        if (samples.x == 1 && samples.y == 1) {
+            argb->resize(std::size_t(w) * h);
+            std::memcpy(argb->data(), bgra.data(), bgra.size());
+            return true;
+        }
+        argb->assign(std::size_t(*width) * *height, 0);
+        // Match the resident presenter's integer-grid SSAA resolve. The game-facing
+        // readback and held frame keep their output dimensions and alpha contract.
+        for (int y = 0; y < *height; ++y)
+            for (int x = 0; x < *width; ++x) {
+                std::uint32_t pixel = 0;
+                for (unsigned channel = 0; channel < 4; ++channel) {
+                    unsigned sum = 0;
+                    for (unsigned sy = 0; sy < samples.y; ++sy)
+                        for (unsigned sx = 0; sx < samples.x; ++sx)
+                            sum +=
+                                bgra[((y * samples.y + sy) * w + x * samples.x + sx) * 4 + channel];
+                    const unsigned count = samples.x * samples.y;
+                    pixel |= ((sum + count / 2) / count) << (channel * 8);
+                }
+                (*argb)[std::size_t(y) * *width + x] = pixel;
+            }
         return true;
     }
 
@@ -357,6 +437,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
         const auto rgba = rgba_copy(held_);
         const auto handle = create_texture(held_width_, held_height_,
                                            reinterpret_cast<const uint8_t *>(rgba.data()), 1);
+        textures_[handle].held_copy = true;
         const auto old_view = viewport_;
         set_viewport(0, 0, held_width_, held_height_);
         const float w = float(held_width_), h = float(held_height_);
@@ -365,6 +446,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
                                  {w, h, 0, 1, 0xffffffff, 0, 1, 1},
                                  {0, h, 0, 1, 0xffffffff, 0, 0, 1}};
         DrawState copy{};
+        copy.sharp = true;
         copy.texture = handle;
         copy.address_u = copy.address_v = 3;
         copy.depth_always = true;
@@ -423,8 +505,8 @@ class FrameRenderer final : public VulkanFrameRenderer {
   private:
     void initialize_renderer() {
         auto source = native_wsi_ ? sdl_surface(window_) : vk::Renderer::WindowSurface{};
-        renderer_ =
-            std::make_unique<vk::Renderer>(vk::Renderer::ColorTarget::rgba8, std::move(source));
+        renderer_ = std::make_unique<vk::Renderer>(vk::Renderer::ColorTarget::rgba8,
+                                                   std::move(source), quality_);
         texture_limit_ = renderer_->max_texture_dimension(hwnd_);
         if (!native_wsi_ && !renderer_->dxgi_presenting()) {
             throw std::runtime_error("Core Critical DXGI transport is unavailable");
@@ -436,6 +518,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
             flush();
             retired_draws_ += renderer_->draws;
             retired_presents_ += renderer_->resident_presents;
+            retired_quality_ = quality_statistics();
             initialize_renderer();
             window_bound_ = false;
             resident_width_ = resident_height_ = 0;
@@ -484,7 +567,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
         const auto key = std::uint64_t(handle) * 2 + unsigned(sharp) + 1;
         vk::TextureRef ref{key, entry.version, w, h, vk::TexFormat::rgba8888, {}, {}};
         if (!renderer_->current(ref.key, ref.hash, w, h)) {
-            ref.pixels32 = sharp ? sharp_layer(entry, w, h) : entry.pixels;
+            // Held readback is already straight RGBA at the output extent. Its
+            // nearest SSAA sampling must preserve alpha-zero RGB as well.
+            ref.pixels32 = sharp && !entry.held_copy ? sharp_layer(entry, w, h) : entry.pixels;
         }
         index = unsigned(scene_.textures.size());
         scene_.textures.push_back(std::move(ref));
@@ -522,6 +607,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
     SDL_Window *window_;
     HWND hwnd_;
     const bool native_wsi_;
+    const vk::Renderer::Quality quality_;
     std::unique_ptr<vk::Renderer> renderer_;
     const sdlfe::FrameShape *shape_{};
     vk::Scene scene_{};
@@ -532,6 +618,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
     std::string capture_path_;
     std::uint64_t texture_version_{}, retired_draws_{}, retired_presents_{};
     std::uint64_t presented_frames_{};
+    QualityStatistics retired_quality_{};
     unsigned texture_limit_{}, resident_width_{}, resident_height_{};
     int held_width_{}, held_height_{};
     bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
@@ -540,8 +627,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
 } // namespace
 
 std::unique_ptr<VulkanFrameRenderer> make_renderer(SDL_Window *window,
-                                                   sdlfe::RendererBackend backend) {
-    return std::make_unique<FrameRenderer>(window, backend);
+                                                   sdlfe::RendererBackend backend,
+                                                   const sdlfe::CoreCriticalQuality &quality) {
+    return std::make_unique<FrameRenderer>(window, backend, quality);
 }
 
 } // namespace cc_mw3_re

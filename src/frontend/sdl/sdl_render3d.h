@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 
 #include <map>
+#include <string>
 #include <vector>
 
 #include "frontend/sdl/sdl_fit.h"
@@ -17,6 +18,11 @@
 namespace sdlfe {
 
 enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
+
+struct CoreCriticalQuality {
+  std::string antialiasing = "off";
+  std::string anisotropy = "1";
+};
 
 class FrameRenderer : public platform::Render3D {
  public:

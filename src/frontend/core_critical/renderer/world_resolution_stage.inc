@@ -259,7 +259,7 @@ void destroy_world_target() {
 void create_world_target() {
     const auto percent = world_scale_percent();
     if (percent == 100 || target_frontend) return;
-    const auto samples = mw34::display::samples(std::getenv("MW34_REMASTER_AA"));
+    const auto samples = sample_grid();
     if (samples.x != 1 || samples.y != 1)
         throw std::runtime_error("Reduced world resolution requires AA off or FXAA, not SSAA");
     if (!remaster_width())
