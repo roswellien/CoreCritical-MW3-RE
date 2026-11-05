@@ -52,6 +52,19 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend ba
   if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
   if (!SDL_ClaimWindowForGPUDevice(device_, window_))
     return std::fprintf(stderr, "mw3: SDL_ClaimWindowForGPUDevice: %s\n", SDL_GetError()), false;
+  // Diagnostic only: compare backend throughput without the default vblank cap.
+  const char* immediate = SDL_getenv("MW3_BENCHMARK_IMMEDIATE");
+  if (immediate && std::strcmp(immediate, "1") == 0) {
+    if (!SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_IMMEDIATE) ||
+        !SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
+                                      SDL_GPU_PRESENTMODE_IMMEDIATE)) {
+      std::fprintf(stderr, "mw3 benchmark: immediate presentation unavailable: %s\n", SDL_GetError());
+      return false;
+    }
+    std::printf("mw3 benchmark: backend=%s adapter=%s present=immediate\n",
+                SDL_GetGPUDeviceDriver(device_),
+                SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device_), SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown"));
+  }
   render_ = std::make_unique<SdlRender3D>(device_, window_);
   render_->set_shape(&shape_);
   return render_->ok();

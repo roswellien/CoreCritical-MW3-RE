@@ -30,6 +30,27 @@ using platform::DrawState;
 using platform::Primitive;
 using platform::TLVertex;
 
+// Wall durations on the calling CPU thread, including waits inside the measured
+// operation. Disabled intervals do not read a clock or change rendering inputs.
+class CpuInterval {
+  public:
+    explicit CpuInterval(std::uint64_t *ticks)
+        : ticks_(ticks), start_(ticks ? SDL_GetPerformanceCounter() : 0) {}
+    ~CpuInterval() {
+        if (ticks_)
+            *ticks_ += SDL_GetPerformanceCounter() - start_;
+    }
+
+  private:
+    std::uint64_t *ticks_;
+    std::uint64_t start_;
+};
+
+bool cpu_profile_requested() {
+    const char *value = std::getenv("MW3_CC_CPU_PROFILE");
+    return value && std::strcmp(value, "1") == 0;
+}
+
 class VisualFloatScope {
   public:
     VisualFloatScope() {
@@ -269,6 +290,19 @@ class FrameRenderer final : public VulkanFrameRenderer {
     void reset_scene_resources() override { reset_pending_ = true; }
 
     ~FrameRenderer() override {
+        if (cpu_profile_) {
+            const double milliseconds = 1000.0 / SDL_GetPerformanceFrequency();
+            std::fprintf(stderr,
+                         "CPU renderer profile (includes warmup): %llu presents, %llu sharp calls, "
+                         "%llu sharp pixels, sharp %.4f ms, %llu render calls, render %.4f ms, "
+                         "transport %.4f ms\n",
+                         static_cast<unsigned long long>(presented_frames_),
+                         static_cast<unsigned long long>(sharp_calls_),
+                         static_cast<unsigned long long>(sharp_pixels_),
+                         sharp_ticks_ * milliseconds,
+                         static_cast<unsigned long long>(render_calls_),
+                         render_ticks_ * milliseconds, transport_ticks_ * milliseconds);
+        }
         const auto quality = quality_statistics();
         std::fprintf(
             stderr,
@@ -529,6 +563,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
         if (scene_.order.empty()) {
             return;
         }
+        CpuInterval interval(cpu_profile_ ? &render_ticks_ : nullptr);
+        if (cpu_profile_)
+            ++render_calls_;
         const bool initialize =
             scene_.width != resident_width_ || scene_.height != resident_height_;
         if (initialize) {
@@ -624,6 +661,7 @@ class FrameRenderer final : public VulkanFrameRenderer {
         if ((SDL_GetWindowFlags(window_) & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) != 0) {
             return;
         }
+        CpuInterval interval(cpu_profile_ ? &transport_ticks_ : nullptr);
         const auto before = renderer_->presents;
         if (!window_bound_) {
             std::vector<uint32_t> argb;
@@ -777,7 +815,16 @@ class FrameRenderer final : public VulkanFrameRenderer {
         if (!renderer_->current(ref.key, ref.hash, w, h)) {
             // Held readback is already straight RGBA at the output extent. Its
             // nearest SSAA sampling must preserve alpha-zero RGB as well.
-            ref.pixels32 = sharp && !entry.held_copy ? sharp_layer(entry, w, h) : entry.pixels;
+            if (sharp && !entry.held_copy) {
+                CpuInterval interval(cpu_profile_ ? &sharp_ticks_ : nullptr);
+                ref.pixels32 = sharp_layer(entry, w, h);
+                if (cpu_profile_) {
+                    ++sharp_calls_;
+                    sharp_pixels_ += std::uint64_t(w) * h;
+                }
+            } else {
+                ref.pixels32 = entry.pixels;
+            }
         }
         index = unsigned(scene_.textures.size());
         scene_.textures.push_back(std::move(ref));
@@ -841,6 +888,9 @@ class FrameRenderer final : public VulkanFrameRenderer {
     unsigned texture_limit_{}, resident_width_{}, resident_height_{};
     int held_width_{}, held_height_{};
     bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
+    const bool cpu_profile_ = cpu_profile_requested();
+    std::uint64_t sharp_ticks_{}, render_ticks_{}, transport_ticks_{};
+    std::uint64_t sharp_calls_{}, sharp_pixels_{}, render_calls_{};
 };
 
 } // namespace
