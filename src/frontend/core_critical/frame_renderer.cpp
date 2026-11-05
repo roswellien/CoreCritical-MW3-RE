@@ -1,4 +1,5 @@
 #include "frame_renderer.hpp"
+#include "prepared_draw_cache.hpp"
 #include "frontend/sdl/cpu_interval.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
@@ -265,6 +266,12 @@ class FrameRenderer final : public VulkanFrameRenderer {
             static_cast<unsigned long long>(quality.anisotropic_samplers),
             static_cast<unsigned long long>(quality.mip_levels));
         const auto assets = asset_statistics();
+        const auto &cache = prepared_draw_cache_.statistics();
+        if (cache.hits || cache.misses || cache.bypasses)
+            std::fprintf(stderr,
+                         "Prepared staging cache: %llu hits, %llu misses, %llu bypasses, %zu bytes\n",
+                         (unsigned long long)cache.hits, (unsigned long long)cache.misses,
+                         (unsigned long long)cache.bypasses, cache.bytes);
         if (assets.prepared_batches || assets.named_textures)
             std::fprintf(stderr,
                          "Prepared visuals: %llu batches, %llu GPU model draws, %llu CPU-clipped "
@@ -532,7 +539,20 @@ class FrameRenderer final : public VulkanFrameRenderer {
         renderer_->render(scene_, initialize, false);
         resident_width_ = scene_.width;
         resident_height_ = scene_.height;
-        scene_ = {};
+        // Reuse hot submission storage, like the SDL renderer. Reset every
+        // scene value and release its resource references while keeping capacity.
+        vk::Scene next{};
+        next.vertices.swap(scene_.vertices);
+        next.vertices.clear();
+        next.draws.swap(scene_.draws);
+        next.draws.clear();
+        next.textures.swap(scene_.textures);
+        next.textures.clear();
+        next.order.swap(scene_.order);
+        next.order.clear();
+        next.clears.swap(scene_.clears);
+        next.clears.clear();
+        scene_ = std::move(next);
         for (auto &entry : textures_) {
             entry.scene_index = entry.sharp_index = no_binding;
         }
@@ -685,17 +705,18 @@ class FrameRenderer final : public VulkanFrameRenderer {
 
     void emit_prepared(const PreparedBatchDraw &source, const platform::ModelDrawContext &context) {
         CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
-        auto staged = prepare_draw(source, context, viewport_, scene_.width, scene_.height,
-                                   prepared_geometry(*source.batch), lighting_.enabled,
-                                   cpu_profile_ ? &prepared_cpu_ : nullptr);
-        auto &draw = staged.draw;
+        const auto staged = prepared_draw_cache_.get(
+            source, context, viewport_, scene_.width, scene_.height,
+            prepared_geometry(*source.batch), lighting_.enabled,
+            cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
+        auto draw = staged->draw;
         draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
         draw.texture = int(bind_texture(prepared_texture(*source.texture), false));
         if (source.normal && lighting_.normals)
             draw.normal_texture = int(bind_texture(prepared_normal(*source.normal), false));
-        scene_.vertices.insert(scene_.vertices.end(), staged.vertices.begin(),
-                               staged.vertices.end());
-        cpu_clipped_triangles_ += staged.clipped_triangles;
+        scene_.vertices.insert(scene_.vertices.end(), staged->vertices.begin(),
+                               staged->vertices.end());
+        cpu_clipped_triangles_ += staged->clipped_triangles;
         if (draw.count) {
             scene_.order.push_back({false, unsigned(scene_.draws.size())});
             scene_.draws.push_back(std::move(draw));
@@ -842,6 +863,13 @@ class FrameRenderer final : public VulkanFrameRenderer {
     std::uint64_t gpu_sharp_draws_{}, render_calls_{};
     std::uint64_t prepared_emit_ticks_{}, append_ticks_{};
     PreparedDrawCpuStatistics prepared_cpu_;
+    const bool prepared_cache_enabled_ = [] {
+        const auto *value = std::getenv("MW3_CC_PREPARED_CACHE");
+        if (!value || !std::strcmp(value, "1")) return true;
+        if (!std::strcmp(value, "0")) return false;
+        throw std::runtime_error("MW3_CC_PREPARED_CACHE must be 0 or 1");
+    }();
+    PreparedDrawCache prepared_draw_cache_;
 };
 
 } // namespace

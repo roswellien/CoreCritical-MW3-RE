@@ -3879,7 +3879,8 @@ class Renderer {
         collect_profile_queries();
         if (profile_queries) {
             std::fprintf(stderr,
-                         "GPU scene profile (includes warmup; excludes quality/presentation): "
+                         "GPU scene profile (includes warmup/inline quality; excludes separate "
+                         "quality/presentation): "
                          "%llu submissions, %.4f ms\n",
                          (unsigned long long)profile_gpu_submissions,
                          double(profile_gpu_ticks) * profile_timestamp_period / 1000000.0);

@@ -151,6 +151,7 @@ prepare_draw(const PreparedBatchDraw &source, const platform::ModelDrawContext &
                                           (context.cy - viewport[1]) * height / viewport[3] - .5f,
                                           context.far_z};
     if (gpu) {
+        result.vertices.reserve(staged.size() * sizeof(platform::TLVertex));
         for (const auto &vertex : staged)
             append(vertex, false);
         auto instance = std::make_shared<vk::ModelInstance>();

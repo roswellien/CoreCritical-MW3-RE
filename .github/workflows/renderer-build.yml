@@ -59,6 +59,6 @@ jobs:
           set "VCPKG_TOOLS=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows"
           set "PATH=%VCPKG_TOOLS%\bin;%VCPKG_TOOLS%\tools\glslang;%PATH%"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DMW3_CORE_CRITICAL_VULKAN=ON "-DMW3_VULKAN_HEADERS=%VCPKG_TOOLS%/include" "-DSDL3_DIR=%CD%/deps/SDL3-3.4.12/cmake" "-DSDL3_ttf_DIR=%CD%/deps/SDL3_ttf-3.2.2/cmake" || exit /b 1
-          cmake --build build --target mw3 mw3tests mw3prepared_checks mw3hud_checks mw3ccvulkan_checks --parallel 3 || exit /b 1
+          cmake --build build --target mw3 mw3tests mw3prepared_checks mw3prepared_staging_checks mw3hud_checks mw3ccvulkan_checks --parallel 3 || exit /b 1
           set "MW3_TEST=msvc_rand,msvc_ftol,ztimer_step_follows_the_clock"
-          ctest --test-dir build -R "^(mw3tests|mw3prepared_checks|mw3hud_checks)$" --output-on-failure
+          ctest --test-dir build -R "^(mw3tests|mw3prepared_checks|mw3prepared_staging_checks|mw3hud_checks)$" --output-on-failure
