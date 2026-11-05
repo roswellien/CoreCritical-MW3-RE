@@ -39,6 +39,20 @@ a large local improvement; it does not establish both-card or whole-game gates.
 Modern geometry changes fog/material policy intentionally, so this is a matched
 workload/settings comparison, not a claim of identical legacy shading.
 
+Final-source confirmation at `ecf231c64c6d0d1ead2638a59a4e51ce9f2c74ab` used
+executable SHA-256
+`36a2ecb6a0c7f9a018ccea99ea274cff67da63da51866259fc5920aee01f1e28`.
+The capture-free legacy baseline repeat `core-baseline-final-r3` exited zero:
+4.5393 ms mean, 220.30 FPS, 7.3937 ms p95. A separate instrumented modern/worker
+run, `core-gpu-thread-profile-final`, also exited zero and reported **zero CPU
+prepared vertices, zero vertex-stage time and zero assembly time**, alongside
+the same 226,124,748 GPU prepared vertex instances and zero prepared CPU fallback
+batches. Its timing is excluded from the lean table because profiling was on.
+The worker completed all 10,444 jobs. Pose/selection, remaining stock TL work and
+GPU fence waits still exist; they are not implied to have disappeared. The final
+source manifest and executable identity are retained separately from the earlier
+candidate snapshot.
+
 ## Demonstrated offload and ownership
 
 Each completed partial-mode lean run reported:
@@ -71,13 +85,17 @@ including portable ownership/FP/failure and early producer-bypass checks, stock
 and prepared GPU/reference images, DXGI/WSI, materials, quality, HUD and staging
 cache checks. The core suite was deliberately limited to native RNG, FP conversion
 and fixed-clock controls. The HUD fixture also passed with explicit local fonts.
-The full unrelated core/SDL suites are not claimed as passing.
+The full unrelated core/SDL suites are not claimed as passing. Three invalid
+CLI values were checked to exit 2 before launch. All 84 unique selected installed
+asset payloads were rehashed against their content identities. An intentional
+inline-on-producer fault made the worker test fail; source was restored and the
+final Release build and 26 selected checks passed again.
 
 The project pre-PR/review skills were applied. The public native fork has neither
 the private `tools/check.py` nor its style checker; actual CMake/CTest,
 changed-source formatting and diff checks substitute for unavailable scripts.
-An independent source review fixed the invalid bool-parser success returns;
-its second pass found no remaining major correctness issues. Minor duplicated
+An independent source review found the invalid bool-parser success returns,
+which were fixed; three passes ended with no remaining major findings. Minor duplicated
 MSVC exception flags and packet setup remain possible cleanup work.
 
 Portable queue and early-handoff/resource targets are included in Linux/macOS
