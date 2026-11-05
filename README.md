@@ -26,6 +26,9 @@ original.
 - **Linux:** the game no longer closes at the end of the intro movies.
 - **Linux:** an install in any letter case now works (all lower case, all upper
   case, or mixed).
+- **A softer message for mods:** when files match neither 1.0 nor 1.2, it now says
+  data mods are read, though they may not play right, and that a mod which
+  patches the old Mech3.exe won't apply. It never stopped the game.
 - **Crashes say why:** a crash or a failed start now leaves a line in the log
   and shows a message box, on every platform.
 - **Windows:** the installer asks for a folder every time, so you can install
