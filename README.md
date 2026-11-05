@@ -15,6 +15,43 @@ Microsoft or MicroProse.
 
 > Found a bug? Please [report it](#reporting-a-bug).
 
+## What's new
+
+Every release's full notes are on the [Releases](../../releases) page, and
+[CHANGES.md](CHANGES.md) lists everything the rebuild changes from the
+original.
+
+**Coming in the next release** (fixed, not released yet):
+
+- **Windows:** the installer asks for a folder every time, so you can install
+  somewhere other than C.
+- **Vehicles on fast machines:** small bumps throw them much less. On rough
+  ground they still tip more than at 30 fps, and they still jump off steep
+  banks at full speed, as in the original.
+- **A band under the sky:** where nothing is drawn between the far ground and
+  the sky, the game now shows the fog's colour.
+- Smaller fixes: a memory leak in the zoom views, a light's position, and the
+  pitch of moving sounds.
+
+**1.0.2 (2026-11-04)**
+
+- **Lancemates walk round things.** When a straight walk fails, they find a
+  way round walls, up ramps and across rivers. Part of bug fixes; not for
+  enemies or in multiplayer.
+- **Lights made during play work.** Jump jets and gunfire light your mech.
+- **A mech no longer walks by itself** when saved stick controls are used with
+  no stick attached.
+
+**1.0.1 (2026-11-03)**
+
+- **Op 1, Mission 2's missile platforms** no longer vanish at high frame rates,
+  which could make the mission impossible to win.
+- **Custom key bindings** work on the Controls screen.
+- **Flight sticks:** twist and throttle reach the right axes, and the throttle
+  lever reaches reverse.
+- **A crash late in a fight** is fixed, along with the end credits on wide
+  screens and the mech lab's "Overwrite?" box.
+
 ## What you need
 
 - **Your own MechWarrior 3**, any of these:

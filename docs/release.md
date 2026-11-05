@@ -7,9 +7,8 @@ packages are built from one commit, so every platform's version is the same.
 ## MW3 v1.0: "done"
 
 Owen, 2026-10-31: MechWarrior 3 is declared done with the tag `v1.0`
-before any Pirate's Moon work reaches `main`. Until then Pirate's Moon
-lives on its own branch (`mac5/pm`); after `v1.0` it merges in, and later
-releases carry both games through the launcher. `v1.0` is tagged when
+before any Pirate's Moon work reaches `main`. Pirate's Moon lives on its own
+branch, `pm`, which never merges to `main` (Owen, 2026-11-04). `v1.0` is tagged when
 every box here is ticked:
 
 - [ ] Multiplayer ported (`docs/multiplayer-port.md`, every piece), with
@@ -64,6 +63,9 @@ every box here is ticked:
       `mw3sdltests` one test at a time under `run_capped.py` (WSL: docs/linux.md,
       Checking).
 - [ ] `CHANGES.md` has a line for every change since the last release.
+- [ ] The README's **What's new** has this release's section, its date, and an
+      emptied "Coming in the next release". Fixes add a line there as they reach
+      `main` (Owen, 2026-11-04).
 - [ ] The release notes are drafted (`docs/release-notes-<version>.md`) and
       Owen has read them.
 - [ ] The players' read-mes match the build: `tools/windows/dist/README.txt`,
