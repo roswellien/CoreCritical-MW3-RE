@@ -51,11 +51,6 @@ it is clear what the designers meant.
   smoke stopped slowing down and ignored the wind, and the wind's gusts
   changed faster the faster the game ran. Both now go by time, at the 30 fps
   pace.
-- **Collisions do the same at any frame rate.** The original applied a wall's and a
-  bump's throttle drop, the wall's turn, the bump's push, a ceiling's crush and knock,
-  a rammed vehicle's damage and shove and the damage between ramming mechs once a
-  frame, so at 120 fps a contact did about four times what it does at 30. Now they
-  go by time; 30 fps is unchanged.
 - **Turrets and mech arms turn at any frame rate.** The original eased
   them toward where they aim, and eased the arms' recoil, by a table that
   rounds a frame's step down to 1/51: above about 150 fps the turrets did

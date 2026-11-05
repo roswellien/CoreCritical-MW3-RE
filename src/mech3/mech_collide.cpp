@@ -50,9 +50,6 @@ Vec3 reflect(const Vec3& n, const Vec3& v) {
   return {s.x + t.x, s.y + t.y, s.z + t.z};
 }
 
-// What a contact keeps per frame, as long as it lasts. FIX (B): per 1/30 s.
-double kept(double rate, float dt) { return zfix::options().per_second ? std::pow(rate, zfix::frame_steps(dt)) : rate; }
-
 void flat_normalize(Vec3& v) {
   zmth::Vec3 a = z(v);
   zmth::flat_normalize(a, a);
@@ -233,10 +230,9 @@ void Mech::wall_response(const CollisionHit& h) {
   const Vec3 nv{into.x + along.x, into.y + along.y, into.z + along.z};
   push = {nv.x - velocity.x, 0.0f, nv.z - velocity.z};
   const int32_t flips = g_calls.ai_reverses ? g_calls.ai_reverses(*this) : 0;
-  // FIX (B): the throttle's drop and the kick per 1/30 s, not per frame.
-  controls->throttle = flips ? -controls->throttle : crt::x87_mul_f24(controls->throttle, kept(0.1, frame_dt));  // 0x005bd378
+  controls->throttle = flips ? -controls->throttle : crt::x87_mul_f24(controls->throttle, 0.1);  // 0x005bd378
   const float sign = (d.z * rs.x - d.x * rs.z) < 0.0f ? -1.0f : 1.0f;
-  vec_58.y = sign * speed * collider.yaw_kick * zfix::frame_steps(frame_dt) + vec_58.y;
+  vec_58.y = sign * speed * collider.yaw_kick + vec_58.y;
   if (this == world().mission_player && world().force_feedback && g_calls.ff_jolt) {
     const float nf[3] = {n.x, n.y, n.z};
     g_calls.ff_jolt(nf, speed / max_speed);
@@ -246,7 +242,6 @@ void Mech::wall_response(const CollisionHit& h) {
 // Mech3.exe 1.2 @ 0x00423600. Airborne: bounce down off it when rising, and a
 // knock on the head. On foot: damage by the volume of the box hit, and a crouch.
 void Mech::ceiling_response(const CollisionHit& h) {
-  const float steps = zfix::frame_steps(frame_dt);  // FIX (B): the knock, the crush and the crouch per 1/30 s
   if (airborne()) {
     if (vec_3c.y > 0.0) {
       const Vec3 v = vec_3c;
@@ -260,20 +255,20 @@ void Mech::ceiling_response(const CollisionHit& h) {
         set_position(*this, q);
       }
     }
-    head->apply_damage(0.002f * steps, 0);  // 0x3b03126f
+    head->apply_damage(0.002f, 0);  // 0x3b03126f
     return;
   }
   const float* b = g_calls.hit_box ? g_calls.hit_box(h.hit.node) : nullptr;
   if (!b) return;
   const float v = (b[4] - b[1]) * (b[5] - b[2]) * (b[3] - b[0]) / kCrushVolume * 0.25f;
   if (v == 0.0f) return;
-  head->apply_damage(crt::x87_mul_f24(v, 0.1) * steps, 0);
-  torso->apply_damage(crt::x87_mul_f24(v, 0.4) * steps, 0);  // 0x005bd3a0
-  const float side = crt::x87_mul_f24(v, 0.25) * steps;      // 0x005bd3a8
+  head->apply_damage(crt::x87_mul_f24(v, 0.1), 0);
+  torso->apply_damage(crt::x87_mul_f24(v, 0.4), 0);  // 0x005bd3a0
+  const float side = crt::x87_mul_f24(v, 0.25);      // 0x005bd3a8
   torso->apply_damage(side, 1);
   torso->apply_damage(side, 2);
-  if (g_calls.crouch) g_calls.crouch(*hip, v * steps);
-  else hip->duck(v * steps);
+  if (g_calls.crouch) g_calls.crouch(*hip, v);
+  else hip->duck(v);
 }
 
 // Mech3.exe 1.2 @ 0x004237c0. Each vehicle hit: a non-allied one takes damage
@@ -281,7 +276,6 @@ void Mech::ceiling_response(const CollisionHit& h) {
 // shoved. Dead units are ignored by the foot probes.
 void Mech::vehicle_response() {
   bool hit = false;
-  const float steps = zfix::frame_steps(frame_dt);  // FIX (B): the damage and the shove per 1/30 s
   // The list is walked from its head (the last sorted) as the exe's.
   for (auto it = collider.vehicles.rbegin(); it != collider.vehicles.rend(); ++it) {
     const CollisionHit& e = *it;
@@ -297,13 +291,13 @@ void Mech::vehicle_response() {
     const Vec3 v = velocity;
     const uint32_t team = g_calls.entity_team ? g_calls.entity_team(ent) : 0;
     if (!(team & allies)) {
-      const float dmg = (v.x * v.x + v.z * v.z) / (max_speed * max_speed) * 20.0f * steps;  // 0x005bd3b0
+      const float dmg = (v.x * v.x + v.z * v.z) / (max_speed * max_speed) * 20.0f;  // 0x005bd3b0
       if (g_calls.entity_damage && g_calls.entity_damage(target, dmg)) return;
     }
     float* bv = g_calls.body_velocity ? g_calls.body_velocity(body) : nullptr;
     float* spin = g_calls.body_spin ? g_calls.body_spin(body) : nullptr;
     if (!bv || !spin) continue;
-    const float s = tonnage() * (g_calls.body_mass ? g_calls.body_mass(body) : 0.0f) * 0.1f * steps;  // 0x005bd3b4
+    const float s = tonnage() * (g_calls.body_mass ? g_calls.body_mass(body) : 0.0f) * 0.1f;  // 0x005bd3b4
     const float nv[3] = {s * v.x + bv[0], s * v.y + bv[1], s * v.z + bv[2]};
     std::memcpy(bv, nv, 12);
     std::memcpy(spin, nv, 12);
@@ -326,10 +320,7 @@ void Mech::mech_response() {
   Mech* other = g_calls.node_mech ? g_calls.node_mech(e.hit.node) : nullptr;
   if (other && !(other->team & allies)) {
     const Vec3 v = velocity;
-    // FIX (B): the damage per 1/30 s. The shove stays: the other's update sets
-    // its velocity anew (0x00419fc0), so it never adds up over frames.
-    const float steps = zfix::frame_steps(frame_dt);
-    const float r = (v.x * v.x + v.z * v.z) / (max_speed * max_speed) * 0.02f * steps;  // 0x005bd3b8
+    const float r = (v.x * v.x + v.z * v.z) / (max_speed * max_speed) * 0.02f;  // 0x005bd3b8
     const float t_other = other->tonnage();
     const float sum = tonnage() + t_other;
     attacker = other;
@@ -418,8 +409,7 @@ bool Mech::collide() {
       const float amt = (kBumpRadius - g_calls.contact_dist(found)) * 1.1f;  // 0x005bd360
       const Vec3 off{amt * away.x, amt * away.y, amt * away.z};
       if (const Vec3* at = position_of(*this)) set_position(*this, {at->x + off.x, at->y + off.y, at->z + off.z});
-      // FIX (B): the shove and the throttle's drop per 1/30 s.
-      const float k = crt::x87_mul_f24(std::fabs(vec_3c.z), 0.6000000238418579) * zfix::frame_steps(frame_dt);  // 0x005bd368
+      const float k = crt::x87_mul_f24(std::fabs(vec_3c.z), 0.6000000238418579);  // 0x005bd368
       push = {push.x + k * away.x, push.y + k * away.y, push.z + k * away.z};
       const float dt = frame_dt;
       const Vec3 mv{off.x + push.x * dt, off.y + push.y * dt, off.z + push.z * dt};
@@ -431,7 +421,7 @@ bool Mech::collide() {
       const float cy = d.z * velocity.x - d.x * velocity.z;
       const float sign = cy < 0.0f ? -1.0f : 1.0f;
       vec_58.y = turn_rate_now() * sign * 1.8f;  // 0x005bd370
-      controls->throttle = crt::x87_mul_f24(controls->throttle, kept(0.1, frame_dt));
+      controls->throttle = crt::x87_mul_f24(controls->throttle, 0.1);
       blocked[1] = true;
       if (this == world().player && move_calls().pilot_sound)
         sounds[13] = move_calls().pilot_sound(*this, kSoundBump, 1.0f, -1.0f);

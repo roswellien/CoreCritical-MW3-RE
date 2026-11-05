@@ -106,11 +106,6 @@ probe hit; the other mech takes `yours / sum` on its torso and gets 0.1 x
 your share of your velocity added (a network message 0x18 for remote mechs).
 Then the wall response.
 
-The shove on another mech is overwritten by that mech's own update (+0x30 is set
-anew from +0x3c and the push), so it never builds up; it matters only to what reads
-the velocity before then. The amounts that do build up go by time in the port
-(`per_second`, fixes.md).
-
 **Vehicle (0x4237c0)**: a non-allied vehicle or the Mobile HQ takes
 |v_xz|^2 / max_speed^2 * 20 damage (vt +0x160); if that kills it nothing
 blocks; otherwise its body is shoved by v * tonnage * body +0x9b0 * 0.1,
