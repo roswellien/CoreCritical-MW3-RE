@@ -1799,6 +1799,12 @@ TEST(sdl_install_is_found_and_saved) {
   fs::remove_all(tmp);
   fs::create_directories(tmp + "/half/zbd");
   std::string missing;
+  // The search tries this machine's own candidates first, so one with MW3
+  // installed (the registry, the default folders) finds that one here.
+  std::string installed;
+  for (const std::string& d : sdlfe::install_candidates())
+    if (installed.empty() && sdlfe::install_valid(d)) installed = d;
+  if (!installed.empty()) std::printf("  (MW3 is installed here: the search finds %s)\n", installed.c_str());
   if (fs::exists(game + "/zbd/reader.zbd")) {
     EXPECT(sdlfe::install_valid(game));
     EXPECT(sdlfe::install_of_pick(game + "/Mech3.exe") == game);
@@ -1806,11 +1812,12 @@ TEST(sdl_install_is_found_and_saved) {
     EXPECT(sdlfe::install_of_pick(game) == game);                        // a folder: itself
     bool searched = true;
     EXPECT(sdlfe::find_install(game, {}, false, &searched) == game && !searched);  // mw3.cfg's, still there
-    EXPECT(sdlfe::find_install(tmp + "/gone", {game}, false, &searched) == game && searched);
+    EXPECT(sdlfe::find_install(tmp + "/gone", {game}, false, &searched) == (installed.empty() ? game : installed) &&
+           searched);
   }
   EXPECT(!sdlfe::install_valid(tmp, &missing) && missing == "zbd\\ and video\\");
   EXPECT(!sdlfe::install_valid(tmp + "/half", &missing) && missing == "zbd\\reader.zbd and video\\");
-  EXPECT(sdlfe::find_install(tmp + "/gone", {tmp + "/half"}, false, nullptr).empty());  // none, and no dialog
+  EXPECT(sdlfe::find_install(tmp + "/gone", {tmp + "/half"}, false, nullptr) == installed);  // else none, no dialog
 #if defined(_WIN32)
   EXPECT(sdlfe::install_of_program_value("\"C:\\Games\\MW3\\MECH3.EXE\"") == "C:\\Games\\MW3");
   EXPECT(sdlfe::install_of_program_value("C:\\Games\\MW3\\") == "C:\\Games\\MW3");
