@@ -187,10 +187,10 @@ TEST(data_folder_a_target_that_cannot_be_listed_is_refused) {
   Scene s("unlisted");
   const std::string to = s.root + "/theirs";
   put(to + "/their_file.txt", "keep me");
-  chmod(to.c_str(), 0);
+  chmod(to.c_str(), 0300);  // writable, so only the listing can refuse it
   const Plan p = plan(s.usual, to, s.usual);
   chmod(to.c_str(), 0755);
-  EXPECT(!p.error.empty());
+  EXPECT(p.error.find("already holds files") != std::string::npos);
   EXPECT(read(to + "/their_file.txt") == "keep me");
 }
 
