@@ -28,6 +28,10 @@ original.
   at it; it now uses the value the original team's own Pirate's Moon sets. This
   changes slightly how feet sit on slopes and when a foot counts as in water.
   This is part of bug fixes.
+- **The target keys tell the HUD again.** Choosing a target with E, W or their
+  Ctrl and Shift forms now does what Z and Q already did: the target triangle
+  pulses, the target's mech sound plays, and a missile lock starts over on the new
+  target instead of carrying across.
 - **The debriefing's scores.** A campaign debriefing now lists the mission's
   objectives, each worth 2500 when done, and counts them in the mission and
   campaign totals and the rank; before, it listed none and scored none. Instant

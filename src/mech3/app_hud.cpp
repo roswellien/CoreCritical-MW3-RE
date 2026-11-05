@@ -1078,6 +1078,10 @@ void program_count_sounds(int id, int* count) {
   };
 }
 
+namespace {
+int g_target_sounds = 0;  // (ours) for program_hud_report
+}  // namespace
+
 bool program_hud_report(HudReport* r) {
   Mech* m = program_view_mech();
   Hud* h = m && m->pilot ? pilot_hud(*m->pilot) : nullptr;
@@ -1092,6 +1096,8 @@ bool program_hud_report(HudReport* r) {
   g_hooks.view_draws = g_hooks.view_depth_fills = 0;
   r->mfd_shown = h->mfd.shown_mode();
   r->target_shown = h->target.shown_mode();
+  r->target_pulse = h->target.x240c;
+  r->target_sounds = g_target_sounds;
   if (auto* mm = static_cast<MissionMap*>(mission_map())) {
     std::snprintf(r->map_name, sizeof r->map_name, "%s", mm->name ? mm->name : "");
     r->map_w = mm->image ? mm->image->width : 0, r->map_h = mm->image ? mm->image->height : 0;
@@ -1222,7 +1228,15 @@ void program_hud_target_set(void* mech) {
   if (!h) return;
   h->target.set_shown(true);
   Mech* tm = m->target && collide_calls().contact_mech ? collide_calls().contact_mech(m->target) : nullptr;
-  if (tm && heat_calls().play_sound) tm->sounds[24] = heat_calls().play_sound(*tm, 0x18);
+  if (tm && heat_calls().play_sound) {
+    tm->sounds[24] = heat_calls().play_sound(*tm, 0x18);
+    ++g_target_sounds;
+  }
+}
+
+void program_hud_target_set_by(const ai::AiTarget* t) {
+  Mech* m = program_view_mech();
+  if (m && static_cast<const ai::AiTarget*>(m) == t) program_hud_target_set(m);
 }
 
 int program_hud_lock_on(void* mech, bool* target_set) {

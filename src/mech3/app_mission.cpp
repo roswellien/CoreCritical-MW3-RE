@@ -1149,6 +1149,10 @@ uint32_t target_weapon_hit(zwep::Handle owner, zwep::WeaponDef* def, zwep::HitRe
 float target_collide(zwep::Handle owner, float damage) { return static_cast<ai::CZAiTarget*>(owner)->on_collide(damage); }
 
 struct WiredTargetHooks : ai::TargetHooks {
+  void target_set(ai::AiTarget& t, ai::Contact* c) override {  // vt+0xc0: 0x0041d890 on the view's mech
+    t.set_target(c, false);
+    program_hud_target_set_by(&t);
+  }
   GameEngine* e = nullptr;
   std::unique_ptr<ai::TargetRec> rec[2];
   uint32_t unported(const char* key, std::initializer_list<zgame::Arg> args) override {

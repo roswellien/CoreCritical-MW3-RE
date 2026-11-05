@@ -9175,6 +9175,137 @@ TEST(mission_c1m1_unported_survey_headless) {
   mech3::options() = mech3::Options{};
 }
 
+// The target keys through the mech's vt+0xc0 (0x0041d890), as the exe's
+// 0x004d6710 and its neighbours call it (hud.md): E, Ctrl+E and Shift+E pressed
+// on c1m1, T between them. Each new target starts TARGET's pulse
+// (0.3 s) and the target sound on the new target's mech.
+TEST(mission_c1m1_target_keys_tell_the_hud_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("mission_target_keys_write"));
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::player_controls_instance() = nullptr;
+  mech3::options() = mech3::Options{};
+  struct Keys : platform::Input {
+    std::vector<platform::KeyEvent> queue;
+    uint32_t t = 0;
+    void key(uint32_t dik, bool down) { queue.push_back({dik, down ? 0x80u : 0u, ++t, t}); }
+    bool open(Device d) override { return d == kKeyboard; }
+    void close(Device) override {}
+    int32_t acquire(Device) override { return 0; }
+    int32_t unacquire(Device) override { return 0; }
+    int32_t keyboard_data(platform::KeyEvent* out, uint32_t* count) override {
+      const uint32_t n = std::min<uint32_t>(*count, static_cast<uint32_t>(queue.size()));
+      std::copy(queue.begin(), queue.begin() + n, out);
+      queue.erase(queue.begin(), queue.begin() + n);
+      *count = n;
+      return 0;
+    }
+    int32_t mouse_state(platform::MouseState*) override { return kNotAcquired; }
+    int32_t joystick_state(platform::JoyState*) override { return kNotAcquired; }
+  } keys;
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  p.input = &keys;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    mech3::GameEngine::Launch l;  // c1m1, the Bushwhacker
+    l.op = 1, l.number = 1, l.index = 0;
+    l.mech = 3;
+    engine.set_launch(l);
+    app.post_intro_ = &mech3::states().load;
+    int frames = 0;
+    void* player = nullptr;
+    void* owens = nullptr;
+    // E, then with T clearing the target between them Ctrl+E and Shift+E.
+    const int keys_of[3] = {0x46, 0x4c, 0x4d};
+    struct Seen { bool targeted = false; float pulse = 0; int sounds = 0; } seen[3];
+    int sounds_before = 0, other_sounds = -1;
+    bool other_picked = false;
+    auto press = [&](int code, bool down) {
+      if (code & 0x200) keys.key(0x1d, down);
+      if (code & 0x400) keys.key(0x2a, down);
+      keys.key(static_cast<uint32_t>(code & 0xff), down);
+    };
+    engine.on_present = [&](int) {
+      if (app.current() != &mech3::states().core) return;
+      ++frames;
+      if (frames == 3) {
+        player = engine.object_of(engine.field32(engine.pilot(), 0x14));
+        int32_t made = 0;
+        const mech3::AiMechMade* ai = mech3::mission_ai_mechs(&made);
+        owens = made == 1 ? ai[0].mech : nullptr;
+        mech3::HudReport r;
+        if (mech3::program_hud_report(&r)) sounds_before = r.target_sounds;
+        if (owens) {
+          mech3::LaunchedMech o;
+          mech3::describe_mech(owens, &o);
+          const float x = o.pos[0] - 150.0f, z = o.pos[2];
+          const float at[3] = {x, ground_under(x, o.pos[1] + 50.0f, z), z};
+          mech3::move_mech(player, at, -1.5707964f);
+        }
+      }
+      if (!player || !owens) return;
+      // Every 20 frames: the key down at 0, up at 1, read at 2; T down at 10, up at 11.
+      const int at = frames - 20, i = at / 20, step = at % 20;
+      if (at < 0 || i > 2) return;
+      const int code = static_cast<int>(zin::key1_of(keys_of[i]));
+      if (step == 0) press(code, true);
+      if (step == 1) press(code, false);
+      if (step == 2) {
+        mech3::HudReport r;
+        if (mech3::program_hud_report(&r)) {
+          seen[i].targeted = mech3::mech_target_object(player) == owens;
+          seen[i].pulse = r.target_pulse;
+          seen[i].sounds = r.target_sounds - sounds_before;
+        }
+      }
+      if (i == 2 && step == 5) {  // another mech's pick is none of the view's HUD
+        auto* t = const_cast<mech3::ai::AiTarget*>(mech3::ai::brain_hooks().targetable(engine.handle_of(owens)));
+        t->nearest_enemy(0);
+        other_picked = t->target != nullptr;
+        mech3::HudReport r;
+        if (mech3::program_hud_report(&r)) other_sounds = r.target_sounds - sounds_before;
+      }
+      if (step == 10) press(static_cast<int>(zin::key1_of(0x49)), true);
+      if (step == 11) press(static_cast<int>(zin::key1_of(0x49)), false);
+    };
+    CountingPump pump;
+    pump.stop = [&] { return frames >= 82; };
+    pump.limit = 1500;
+    app.run(pump);
+    int n = 0;
+    for (const Seen& v : seen) {
+      std::printf("  targeted %d, pulse %.3f, target sounds %d\n", v.targeted, v.pulse, v.sounds);
+      EXPECT(v.targeted && v.pulse > 0.0f && v.sounds == ++n);
+    }
+    EXPECT(other_picked && other_sounds == 3);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
+}
+
 // Playtest #25, LRMs home: the Bushwhacker (roster 3) 150 m west of the
 // Owens facing it, E targets it, the HUD locks (0x00443d20, the manager's
 // +0x88); then it turns away until the reticle is well off the Owens (the
@@ -9254,7 +9385,7 @@ static LrmRun lrm_after_lock(bool turn_away) {
         left = zin::key1_of(2) & 0xff;           // turn left
         next_enemy = zin::key1_of(0x46) & 0xff;  // TARGET_NEXT_E
         mech3::describe_mech(owens, &o);
-        const float x = o.pos[0] - kLrmRange, z = o.pos[2];
+        const float x = o.pos[0] - 150.0f, z = o.pos[2];
         const float at[3] = {x, ground_under(x, o.pos[1] + 50.0f, z), z};
         mech3::move_mech(player, at, -1.5707964f);
         for (int32_t g = 0; g < 5; ++g) {
