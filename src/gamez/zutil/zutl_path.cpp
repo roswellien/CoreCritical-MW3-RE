@@ -19,6 +19,19 @@ std::string join(const std::string& dir, const std::string& rel) {
   if (dir.empty()) return rel;
   return dir.back() == '/' ? dir + rel : dir + "/" + rel;
 }
+bool same_letters(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i)
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+  return true;
+}
+// A file in a mount, by any_case.
+std::string in_mount(const std::string& dir, const std::string& rel) {
+  std::string p = join(dir, rel);
+  if (is_file(p)) return p;
+  p = any_case(dir, rel);
+  return !p.empty() && is_file(p) ? p : std::string{};
+}
 std::string upper(std::string s) {
   for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   return s;
@@ -113,6 +126,37 @@ bool outside(const std::string& h) {
 }  // namespace
 
 bool game_text(const std::string& utf8, std::string* out) { return to_game(utf8, out); }
+
+std::string any_case(const std::string& root, const std::string& rel) {
+  std::string at = root;
+  std::error_code ec;
+  // The root by its letters too: the game's own mounts are named ("<install>/zbd/c1").
+  if (!at.empty() && !std::filesystem::exists(at, ec)) {
+    const size_t slash = at.rfind('/');
+    if (slash == std::string::npos || slash == 0) return {};
+    at = any_case(at.substr(0, slash), at.substr(slash + 1));
+    if (at.empty()) return {};
+  }
+  for (size_t i = 0; i < rel.size();) {
+    const size_t end = std::min(rel.find('/', i), rel.size());
+    const std::string part = rel.substr(i, end - i);
+    i = end + 1;
+    if (part.empty()) continue;
+    std::string next = join(at, part);
+    if (!std::filesystem::exists(next, ec)) {
+      next.clear();
+      for (std::filesystem::directory_iterator it(at.empty() ? "." : at, ec), last; !ec && it != last; it.increment(ec))
+        if (same_letters(it->path().filename().string(), part)) {
+          next = join(at, it->path().filename().string());
+          break;
+        }
+      if (next.empty()) return {};
+    }
+    at = next;
+  }
+  return std::filesystem::exists(at, ec) ? at : std::string{};
+}
+
 Mounts& mounts() { return g_mounts; }
 
 void mount(const std::string& dir) { g_mounts.read.push_back(dir); }
@@ -139,8 +183,8 @@ bool mod_may_serve(const std::string& host_path) {
 std::string find_in_mods(const std::string& host_path) {
   if (host_path.empty() || absolute(host_path) || outside(host_path) || !mod_may_serve(host_path)) return {};
   for (const std::string& m : g_mounts.mods) {
-    const std::string p = join(m, host_path);
-    if (is_file(p)) return p;
+    const std::string p = in_mount(m, host_path);
+    if (!p.empty()) return p;
   }
   return {};
 }
@@ -166,8 +210,8 @@ std::string find(const char* path) {
   if (!g_mounts.write.empty() && is_file(join(g_mounts.write, h))) return join(g_mounts.write, h);  // what the game wrote
   for (const std::string& dir : g_mounts.read) {
     if (!g_mounts.mods.empty() && is_mod_dir(dir) && !mod_may_serve(h)) continue;
-    const std::string p = join(dir, h);
-    if (is_file(p)) return p;
+    const std::string p = in_mount(dir, h);
+    if (!p.empty()) return p;
   }
   return is_file(h) ? h : std::string{};  // relative to the working directory, as before
 }
@@ -183,8 +227,8 @@ std::vector<std::string> find_all(const char* path) {
   if (!g_mounts.write.empty() && is_file(join(g_mounts.write, h))) out.push_back(join(g_mounts.write, h));
   for (const std::string& dir : g_mounts.read) {
     if (!g_mounts.mods.empty() && is_mod_dir(dir) && !mod_may_serve(h)) continue;
-    const std::string p = join(dir, h);
-    if (is_file(p) && std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
+    const std::string p = in_mount(dir, h);
+    if (!p.empty() && std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
   }
   return out;
 }
@@ -226,7 +270,8 @@ std::vector<std::string> list(const char* pattern) {
   for (const std::string& r : roots) {
     if (!g_mounts.mods.empty() && is_mod_dir(r) && !mod_may_serve(dir + "/")) continue;
     std::error_code ec;
-    for (std::filesystem::directory_iterator it(join(r, dir), ec), end; !ec && it != end; it.increment(ec)) {
+    const std::string at = any_case(r, dir);  // the folder's case too, as the names'
+    for (std::filesystem::directory_iterator it(at.empty() ? join(r, dir) : at, ec), end; !ec && it != end; it.increment(ec)) {
       if (!it->is_regular_file(ec)) continue;
       std::string name;
       if (!to_game(it->path().filename().string(), &name)) continue;  // no name the game could open

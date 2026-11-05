@@ -386,7 +386,7 @@ std::vector<std::string> mod_check(const std::string& dir, const std::string& in
       out.push_back(rel + ": the player's own kind of file, which a mod cannot replace (ignored)");
       continue;
     }
-    const bool over = !install.empty() && fs::is_regular_file(fs::path(install) / rel, ec);
+    const bool over = !install.empty() && fs::is_regular_file(zutl::any_case(install, rel), ec);
     out.push_back(rel + (install.empty() ? "" : over ? ": replaces the game's" : ": added"));
     const std::string host = (fs::path(dir) / rel).generic_string();
     const std::string name = low.substr(low.rfind('/') == std::string::npos ? 0 : low.rfind('/') + 1);

@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "frontend/sdl/sdl_child.h"
+#include "gamez/zutil/zutl_path.h"
 
 namespace sdlfe {
 namespace fs = std::filesystem;
@@ -44,7 +45,7 @@ std::string importer_path() {
 int movies_missing(const std::string& source, const std::string& write_dir) {
   std::error_code ec;
   int n = 0;
-  for (const auto& e : fs::directory_iterator(fs::path(source) / "video", ec)) {
+  for (const auto& e : fs::directory_iterator(zutl::any_case(source, "video"), ec)) {
     if (lower(e.path().extension().string()) != ".avi") continue;
     if (!fs::exists(fs::path(write_dir) / "video" / (lower(e.path().stem().string()) + ".fmv"), ec)) ++n;
   }

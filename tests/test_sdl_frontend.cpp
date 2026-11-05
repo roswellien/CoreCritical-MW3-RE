@@ -1809,6 +1809,43 @@ TEST(sdl_program_mouse_click_fires_the_laser) {
 // the installer's "Program" value is a folder or the exe's path; mw3.cfg's
 // install= replaced with the other lines kept; mw3.cfg's own first, then the
 // search, and nothing asked when asking is not allowed.
+// An install in any case (FIX (A), zutl::any_case): lower, upper and mixed, each
+// part found by its letters. On a case-insensitive disk the exact name answers,
+// and only the "none" lines test anything: docs/linux.md, Checking runs it on Linux.
+TEST(sdl_install_any_case_finds_the_files) {
+  const std::string dir = std::string(MW3_TEST_TMP) + "/sdl_any_case";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  auto file = [&](const std::string& rel) {
+    std::filesystem::create_directories(std::filesystem::path(dir + "/" + rel).parent_path(), ec);
+    std::ofstream(dir + "/" + rel) << "x";
+  };
+  file("low/zbd/reader.zbd"), file("low/mech3msg.dll");
+  file("UP/ZBD/READER.ZBD"), file("UP/VIDEO/INTRO.AVI");
+  file("Mix/Zbd/Reader.zbd");
+  EXPECT(sdlfe::install_valid(dir + "/low"));
+  EXPECT(sdlfe::install_valid(dir + "/UP"));
+  EXPECT(sdlfe::install_valid(dir + "/Mix"));
+  EXPECT(!zutl::any_case(dir + "/low", "Mech3Msg.dll").empty());
+  EXPECT(!zutl::any_case(dir + "/UP", "video/intro.avi").empty());
+  EXPECT(!zutl::any_case(dir + "/UP", "video").empty());
+  EXPECT(zutl::any_case(dir + "/low", "Mech3.exe").empty());
+  EXPECT(zutl::any_case(dir + "/low", "zbd/none/reader.zbd").empty());
+  // Through the mounts, each folder keeping its order: an earlier mount's copy in another case wins.
+  file("a/ZBD/One.zbd"), file("b/zbd/one.zbd");
+  const zutl::Mounts saved = zutl::mounts();
+  zutl::mounts() = {};
+  zutl::mount(dir + "/a"), zutl::mount(dir + "/b");
+  zutl::mount(dir + "/UP/zbd");  // a mount named by the game, in the install's other case
+  const bool in_named_mount = !zutl::find("reader.zbd").empty();
+  const std::string found = zutl::find("zbd\\one.zbd");
+  const bool other_missing = zutl::find("zbd\\two.zbd").empty();
+  zutl::mounts() = saved;
+  EXPECT(found.find("/a/") != std::string::npos);
+  EXPECT(other_missing);
+  EXPECT(in_named_mount);
+}
+
 TEST(sdl_install_is_found_and_saved) {
   namespace fs = std::filesystem;
   const std::string game = MW3_GAME_DIR, tmp = std::string(MW3_TEST_TMP) + "/sdl_install";

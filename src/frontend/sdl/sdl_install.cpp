@@ -1,4 +1,5 @@
 #include "frontend/sdl/sdl_install.h"
+#include "gamez/zutil/zutl_path.h"
 
 #include <SDL3/SDL.h>
 
@@ -33,10 +34,10 @@ std::string parent(const std::string& p) { return fs::path(p).parent_path().stri
 
 bool install_valid(const std::string& dir, std::string* missing) {
   std::error_code ec;
-  if (!dir.empty() && fs::is_regular_file(fs::path(dir) / "zbd" / "reader.zbd", ec)) return true;
+  if (!dir.empty() && fs::is_regular_file(zutl::any_case(dir, "zbd/reader.zbd"), ec)) return true;
   if (missing) {
-    *missing = dir.empty() || !fs::is_directory(fs::path(dir) / "zbd", ec) ? "zbd\\" : "zbd\\reader.zbd";
-    if (dir.empty() || !fs::is_directory(fs::path(dir) / "video", ec)) *missing += " and video\\";
+    *missing = dir.empty() || !fs::is_directory(zutl::any_case(dir, "zbd"), ec) ? "zbd\\" : "zbd\\reader.zbd";
+    if (dir.empty() || !fs::is_directory(zutl::any_case(dir, "video"), ec)) *missing += " and video\\";
   }
   return false;
 }

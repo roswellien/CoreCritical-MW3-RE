@@ -17,6 +17,7 @@
 #include "mech3/disc_install.h"
 #include "mech3/patch_import.h"
 #include "mech3/source_archive.h"
+#include "gamez/zutil/zutl_path.h"
 
 namespace fs = std::filesystem;
 
@@ -384,10 +385,10 @@ Found map_source(const std::string& path, const MapProgress& progress) {
   fs::path p(path);
   if (fs::is_regular_file(p, ec) && lower(p.filename().string()) == "mech3.exe") p = p.parent_path();
   const std::string ps = p.string();
-  if (fs::is_directory(p, ec) && fs::exists(p / "zbd" / "reader.zbd", ec)) {
+  if (fs::is_directory(p, ec) && !zutl::any_case(ps, "zbd/reader.zbd").empty()) {
     // An installed copy, on disk.
     Found f;
-    std::FILE* fh = std::fopen((p / "zbd" / "reader.zbd").string().c_str(), "rb");
+    std::FILE* fh = std::fopen(zutl::any_case(ps, "zbd/reader.zbd").c_str(), "rb");
     std::vector<uint8_t> b;
     if (fh) {
       uint8_t buf[1 << 16];

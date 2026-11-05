@@ -465,6 +465,7 @@ Noted but not yet ported:
 
 - **The AppImage's launcher outlives the game** (FIX (A), ours; `Launcher::watch_game`): closing it unmounted the image under the running game, SIGBUS at the end of the intro. `docs/linux.md`, Packaging.
 - **A crash says why** (ours; `crash_report.cpp`): the log and a box. `docs/program.md`, The log.
+- **An install in any letter case** (FIX (A); `zutl::any_case`): the original's names meet Windows, where case does not matter. On a case-sensitive disk each part of a path is taken exact if it is there, else by its letters; each mount keeps its place in the order. `docs/assets-layer.md`.
 
 ## Original bugs still to fix
 
