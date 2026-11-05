@@ -16,7 +16,11 @@
 
 namespace mech3::source {
 
-bool archives_supported() { return MW3_HAVE_LIBARCHIVE + 0 != 0; }
+#ifdef MW3_HAVE_LIBARCHIVE
+bool archives_supported() { return true; }
+#else
+bool archives_supported() { return false; }
+#endif
 
 bool archive_name(const std::string& name) {
   std::string n;

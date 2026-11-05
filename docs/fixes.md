@@ -463,6 +463,9 @@ Noted but not yet ported:
   Whether modern Windows reports this correctly is unchecked; the rebuild asks
   its `directx_version` hook and ignores the answer.
 
+- **The AppImage's launcher outlives the game** (FIX (A), ours; `Launcher::watch_game`): closing it unmounted the image under the running game, SIGBUS at the end of the intro. `docs/linux.md`, Packaging.
+- **A crash says why** (ours; `crash_report.cpp`): the log and a box. `docs/program.md`, The log.
+
 ## Original bugs still to fix
 
 Bugs whose intent is clear, fixed as the port reaches the code:

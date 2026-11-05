@@ -582,6 +582,9 @@ void Launcher::start_game() {
   SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, SDL_PROCESS_STDIO_NULL);
   SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_NULL);
   SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, SDL_PROCESS_STDIO_NULL);
+  // The game's box after a crash would page from a mount going away: this
+  // program's instead (watch_game), which stays for an AppImage.
+  if (std::getenv("APPIMAGE")) SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "MW3_LAUNCHER_WATCHES", "1", true);
   game_ = SDL_CreateProcessWithProperties(props);
   SDL_DestroyProperties(props);
   if (!game_) {
@@ -619,9 +622,26 @@ void Launcher::watch_game() {
     std::printf("mw3launcher: the game's first frame %.0f ms after MECHWARRIOR 3 was pressed: the launcher closes\n", ms);
     fs::remove(ready_file_, ec);
     fs::remove(ready_file_ + ".status", ec);
-    SDL_DestroyProcess(game_);  // let go: the game runs on
-    game_ = nullptr;
     if (win_) SDL_HideWindow(win_);
+    // FIX (A): an AppImage unmounts when its first process (this) ends, with
+    // the game still paging its code and libraries from there: it would die
+    // when it reaches a page not yet read, after the intro. So here this
+    // waits, hidden, and says if the game crashes (docs/linux.md, Packaging).
+    if (std::getenv("APPIMAGE")) {
+      int code = 0;
+      std::fflush(stdout);  // a long wait: the log has this far
+      SDL_WaitProcess(game_, true, &code);
+      std::printf("mw3launcher: MechWarrior 3 exited (%d) after %.1f s\n", code,
+                  static_cast<double>(SDL_GetTicksNS() - game_click_) / 1e9);
+      std::fflush(stdout);
+      if (code < 0) {
+        const std::string text = "MechWarrior 3 crashed (signal " + std::to_string(-code) + ").\n\nThe log is " +
+                                 o_.write_dir + "/mw3.log\nPlease include it if you report this.";
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "MechWarrior 3", text.c_str(), nullptr);
+      }
+    }
+    SDL_DestroyProcess(game_);  // let go: the game runs on, where it has not ended above
+    game_ = nullptr;
     done_ = true;
     return;
   }

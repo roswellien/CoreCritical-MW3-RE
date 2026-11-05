@@ -647,6 +647,7 @@ if(SDL3_FOUND)
     add_executable(mw3
       src/frontend/sdl/mw3_main.cpp
       src/frontend/sdl/run_log.cpp
+      src/frontend/sdl/crash_report.cpp
       src/frontend/sdl/launcher.cpp
       src/frontend/sdl/debug_states.cpp
       src/frontend/sdl/campaign_chain.cpp
@@ -692,6 +693,7 @@ if(SDL3_FOUND)
       src/frontend/sdl/launcher_main.cpp
       src/frontend/sdl/launcher.cpp
       src/frontend/sdl/run_log.cpp
+      src/frontend/sdl/crash_report.cpp
     )
     target_link_libraries(mw3launcher PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     target_compile_definitions(mw3launcher PRIVATE MW3_VERSION="${MW3_VERSION}")

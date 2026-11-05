@@ -1913,6 +1913,29 @@ TEST(sdl_program_frames_end_a_paused_mission) {
 // A check run (--hidden --frames) with mw3.cfg's install gone and the search
 // finding none (MW3_FIND_INSTALL=1: not the development copy) quits with the
 // report, never a dialog; with the development copy it starts.
+// A crash says why in the log (crash_report.h), for a player's report. The
+// test's run stops at the log line, with no box and no real crash.
+TEST(sdl_program_crash_says_why_in_the_log) {
+  const std::string dir = std::string(MW3_TEST_TMP) + "/sdl_crash_report";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  std::filesystem::create_directories(dir, ec);
+  setenv("MW3_CRASH_TEST", "1", 1);
+  std::vector<std::string> args = {MW3_BIN, "--nosound", "--write-dir", dir};
+  std::vector<char*> argv;
+  for (std::string& a : args) argv.push_back(a.data());
+  argv.push_back(nullptr);
+  pid_t pid = 0;
+  const int spawned = posix_spawn(&pid, MW3_BIN, nullptr, nullptr, argv.data(), environ);
+  unsetenv("MW3_CRASH_TEST");
+  EXPECT(spawned == 0);
+  int status = 0;
+  EXPECT(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 70);
+  std::ifstream in(dir + "/mw3.log");
+  const std::string log((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT(log.find("mw3: crashed: segmentation fault") != std::string::npos);
+}
+
 TEST(sdl_program_check_runs_never_ask_for_the_install) {
   const std::string dir = std::string(MW3_TEST_TMP) + "/sdl_find_install_write";
   std::filesystem::remove_all(dir);
@@ -4288,6 +4311,14 @@ TEST(sdl_program_launcher_starts_mw3_as_its_own_program) {
          r.args[7] == "--ready-file");
   EXPECT(r.exited && r.game_alive && r.game_finished);
   EXPECT(has(r.log, "the game's first frame") && has(r.log, "the launcher closes") && !has(r.log, "MechWarrior 3 exited"));
+}
+
+// In an AppImage the launcher waits for the game: its end would unmount what
+// the game is running from (docs/linux.md, Packaging).
+TEST(sdl_program_launcher_waits_for_the_game_in_an_appimage) {
+  const LauncherRun r = run_launcher_with("launcher_game_image", "READY\nsleep 2", nullptr, {{"APPIMAGE", "/x.AppImage"}});
+  EXPECT(r.exited && !r.game_alive && r.game_finished);
+  EXPECT(has(r.log, "the game's first frame") && has(r.log, "MechWarrior 3 exited (0)"));
 }
 
 TEST(sdl_program_launcher_stays_when_the_game_fails_or_is_slow) {
