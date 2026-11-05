@@ -36,7 +36,7 @@ original.
   with the lever below stop, or pressing Toggle throttle direction (Backspace or
   stick button 10) with it above stop, could leave the lever backwards until the
   mission ended. That toggle no longer affects a lever. If yours runs backwards
-  from the start, use the Invert box (see Joysticks below).
+  from the start, use the Invert box (Options, Controls, Assign Axis).
 - **Op 2 Mission 2's gas kills.** After the Air Refinery goes down, standing in its
   gas now destroys you, or Dominic, as the original does; before, nothing happened.
 - **The debriefing's scores.** A campaign debriefing now lists the mission's
