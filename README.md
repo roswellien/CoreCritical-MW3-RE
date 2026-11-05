@@ -21,6 +21,14 @@ Every release's full notes are on the [Releases](../../releases) page, and
 [CHANGES.md](CHANGES.md) lists everything the rebuild changes from the
 original.
 
+### Coming in the next release
+
+- **Where a foot reads the ground.** The original never filled in the setting
+  that decides when a foot uses the ground under its middle. Our fix guessed
+  at it; it now uses the value the original team's own Pirate's Moon sets. This
+  changes slightly how feet sit on slopes and when a foot counts as in water.
+  This is part of bug fixes.
+
 **1.0.3 (2026-11-05)**
 
 - **Your data folder can live on another drive:** GAME FILES, MY DATA FOLDER in the

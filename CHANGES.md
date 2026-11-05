@@ -89,7 +89,8 @@ it is clear what the designers meant.
 - **Feet use the ground under their middle.** Each foot reads the ground
   at its front, middle and back, but the setting that picks the middle was
   never filled in, so the game used leftover memory: usually the front or
-  back reading, sometimes any. The middle is used now when it is nearest.
+  back reading, sometimes any. The middle is now used when the foot is close
+  to it, by the value the original team's own Pirate's Moon sets.
   This touches how feet sit on slopes and riverbanks and when a foot counts
   as in water.
 - **Both feet ease into a walk.** For the first two thirds of a second of

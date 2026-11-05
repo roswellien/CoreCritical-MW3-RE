@@ -543,6 +543,11 @@ TEST(fix_foot_uses_its_middle_probe) {
   mech3::GroundHit* hit = nullptr;
   s.height_at(0, 1.0f, &hit);
   EXPECT(hit == &s.contact[1] && s.water_at(0, 1.0f, &surface));
+  // The width is half x 0.5 = 3, so the middle counts within 1.5 of it, as in Pirate's Moon.
+  s.height_at(0, 1.4f, &hit);
+  EXPECT(hit == &s.contact[1] && s.water_at(0, 1.4f, &surface));
+  s.height_at(0, 1.6f, &hit);
+  EXPECT(hit == &s.contact[2] && !s.water_at(0, 1.6f, &surface));
   zfix::options().bugs = false;
   s.height_at(0, 1.0f, &hit);
   EXPECT(hit == &s.contact[2] && !s.water_at(0, 1.0f, &surface));
