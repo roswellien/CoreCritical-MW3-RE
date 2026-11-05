@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <d3d11_1.h>
-#include <dxgi1_2.h>
+#include <dxgi1_5.h>
 #include <stdexcept>
 #include <string>
 #include <vulkan/vulkan_core.h>
@@ -34,6 +34,7 @@ class DxgiPresent {
     unsigned width_{}, height_{}, family_{};
     VkExtent3D maximum_extent_{};
     bool initialized_{}, used_{};
+    bool allow_tearing_{};
     bool capture_requested_{}, capture_ready_{};
     unsigned capture_x_{}, capture_y_{};
     std::array<unsigned char, 4> captured_pixel_{};
@@ -127,6 +128,13 @@ class DxgiPresent {
         Com<IDXGIFactory1> factory;
         check_hr(::CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "create adapter factory");
         check_hr(factory.As(&factory_), "query presentation factory");
+        Com<IDXGIFactory5> tearing_factory;
+        BOOL tearing_supported = FALSE;
+        allow_tearing_ = SUCCEEDED(factory.As(&tearing_factory)) &&
+                         SUCCEEDED(tearing_factory->CheckFeatureSupport(
+                             DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearing_supported,
+                             sizeof(tearing_supported))) &&
+                         tearing_supported;
         Com<IDXGIAdapter1> selected;
         for (unsigned index = 0;; ++index) {
             Com<IDXGIAdapter1> candidate;
@@ -197,6 +205,7 @@ class DxgiPresent {
         window_ = {};
         width_ = height_ = family_ = 0;
         initialized_ = used_ = capture_requested_ = capture_ready_ = false;
+        allow_tearing_ = false;
     }
     void prepare(HWND window, unsigned width, unsigned height) {
         if (!width || !height || width > maximum_extent_.width || height > maximum_extent_.height)
@@ -209,7 +218,8 @@ class DxgiPresent {
         if (swap_) {
             context_->ClearState();
             context_->Flush();
-            check_hr(swap_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0),
+            check_hr(swap_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN,
+                                          allow_tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0),
                      "resize swapchain");
         } else {
             DXGI_SWAP_CHAIN_DESC1 description{};
@@ -221,6 +231,9 @@ class DxgiPresent {
             description.BufferCount = 2;
             description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             description.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+            // Interval zero can still be paced by desktop composition. Creation
+            // and resize must retain the flag used by VSync-off presentation.
+            description.Flags = allow_tearing_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
             check_hr(factory_->CreateSwapChainForHwnd(d3d_.Get(), window, &description, nullptr,
                                                       nullptr, &swap_),
                      "create swapchain");
@@ -362,7 +375,8 @@ class DxgiPresent {
             context_->Flush();
             ready.release();
         }
-        const auto result = swap_->Present(vsync ? 1 : 0, 0);
+        const UINT flags = !vsync && allow_tearing_ ? DXGI_PRESENT_ALLOW_TEARING : 0;
+        const auto result = swap_->Present(vsync ? 1 : 0, flags);
         check_hr(result, "present");
         capture_ready_ = captured && result == S_OK;
         return result == S_OK;

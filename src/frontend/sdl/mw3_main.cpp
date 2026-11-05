@@ -1011,6 +1011,12 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     std::unique_ptr<mech3::MultiplayerGame> multi_game;  // --mission <dir>mp<N>: the launch's
     std::vector<double> frame_ms;  // --frame-times: each frame's wall time
     uint64_t frame_last = 0;
+    auto record_frame_time = [&](int frame) {
+      if (a.frame_times <= 0 || frame < a.frame_times) return;
+      const uint64_t now = SDL_GetPerformanceCounter();
+      if (frame_last) frame_ms.push_back(static_cast<double>(now - frame_last) * 1000.0 / SDL_GetPerformanceFrequency());
+      frame_last = now;
+    };
     bool launch = false, launch_done = false;
     if (!a.mission.empty() && !a.fly) {
       // Through the original's states: the Load state loads the mission
@@ -1142,11 +1148,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         // (the pause and end screens draw none, and --frames must still end the run).
         if (!a.shot_any && !engine.drew_scene() && shots == 0) return;
         ++shots;
-        if (a.frame_times > 0 && shots >= a.frame_times) {
-          const uint64_t now = SDL_GetPerformanceCounter();
-          if (frame_last) frame_ms.push_back(static_cast<double>(now - frame_last) * 1000.0 / SDL_GetPerformanceFrequency());
-          frame_last = now;
-        }
+        record_frame_time(shots);
         // --vehicle-ahead (ours, for checking a vehicle up close: its shadow, its model, its weapons).
         static void* held = nullptr;
         static float held_at[3];
@@ -1357,6 +1359,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     if (!debug && !launch)
       engine.on_present = [&](int) {
         ++menu_frames;
+        record_frame_time(menu_frames);
         if (chain) chain->frame();
         if (modes) modes->frame();
         auto key = [&](int dik, bool down) {
@@ -1475,27 +1478,38 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         for (Args::ClickAt& c : clicks)
           if (c.ingame) c.frame = s_menu_in_game ? s_menu_game_from + c.frame : -100;
         for (const Args::ClickAt& c : clicks) {
+          if (menu_frames != c.frame && menu_frames != c.frame + 1 && menu_frames != c.frame + 2) continue;
           // The cursor put on the point (zInput's 0x0051b440, the game's
           // 640 x 480 about its centre), then the press and the release.
           // A 640x480 frame pixel; over a mission on a canvas the dialogs' frame
           // is centred (resolution.md step 5); the menus' frame is at 0, and
           // with wide menus a right group's piece is the extra width further.
+          const float dw = static_cast<float>(mech3::display().w > 0 ? mech3::display().w : 640);
+          const float dh = static_cast<float>(mech3::display().h > 0 ? mech3::display().h : 480);
+          const bool over_mission = app.current() == &mech3::states().core || app.current() == &mech3::states().pause;
+          const int32_t extra = std::max(0, mech3::display().w - 640);
+          const int32_t ox = over_mission ? ztwod::dialog_origin().x : c.group == 2 ? extra : c.group == 1 ? extra / 2 : 0;
+          const int32_t oy = over_mission ? ztwod::dialog_origin().y : 0;
+          const float px = static_cast<float>(c.x + ox), py = static_cast<float>(c.y + oy);
+          int ww = 0, wh = 0;
+          window.client_size(&ww, &wh);
+          float wx = 0, wy = 0;
+          sdlfe::frame_to_window(px, py, static_cast<float>(ww), static_cast<float>(wh), window.shape(), &wx, &wy);
           if (menu_frames == c.frame) {
-            const float dw = static_cast<float>(mech3::display().w > 0 ? mech3::display().w : 640);
-            const float dh = static_cast<float>(mech3::display().h > 0 ? mech3::display().h : 480);
-            const bool over_mission = app.current() == &mech3::states().core || app.current() == &mech3::states().pause;
-            const int32_t extra = std::max(0, mech3::display().w - 640);
-            const int32_t ox = over_mission ? ztwod::dialog_origin().x : c.group == 2 ? extra : c.group == 1 ? extra / 2 : 0;
-            const int32_t oy = over_mission ? ztwod::dialog_origin().y : 0;
-            const float px = static_cast<float>(c.x + ox), py = static_cast<float>(c.y + oy);
             zin::mouse_set((px - dw / 2) / (dw / 2), (py - dh / 2) / (dh / 2));
+            // Windowed menus follow SDL's absolute cursor. Keep the synthetic
+            // motion and buttons in window coordinates, like physical input.
+            SDL_Event ev{};
+            ev.type = SDL_EVENT_MOUSE_MOTION;
+            ev.motion.x = wx, ev.motion.y = wy;
+            SDL_PushEvent(&ev);
           }
           if (!c.hover && (menu_frames == c.frame + 1 || menu_frames == c.frame + 2)) {
             SDL_Event ev{};
             ev.type = menu_frames == c.frame + 1 ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
             ev.button.button = SDL_BUTTON_LEFT;
             ev.button.down = menu_frames == c.frame + 1;
-            ev.button.x = static_cast<float>(c.x), ev.button.y = static_cast<float>(c.y);
+            ev.button.x = wx, ev.button.y = wy;
             SDL_PushEvent(&ev);
           }
         }
@@ -1641,7 +1655,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         double sum = 0;
         for (double v : s) sum += v;
         auto at = [&](double q) { return s[std::min(s.size() - 1, static_cast<size_t>(q * s.size()))]; };
-        std::printf("mw3: frame times over %zu frames: mean %.2f ms, median %.2f, p95 %.2f, p99 %.2f, max %.2f\n",
+        std::printf("mw3: frame times over %zu frames: mean %.4f ms, median %.4f, p95 %.4f, p99 %.4f, max %.4f\n",
                     s.size(), sum / s.size(), at(0.5), at(0.95), at(0.99), s.back());
       }
     }
