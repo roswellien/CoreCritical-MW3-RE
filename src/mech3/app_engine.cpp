@@ -43,6 +43,7 @@
 #include "gamez/zinput/zinput.h"
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_init.h"
 #include "gamez/zmodel/gmod_light.h"
@@ -54,6 +55,7 @@
 #include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zsound/zsnd_cd.h"
+#include "gamez/zutil/zfix.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zrender/zrndr_tint.h"
@@ -792,10 +794,13 @@ void GameEngine::video_clear_a(Handle rect) {
     for (int i = 0; i < 4; ++i) r[i] = static_cast<int32_t>(peek32(rect + 4 * i));
   zvid::depth_fill(r);
 }
-// 0x00576cf0: the 3D window cleared before the Core state draws (the sky
-// colour of the debug viewer: the window's clear colour is not traced).
+// 0x00576cf0: the frame before the Core state draws. The exe's colour clear is off here (0x005777f0), depth
+// only. FIX (bug): with bug fixes on, the fog's colour fills what no draw covers (zmod::fog_frame_fill).
 void GameEngine::video_clear_b(Handle) {
-  if (p_.render) p_.render->clear(true, 89, 115, 140);
+  if (!p_.render) return;
+  uint8_t r, g, b;
+  zmod::fog_frame_fill(&r, &g, &b);
+  p_.render->clear(zfix::options().bugs, r, g, b);
 }
 // 0x00579840: the cursor's on/off, the old state back. The menus draw their own.
 uint32_t GameEngine::video_show_cursor(uint32_t on) {

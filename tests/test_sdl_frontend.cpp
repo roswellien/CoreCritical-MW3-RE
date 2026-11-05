@@ -39,6 +39,7 @@
 #include "frontend/sdl/sdl_vfw.h"
 #include "mech3/app_movie.h"
 #include "mech3/movie_shape.h"
+#include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zutil/zfix.h"
@@ -1025,6 +1026,21 @@ TEST(sdl_render_keeps_a_shown_frame) {
 // A mission's colour clear is off (start_mission): a new back buffer, at the first frame or after
 // a size change, still starts a defined black where no draw reaches. Metal's undefined memory
 // happened to be magenta; anything but the defined colour fails here.
+// FIX (bug), Owen 2026-11-04: what no draw covers in a mission takes the fog's colour; black with fog off.
+TEST(mission_frame_fill_is_the_fogs_colour) {
+  const zmod::Fog kept = zmod::fog();
+  const float tan[3] = {0.8f, 0.5f, 0.25f};
+  zmod::fog().on = 1;
+  for (int i = 0; i < 3; ++i) zmod::fog().color[i] = tan[i];
+  uint8_t r = 1, g = 1, b = 1;
+  zmod::fog_frame_fill(&r, &g, &b);
+  EXPECT(r == 204 && g == 127 && b == 63);
+  zmod::fog().on = 0;
+  zmod::fog_frame_fill(&r, &g, &b);
+  EXPECT(r == 0 && g == 0 && b == 0);
+  zmod::fog() = kept;
+}
+
 TEST(sdl_render_new_frame_is_defined_with_the_colour_clear_off) {
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) return;
   sdlfe::SdlWindow w;
