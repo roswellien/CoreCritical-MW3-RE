@@ -192,7 +192,7 @@ They run inside the original main loop, after the original start-up.
   each frame, to watch a mech up close (its damage decals with `--fire`,
   damage-decals.md). The mission's opening camera still runs first.
 - `--debug-camera` (ours; `debugcamera=1` in mw3.cfg): Shift+F12 opens
-  Zipper's Battlesport game editor over the mission (debug command 0x9a,
+  The "BATTLESPORT GAME EDITOR" over the mission (debug command 0x9a,
   which the exe binds to no key; F11 stays the lancemate command screen):
   the view on the stealth object, flown with the movement keys, and the
   editor's menu; Shift+F12 again or EXIT GAME EDIT closes it and (ours)

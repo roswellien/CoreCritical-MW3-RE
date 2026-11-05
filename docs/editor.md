@@ -1,7 +1,7 @@
 # The Battlesport game editor and the stealth object
 
-MW3 1.2 still carries Zipper's in-game editor from its earlier game,
-Battlesport: a mouse menu titled "BATTLESPORT GAME EDITOR" over a mission,
+MW3 1.2 still carries an in-game editor titled for a game called Battlesport:
+a mouse menu headed "BATTLESPORT GAME EDITOR" over a mission,
 with the view on the stealth object, an AI net editor and a vehicle editor.
 Nothing in the release reaches it: it opens on debug command 0x9a, which no
 key is bound to (0x0040db60 registers only 0x61, 0x70, 0x7e and 0x6c to the
@@ -13,6 +13,12 @@ in mw3.cfg) only, as Owen asked: "exactly what they did", a developer's
 tool. (F11 is the lancemate command screen in the original's default keys,
 Shift+F11 and Ctrl+F11 the awaiting orders; Shift+F12 is bound to nothing,
 on every keyboard. Agreed with the lead 2026-11-01.)
+
+Why the name is open. These docs used to say Zipper made Battlesport before
+MW3; nothing supports that. The public credits give BattleSport (1996) to
+Cyclone Studios, with its ports by Unexpected Development, and don't list it
+among Zipper's games. The exe has only the title string, in MW3 and in Pirate's
+Moon, so it shows neither that this is the same game nor how the name got here.
 
 ## The entry and the exit
 
