@@ -9,6 +9,7 @@
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zrender/zrndr_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "platform/render3d.h"
 
 namespace zimg {
 
@@ -354,6 +355,7 @@ int32_t textures_free() {
   t.count = 0;
   t.group = 0;
   if (g_hooks.release_all) g_hooks.release_all();
+  if (auto* renderer = zvid::render3d()) renderer->reset_scene_resources();
   for (uint16_t*& p : state().palettes) {
     std::free(p);
     p = nullptr;

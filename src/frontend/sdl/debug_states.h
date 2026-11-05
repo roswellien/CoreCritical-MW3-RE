@@ -15,7 +15,7 @@ namespace mech3 { class GameEngine; }
 namespace sdlfe {
 
 class SdlInput;
-class SdlRender3D;
+class FrameRenderer;
 
 struct DebugMissionOptions {
   std::string mission = "c1";    // zbd/<mission>
@@ -34,7 +34,7 @@ struct DebugMissionOptions {
 // starts them. Escape quits.
 class DebugMissionState : public mech3::State {
  public:
-  DebugMissionState(mech3::GameEngine* engine, SdlInput* input, SdlRender3D* render, DebugMissionOptions o)
+  DebugMissionState(mech3::GameEngine* engine, SdlInput* input, FrameRenderer* render, DebugMissionOptions o)
       : State("Debug Mission State", 0), engine_(engine), input_(input), render_(render), o_(std::move(o)) {}
   bool enter() override;
   bool update() override;
@@ -43,7 +43,7 @@ class DebugMissionState : public mech3::State {
  private:
   mech3::GameEngine* engine_;
   SdlInput* input_;
-  SdlRender3D* render_;
+  FrameRenderer* render_;
   DebugMissionOptions o_;
   int frame_ = 0;
   bool loaded_ = false;
@@ -53,7 +53,7 @@ class DebugMissionState : public mech3::State {
 // primitive bound by name, the mouse moving over them. Escape quits.
 class DebugDialogState : public mech3::State {
  public:
-  DebugDialogState(mech3::GameEngine* engine, SdlInput* input, SdlRender3D* render, std::string file,
+  DebugDialogState(mech3::GameEngine* engine, SdlInput* input, FrameRenderer* render, std::string file,
                    std::string name, std::string shot, int shot_frame)
       : State("Debug Dialog State", 0), engine_(engine), input_(input), render_(render), file_(std::move(file)),
         name_(std::move(name)),
@@ -66,7 +66,7 @@ class DebugDialogState : public mech3::State {
  private:
   mech3::GameEngine* engine_;
   SdlInput* input_;
-  SdlRender3D* render_;
+  FrameRenderer* render_;
   std::string file_, name_, shot_;
   int shot_frame_;
   int frame_ = 0;
@@ -80,7 +80,7 @@ class DebugDialogState : public mech3::State {
 class DebugMovieState : public mech3::State {
  public:
   // With `shot`: the movie's `shot_frame`-th frame shown is saved there, then it quits.
-  DebugMovieState(mech3::GameEngine* engine, SdlRender3D* render, std::string name, std::string shot,
+  DebugMovieState(mech3::GameEngine* engine, FrameRenderer* render, std::string name, std::string shot,
                   int shot_frame)
       : State("Debug Movie State", 0), engine_(engine), render_(render), name_(std::move(name)),
         shot_(std::move(shot)), shot_frame_(shot_frame) {}
@@ -90,7 +90,7 @@ class DebugMovieState : public mech3::State {
 
  private:
   mech3::GameEngine* engine_;
-  SdlRender3D* render_;
+  FrameRenderer* render_;
   std::string name_, shot_;
   int shot_frame_;
   zgame::Handle movie_ = 0;

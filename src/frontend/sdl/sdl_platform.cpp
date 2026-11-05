@@ -1,5 +1,10 @@
 #include "frontend/sdl/sdl_platform.h"
 
+#ifdef CC_MW3_RE_ADAPTER
+#include "frontend/core_critical/frame_renderer.hpp"
+#include <exception>
+#endif
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -11,8 +16,24 @@
 
 namespace sdlfe {
 
-bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt) {
+bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, bool cc_vulkan) {
   hidden_ = hidden_for_good;
+  if (cc_vulkan) {
+#ifdef CC_MW3_RE_ADAPTER
+    if (adopt) return std::fprintf(stderr, "mw3: Core Critical Vulkan requires its own window\n"), false;
+    window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
+    if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
+    try {
+      render_ = cc_mw3_re::make_renderer(window_);
+      render_->set_shape(&shape_);
+      return render_->ok();
+    } catch (const std::exception& error) {
+      return std::fprintf(stderr, "mw3: Core Critical Vulkan setup: %s\n", error.what()), false;
+    }
+#else
+    return std::fprintf(stderr, "mw3: this build has no Core Critical Vulkan adapter\n"), false;
+#endif
+  }
   // Metal, Direct3D 12 or Vulkan (SPIR-V only where the build has it).
   SDL_GPUShaderFormat formats = SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_DXIL;
 #if defined(MW3_HAVE_SPIRV)

@@ -999,7 +999,7 @@ TEST(sdl_render_keeps_a_shown_frame) {
   EXPECT(w.init(true));
   w.create("mw3 hold test", 1280, 720);
   w.frame_size(1280, 720, 853, 480);
-  sdlfe::SdlRender3D* r = w.render();
+  auto* r = w.render();
   auto frame = [&](uint8_t red) {
     r->set_viewport(0, 0, 1280, 720);
     r->clear(true, red, 40, 200);
@@ -1031,7 +1031,7 @@ TEST(sdl_render_new_frame_is_defined_with_the_colour_clear_off) {
   EXPECT(w.init(true));
   w.create("mw3 new frame test", 640, 480);
   w.frame_size(640, 480, 640, 480);
-  sdlfe::SdlRender3D* r = w.render();
+  auto* r = w.render();
   auto scene = [&](bool colour, uint8_t red, bool quad) {
     r->set_viewport(0, 0, 640, 480);
     r->clear(colour, red, 0, 0);

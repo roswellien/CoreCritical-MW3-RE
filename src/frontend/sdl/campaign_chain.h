@@ -23,7 +23,7 @@ class Mech3App;
 // reaching the pilot screen again. Every state entered is printed.
 namespace sdlfe {
 
-class SdlRender3D;
+class FrameRenderer;
 
 struct ChainOptions {
   bool resume = false;  // the existing pilot, not a new one
@@ -35,7 +35,7 @@ struct ChainOptions {
 
 class CampaignChain {
  public:
-  CampaignChain(mech3::GameEngine& e, mech3::Mech3App& app, SdlRender3D* render, ChainOptions o)
+  CampaignChain(mech3::GameEngine& e, mech3::Mech3App& app, FrameRenderer* render, ChainOptions o)
       : e_(e), app_(app), render_(render), o_(std::move(o)) {}
   ~CampaignChain();
   void frame();  // each frame shown
@@ -47,7 +47,7 @@ class CampaignChain {
   std::string mission_name() const;
   mech3::GameEngine& e_;
   mech3::Mech3App& app_;
-  SdlRender3D* render_;
+  FrameRenderer* render_;
   ChainOptions o_;
   bool done_ = false;
   int wins_ = 0, shots_ = 0, frames_in_state_ = 0, core_frames_ = 0;

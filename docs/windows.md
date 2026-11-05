@@ -45,6 +45,34 @@ the Mac's byte for byte, the `.m1v` differ by FFmpeg build but play either
 way; `--cue` on his MW3 disc image gives track02 (191.9 s) and track03
 (186.1 s).
 
+## Core Critical Vulkan development backend
+
+Configure the Windows x64 build with `-DMW3_CORE_CRITICAL_VULKAN=ON`,
+Vulkan headers, and `glslangValidator` in addition to the usual SDL and
+Direct3D 12 build tools. CMake accepts `MW3_VULKAN_HEADERS` as the include
+directory containing `vulkan/vulkan_core.h` and `GLSLANG` as the path to the
+shader compiler. It compiles the renderer's GLSL at build time.
+
+Build `mw3` and `mw3ccvulkan_checks`. Run the asset-free fixture with
+`ctest --test-dir build-win -R '^mw3ccvulkan_checks$' --output-on-failure`.
+Set `MW34_VK_VALIDATION=1` and point `VK_LAYER_PATH` at the installed
+Khronos validation layer when checking a development build.
+
+```powershell
+& .\build-win\mw3.exe --cc-vulkan --window 960x720 --install $game --assets $fonts --write-dir $trial --ready-file "$trial/ready" --original --no-mods --no-import --no-vfw-helper -nofmv
+```
+
+Use a verified retail 1.2 install for `$game`, the Windows Fonts directory
+for `$fonts`, and a fresh local directory for `$trial`. The windowed trial
+renders with Vulkan and presents through the same GPU's DXGI swapchain.
+It requires Vulkan 1.1 and a device that supports Win32 external memory and
+keyed mutex sharing with DXGI.
+Run the upstream comparison with `SDL_GPU_DRIVER=direct3d12`, a separate
+profile, and `--no-launcher` in place of `--cc-vulkan`.
+
+The adapter and renderer sources derive from the Core Critical project.
+Their MIT notice is in [src/frontend/core_critical/LICENSE](../src/frontend/core_critical/LICENSE).
+
 ## The Indeo helper
 
 `tools\windows\build_indeo.cmd` builds `build-win\mw3indeo.exe`, the

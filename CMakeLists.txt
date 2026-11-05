@@ -561,7 +561,18 @@ target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
 add_test(NAME mw3tests COMMAND mw3tests)
 
 # The SDL3 front end and the programs on it.
+option(MW3_CORE_CRITICAL_VULKAN "Build the experimental Core Critical Vulkan/DXGI renderer" OFF)
 find_package(SDL3 CONFIG QUIET)
+if(MW3_CORE_CRITICAL_VULKAN)
+  if(NOT WIN32 OR NOT SDL3_FOUND)
+    message(FATAL_ERROR "The Core Critical Vulkan renderer requires Windows x64 and SDL3")
+  endif()
+  include(CheckCXXSourceCompiles)
+  check_cxx_source_compiles("#if !defined(_M_X64) && !defined(__x86_64__)\n#error x64 required\n#endif\nint main() {}" MW3_CC_TARGET_X64)
+  if(NOT MW3_CC_TARGET_X64)
+    message(FATAL_ERROR "The Core Critical Vulkan renderer requires an x64 target")
+  endif()
+endif()
 if(SDL3_FOUND)
   # Platform implementations on SDL (docs/program.md): window and message
   # pump, input, render3d, sound, music; the debug world loader.
@@ -580,6 +591,15 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_child.cpp
   )
   target_link_libraries(mw3sdl PUBLIC mw3core SDL3::SDL3 enet miniupnpc)
+  if(MW3_CORE_CRITICAL_VULKAN)
+    add_subdirectory(src/frontend/core_critical)
+    target_link_libraries(mw3sdl PRIVATE mw3ccvulkan)
+    target_compile_definitions(mw3sdl PRIVATE CC_MW3_RE_ADAPTER=1)
+    if(MSVC)
+      target_compile_options(mw3core PRIVATE /EHsc)
+      target_compile_options(mw3sdl PRIVATE /EHsc)
+    endif()
+  endif()
   # Windows: the Direct3D 12 shaders (sdl_render3d.hlsl), DXIL by the
   # Windows SDK's dxc, as headers the renderer includes.
   if(WIN32)
@@ -654,6 +674,13 @@ if(SDL3_FOUND)
       src/frontend/sdl/first_run_import.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MW3_CORE_CRITICAL_VULKAN)
+      target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
+      if(MSVC)
+        target_compile_options(mw3text PRIVATE /EHsc)
+        target_compile_options(mw3 PRIVATE /EHsc)
+      endif()
+    endif()
     target_compile_definitions(mw3 PRIVATE MW3_VERSION="${MW3_VERSION}")
     # The launcher's art (assets/launcher) in a development build; a package
     # carries it beside the exe (tools/windows/package.cmd) or in the app's

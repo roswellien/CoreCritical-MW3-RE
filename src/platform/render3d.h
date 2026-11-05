@@ -92,6 +92,7 @@ class Render3D {
     draw(type, v.data(), count, state);
   }
   virtual void set_fog_color(uint8_t r, uint8_t g, uint8_t b) = 0;  // FOGCOLOR (0x0057bcf0)
+  virtual void reset_scene_resources() {}
   virtual void present() = 0;      // Flip, or the windowed Blt (0x0057a850 / 0x00577130)
   // FIX (A): the back buffer read back (DirectDraw's Lock read it in the exe;
   // a GPU frame has to be downloaded): 0xAARRGGBB, top row first, at the

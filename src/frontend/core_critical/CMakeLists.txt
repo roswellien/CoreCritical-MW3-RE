@@ -1,0 +1,50 @@
+find_path(MW3_VULKAN_HEADERS vulkan/vulkan_core.h REQUIRED
+  HINTS ENV VULKAN_SDK PATH_SUFFIXES Include include)
+find_program(GLSLANG glslangValidator REQUIRED)
+
+add_library(mw3ccvulkan OBJECT frame_renderer.cpp)
+target_compile_features(mw3ccvulkan PRIVATE cxx_std_20)
+target_compile_definitions(mw3ccvulkan PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_include_directories(mw3ccvulkan PRIVATE
+  "${PROJECT_SOURCE_DIR}/src" "${MW3_VULKAN_HEADERS}" renderer "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(mw3ccvulkan PRIVATE SDL3::SDL3 user32 gdi32 dxgi d3d11)
+if(MSVC)
+  target_compile_options(mw3ccvulkan PRIVATE /EHsc)
+endif()
+
+function(mw3_cc_shader name source)
+  set(shader "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${source}")
+  set(header "${CMAKE_CURRENT_BINARY_DIR}/${name}.h")
+  add_custom_command(OUTPUT "${header}"
+    COMMAND "${GLSLANG}" -V --quiet --vn "${name}_spv" ${ARGN} -o "${header}" "${shader}"
+    DEPENDS "${shader}" VERBATIM)
+  target_sources(mw3ccvulkan PRIVATE "${header}")
+endfunction()
+
+mw3_cc_shader(d3d_scene_vert d3d_scene.vert)
+mw3_cc_shader(d3d_scene_frag d3d_scene.frag)
+mw3_cc_shader(effect_scene_frag sun_scene.frag -DMW34_EFFECT_LIGHTING=1)
+mw3_cc_shader(fixture_shadow_vert fixture_shadow.vert)
+mw3_cc_shader(fixture_shadow_frag fixture_shadow.frag)
+mw3_cc_shader(fxaa_vert fxaa.vert)
+mw3_cc_shader(fxaa_frag fxaa.frag)
+mw3_cc_shader(model_scene_vert model_scene.vert)
+mw3_cc_shader(sun_model_vert sun_model.vert)
+mw3_cc_shader(sun_shadow_vert sun_shadow.vert)
+mw3_cc_shader(sun_tl_vert sun_tl.vert)
+mw3_cc_shader(sun_world_vert sun_world.vert)
+mw3_cc_shader(world_coverage_frag world_coverage.frag)
+mw3_cc_shader(world_scene_vert world_scene.vert)
+
+add_executable(mw3ccvulkan_checks adapter_checks.cpp)
+target_link_libraries(mw3ccvulkan_checks PRIVATE mw3sdl)
+target_include_directories(mw3ccvulkan_checks PRIVATE "${PROJECT_SOURCE_DIR}/src")
+if(MSVC)
+  target_compile_options(mw3ccvulkan_checks PRIVATE /EHsc)
+endif()
+if(NOT CMAKE_VERSION VERSION_LESS 3.21)
+  add_custom_command(TARGET mw3ccvulkan_checks POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3ccvulkan_checks> $<TARGET_FILE_DIR:mw3ccvulkan_checks>
+    COMMAND_EXPAND_LISTS)
+endif()
+add_test(NAME mw3ccvulkan_checks COMMAND mw3ccvulkan_checks)

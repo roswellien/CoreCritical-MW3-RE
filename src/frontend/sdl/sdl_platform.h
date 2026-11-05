@@ -27,7 +27,7 @@ class SdlWindow : public platform::Window {
  public:
   // The window and GPU device; false with SDL's error printed. `adopt`: the
   // launcher's window, taken instead of a new one (ours, docs/launcher.md).
-  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr);
+  bool init(bool hidden_for_good, SDL_Window* adopt = nullptr, bool cc_vulkan = false);
   ~SdlWindow() override;
   uint32_t create(const std::string& title, int width, int height) override;
   void set_title(const std::string& title) override;
@@ -49,13 +49,13 @@ class SdlWindow : public platform::Window {
 
   SDL_Window* sdl() const { return window_; }
   SDL_GPUDevice* device() const { return device_; }
-  SdlRender3D* render() const { return render_.get(); }
+  FrameRenderer* render() const { return render_.get(); }
   static constexpr uint32_t kHwnd = 0x00020000;  // the HWND handle the game keeps
 
  private:
   SDL_Window* window_ = nullptr;
   SDL_GPUDevice* device_ = nullptr;
-  std::unique_ptr<SdlRender3D> render_;
+  std::unique_ptr<FrameRenderer> render_;
   bool hidden_ = false;
   bool auto_size_ = false;
   bool fullscreen_ = false;
@@ -69,7 +69,7 @@ class SdlWindow : public platform::Window {
 // texture drawn over the whole window by Render3D.
 class SdlScreen2D : public platform::Screen2D {
  public:
-  explicit SdlScreen2D(SdlRender3D* render) : render_(render) {}
+  explicit SdlScreen2D(FrameRenderer* render) : render_(render) {}
   void present_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565) override;
   // A 16-bit pixel (565, else 555) as the layer's RGBA8, opaque.
   static uint32_t rgba(uint16_t pixel, bool rgb565);
@@ -83,7 +83,7 @@ class SdlScreen2D : public platform::Screen2D {
   void upload(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, bool keyed, uint16_t key,
               const uint8_t* alpha = nullptr, const uint16_t* colour = nullptr);
   void draw_layer(int width, int height, bool blend);
-  SdlRender3D* render_;
+  FrameRenderer* render_;
   int32_t texture_ = -1;
   int tw_ = 0, th_ = 0;
   std::vector<uint8_t> rgba_;
