@@ -4313,6 +4313,14 @@ TEST(sdl_program_launcher_starts_mw3_as_its_own_program) {
   EXPECT(has(r.log, "the game's first frame") && has(r.log, "the launcher closes") && !has(r.log, "MechWarrior 3 exited"));
 }
 
+// In an AppImage the launcher waits for the game: its end would unmount what
+// the game is running from (docs/linux.md, Packaging).
+TEST(sdl_program_launcher_waits_for_the_game_in_an_appimage) {
+  const LauncherRun r = run_launcher_with("launcher_game_image", "READY\nsleep 2", nullptr, {{"APPIMAGE", "/x.AppImage"}});
+  EXPECT(r.exited && !r.game_alive && r.game_finished);
+  EXPECT(has(r.log, "the game's first frame") && has(r.log, "MechWarrior 3 exited (0)"));
+}
+
 TEST(sdl_program_launcher_stays_when_the_game_fails_or_is_slow) {
   // An error before any frame: the launcher up with its status line, until
   // the game's end (and, with --launcher-play, quits then).
