@@ -35,7 +35,7 @@ std::string read(const std::string& path) {
 struct Scene {
   std::string root, usual;
   explicit Scene(const char* name) {
-    root = std::string(MW3_TEST_TMP) + "/data_folder_" + name;
+    root = fs::path(MW3_TEST_TMP).generic_string() + "/data_folder_" + name;  // moved_path writes /
     std::error_code ec;
     fs::permissions(root, fs::perms::owner_all, fs::perm_options::add, ec);
     fs::remove_all(root, ec);
@@ -102,7 +102,7 @@ TEST(data_folder_a_target_holding_files_is_refused_and_left_alone) {
   Scene s("foreign");
   const std::string to = s.root + "/theirs";
   put(to + "/their_file.txt", "keep me");
-  EXPECT(destination(to, s.usual) == to + "/MechWarrior 3 Data");  // a drive's root: a folder inside it
+  EXPECT(fs::path(destination(to, s.usual)) == fs::path(to + "/MechWarrior 3 Data"));  // a drive's root: a folder inside it
   const Plan p = plan(s.usual, to, s.usual);
   EXPECT(p.error.find("already holds files") != std::string::npos);
   const Moved m = move_data(s.usual, to, s.usual, nullptr);

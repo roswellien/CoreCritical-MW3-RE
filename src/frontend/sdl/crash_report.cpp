@@ -16,6 +16,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <process.h>
 #else
 #include <limits.h>
 #include <unistd.h>
@@ -56,15 +57,31 @@ void set_text(const std::string& program, const std::string& log) {
 
 #if defined(_WIN32)
 
+void say_crash(const char* reason) {
+  std::fflush(stderr);
+  Sleep(100);  // the log's thread passes this on (run_log.cpp)
+  if (g_test) _exit(70);
+  char text[1200];
+  std::snprintf(text, sizeof text, "MechWarrior 3 crashed (%s)%s", reason, g_tail);
+  // Topmost: with no owner it could open behind a fullscreen game.
+  if (g_box) MessageBoxA(nullptr, text, "MechWarrior 3", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+}
+
 LONG WINAPI on_exception(EXCEPTION_POINTERS* e) {
   std::fprintf(stderr, "%s: crashed: exception 0x%08lx at %p\n", g_program, e->ExceptionRecord->ExceptionCode,
                e->ExceptionRecord->ExceptionAddress);
-  std::fflush(stderr);
-  if (g_test) _exit(70);
-  char text[1200];
-  std::snprintf(text, sizeof text, "MechWarrior 3 crashed (exception 0x%08lx)%s", e->ExceptionRecord->ExceptionCode, g_tail);
-  if (g_box) MessageBoxA(nullptr, text, "MechWarrior 3", MB_OK | MB_ICONERROR);
+  char reason[32];
+  std::snprintf(reason, sizeof reason, "exception 0x%08lx", e->ExceptionRecord->ExceptionCode);
+  say_crash(reason);
   return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// abort() (an uncaught exception's end too) never reaches the filter above: the
+// CRT raises this and exits with 3.
+void on_abort(int) {
+  std::fprintf(stderr, "%s: crashed: aborted\n", g_program);
+  say_crash("aborted");
+  _exit(3);
 }
 
 #else
@@ -141,6 +158,7 @@ void crash_report_install(const std::string& program, const std::string& log, bo
   std::set_terminate(on_terminate);
 #if defined(_WIN32)
   SetUnhandledExceptionFilter(on_exception);
+  std::signal(SIGABRT, on_abort);
 #else
   own_path();
 #ifdef MW3_HAVE_BACKTRACE
@@ -156,7 +174,15 @@ void crash_report_install(const std::string& program, const std::string& log, bo
   sigemptyset(&sa.sa_mask);
   for (int sig : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT}) sigaction(sig, &sa, nullptr);
 #endif
-  if (g_test) std::raise(SIGSEGV);
+  if (g_test) {
+    if (std::strcmp(std::getenv("MW3_CRASH_TEST"), "abort") == 0) std::abort();
+#if defined(_WIN32)
+    volatile int* nothing = nullptr;  // the CRT's raise(SIGSEGV) never reaches the filter
+    *nothing = 0;
+#else
+    std::raise(SIGSEGV);
+#endif
+  }
 }
 
 bool crash_box_main(int argc, char** argv) {

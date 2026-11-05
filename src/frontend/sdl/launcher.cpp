@@ -720,9 +720,9 @@ void Launcher::layout() {
       // an image or a download, or any file of an installed copy (its
       // folder; pick_source). The 1.2 patch is built in (patch12.h).
       add(kFind, {130, 222, 380, 52}, "FIND THE GAME", "A disc image, a download (.zip .iso), or Mech3.exe in an installed copy");
+      if (from_files_ && !o_.write_dir_fixed) add(kData, {130, 278, 380, 36}, "MY DATA FOLDER");
       if (install_.ok && (lacks_music_ || lacks_movies_))  // what the install in use lacks, from the disc
         add(kAddDisc, {130, 318, 380, 46}, "ADD FROM MY DISC", "A disc in a drive first, else its image or any file of the disc");
-      if (from_files_ && !o_.write_dir_fixed) add(kData, {130, 278, 380, 36}, "MY DATA FOLDER");
       add(kBack, {250, 384, 140, 34}, o_.setup_only ? "QUIT" : "BACK");
       break;
     }
@@ -733,8 +733,8 @@ void Launcher::layout() {
       break;
     case kConfirm:
       if (confirm_go_ == 3) {
-        add(kRemoveOld, {130, 300, 200, 40}, "REMOVE THE OLD COPY");
-        add(kKeepOld, {340, 300, 140, 40}, "KEEP IT");
+        add(kRemoveOld, {115, 300, 260, 40}, "REMOVE THE OLD COPY");
+        add(kKeepOld, {385, 300, 140, 40}, "KEEP IT");
         break;
       }
       if (confirm_go_ == 2) add(kMoveGo, {170, 300, 140, 40}, "MOVE");
