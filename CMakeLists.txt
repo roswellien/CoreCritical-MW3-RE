@@ -374,6 +374,7 @@ if(LIBARCHIVE_INCLUDE AND LIBARCHIVE_LIB)
   target_compile_definitions(mw3core PUBLIC MW3_HAVE_LIBARCHIVE=1)
   message(STATUS "libarchive: ${LIBARCHIVE_LIB}")
 else()
+  target_compile_definitions(mw3core PUBLIC MW3_HAVE_LIBARCHIVE=0)
   message(STATUS "libarchive not found: SETUP reads folders, drives, .iso and .cue only")
 endif()
 
