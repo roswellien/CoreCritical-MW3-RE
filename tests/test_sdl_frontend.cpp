@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <cctype>
 #include <cmath>
@@ -17,7 +18,6 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <fstream>
 #endif
 #include <set>
 #include <string>
