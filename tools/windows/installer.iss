@@ -24,6 +24,9 @@ AppVerName=MechWarrior 3 Rebuild {#AppVersion}
 AppPublisher=MechWarrior 3 Rebuild (a fan project)
 AppComments=A rebuild of MechWarrior 3's program; it needs your own copy of the game.
 DefaultDirName={autopf}\MechWarrior 3 Rebuild
+; The folder page every time, an upgrade's too (the default hides it there),
+; offering the folder already installed to.
+DisableDirPage=no
 DefaultGroupName=MechWarrior 3 Rebuild
 DisableProgramGroupPage=yes
 ; Program Files needs administrator rights; a player without them can pick
