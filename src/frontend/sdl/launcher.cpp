@@ -629,9 +629,11 @@ void Launcher::watch_game() {
     // waits, hidden, and says if the game crashes (docs/linux.md, Packaging).
     if (std::getenv("APPIMAGE")) {
       int code = 0;
+      std::fflush(stdout);  // a long wait: the log has this far
       SDL_WaitProcess(game_, true, &code);
       std::printf("mw3launcher: MechWarrior 3 exited (%d) after %.1f s\n", code,
                   static_cast<double>(SDL_GetTicksNS() - game_click_) / 1e9);
+      std::fflush(stdout);
       if (code < 0) {
         const std::string text = "MechWarrior 3 crashed (signal " + std::to_string(-code) + ").\n\nThe log is " +
                                  o_.write_dir + "/mw3.log\nPlease include it if you report this.";
