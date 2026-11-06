@@ -4,8 +4,7 @@ How the two routes work and how they were checked. `README.md` is the short vers
 what was tested. This is separate from the rebuild: no game build uses anything in this folder.
 
 **Measured** means computed from the bytes or run in the emulator; **read** means from the
-disassembly or the decompiled code. Nothing here has been run on a real game until README.md
-says otherwise.
+disassembly or the decompiled code. README.md says what has run on a real game.
 
 ## What it changes
 
@@ -211,4 +210,4 @@ goes to 0. A new row is reset like the others. A definition with no row is left 
    went from 37 to 56 on the same code base, and its 8 widened count sites match 8 of ours, but its new functions are not compared. Nothing rules out a
    per-weapon array inside an object; a real run would show it.
 2. **Past 125 store items.** The store itself held 394 in the emulator (measured). The lab's lists are read, not run, and the rebuild has gone only to 125. PM's 56 rows suggest the code base copes, but that is PM's build.
-3. **Windows.** Neither route has been loaded by Windows. The stand-in's load order, forwarding and antivirus reaction are all still to be seen.
+3. **Windows.** The patched copy has run with the plain PPC (README.md). The stand-in hasn't: its load order, forwarding and antivirus reaction are still to be seen.

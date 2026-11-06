@@ -8,7 +8,7 @@ build uses it.
 
 Made with AI assistance, by Claude, on Owen's project.
 
-**Nothing here has been run on a real game yet.** See What was tested.
+**The patched copy has had its first real run; the stand-in hasn't run on a real game yet.** See What was tested.
 
 ## Which route
 
@@ -132,11 +132,10 @@ Nothing checks this and nothing warns you. Someone without them makes no weapon 
 row, so that mech's later weapons shift by one, and a shot can fire a different weapon on their
 screen. This comes from reading the code; it has not been run.
 
-**A save with a new weapon, opened without the rows** (an unpatched exe, or the stand-in removed): in the emulator the loadout loads, the
-weapon is named "noweapon" and weighs nothing, and no weapon is made, so the mech just lacks it, with
-no message. Both exes use the same `pilots` and `configs` folders, so back those up before trying
-this. The game may run from its registered install folder, even if you start the copy from somewhere
-else.
+**A save with a new weapon, opened without the rows** (an unpatched exe, or the stand-in removed): the game drops the weapon with no
+message. In a real run the loadout stayed, with no row or name for the weapon, and the mech's weight no longer counted it. So keep a copy of
+your `pilots` and `configs` folders. Both exes use the same ones, and the game may run from its registered install folder, even if you start the copy
+from somewhere else.
 
 ## What was tested
 
@@ -151,8 +150,10 @@ As of 2026-11-05:
   read-only, and with those really enforced nothing writes to either. It changes nothing on Pirate's Moon's exe, an on-disk patched exe, or an exe that
   differs at any one site, or for an empty or bad row file. Its exports forward to the original. 37 deliberate breaks of its source were all caught. The
   store held 394 items with 127 weapons.
-- **Not tested: anything on a real game.** Nothing has been run in Windows yet: not Windows loading either file, the stand-in's load order, the lab's
-  screens, saving in play, firing, or any launcher.
+- **On a real game, the patched copy with the plain PPC** (Windows 11 with DDrawCompat): on the official exe with a mounted disc image, and on a NOCD exe with
+  ZipperFixup 0.1.1's DLL, the PPC is in the lab, last in the list, at 7 tons and 3 slots. It saves, reloads and fires.
+- **Not tested on a real game:** the stand-in, rows beyond the plain PPC, or any launcher other than ZipperFixup's install, and whether its line clamps went
+  in (they can't be seen directly).
 - **Not known:** whether a per-weapon array hides inside some object (the search only sees plain global arrays), and how the lab's lists behave past 125
   items: the store is fine, but its screen hasn't run.
 
