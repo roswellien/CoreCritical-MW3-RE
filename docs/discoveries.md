@@ -561,6 +561,10 @@ From the weapon code (weapons.md).
   after the last weapon's) and the slot it once had between NARC and the
   pulse lasers is empty: it was moved to the end of the list and its row was
   never added. The rebuild adds it, so the mech lab offers the PPC.
+- **The LB-10X's name looks like a typo that happened to work.** Its row in the
+  weapon table uses message 0xe6, where its neighbours' numbering predicts 0x2e6.
+  `Mech3Msg.dll` has its name, "LB-10X AC", at 0xe6 and nothing at 0x2e6, so it
+  shows correctly.
 - **Hot lasers recharge slower.** Above heat 0.5, a beam weapon's recharge is
   multiplied by 0.5 / heat (0x4b43bf): at heat 1.0 lasers refill at half speed.
 - **Small lasers are the slowest to recharge**: 4 seconds, against 3 for medium
