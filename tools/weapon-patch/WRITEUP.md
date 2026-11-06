@@ -209,5 +209,7 @@ goes to 0. A new row is reset like the others. A definition with no row is left 
 1. **Arrays inside objects.** 75 weapon-handling functions index no global array but this table, but that search sees only absolutely addressed arrays. PM
    went from 37 to 56 on the same code base, and its 8 widened count sites match 8 of ours, but its new functions are not compared. Nothing rules out a
    per-weapon array inside an object; a real run would show it.
-2. **Past 125 store items.** The store itself held 394 in the emulator (measured). The lab's lists are read, not run, and the rebuild has gone only to 125. PM's 56 rows suggest the code base copes, but that is PM's build.
-3. **Windows.** The patched copy has run with the plain PPC (README.md). The stand-in hasn't: its load order, forwarding and antivirus reaction are still to be seen.
+2. **Large lists.** The store held 394 items in the emulator, and on a real game the lab's weapon and ammo lists opened and scrolled to the end with them. The list code keeps its rows in growing vectors (0x48bac0, read). Then one crash, not yet
+   repeated: a read fault at 0x489d19, in the Action screen's enemy list refill 0x489c10, indexing the wave table 0x5e33ac by `filling + 6 * wave` (+0x16fa4, +0x16fa0). It faults only with a wave beyond about 88,000 or below about -41,000, or as wild a `filling`, so that field
+   or the object holding it was bad. Neither the weapon table nor the store is touched there, and no count-limited buffer was found by reading. Heap damage or a stale pointer isn't excluded, so 127 stays unproven.
+3. **Windows.** Both routes have run with the plain PPC (README.md). No launcher has been shown yet, and no antivirus reaction seen.

@@ -8,7 +8,7 @@ build uses it.
 
 Made with AI assistance, by Claude, on Owen's project.
 
-**The patched copy has had its first real run; the stand-in hasn't run on a real game yet.** See What was tested.
+**Both routes have run on a real game with the plain PPC; large row lists are unproven.** See What was tested.
 
 ## Which route
 
@@ -16,8 +16,8 @@ Made with AI assistance, by Claude, on Owen's project.
 |---|---|---|
 | What it does | replaces `IFORCE2.dll` with a small DLL that adds the rows in memory when the game starts | writes a new exe with the rows in it |
 | `Mech3.exe` | not touched | a changed copy, same size |
-| Launchers | works without editing the exe, so a launcher's hash check still passes (not yet run) | a launcher that verifies the exe's hash will refuse it, and that's for its author to allow |
-| Weapons in all | 127 | 49 |
+| Launchers | works without editing the exe, so a launcher's hash check still passes (not yet shown through a launcher) | a launcher that verifies the exe's hash will refuse it, and that's for its author to allow |
+| Weapons in all | 127 at most, unproven past the lab's lists (What was tested) | 49 |
 | Exes | official 1.2, NOCD 1.2, and either with ZipperFixup: anything else is left alone | only the ones in `ACCEPTED` |
 | Needs | a built DLL | Python only |
 | Antivirus | **may be flagged** | less likely |
@@ -108,7 +108,7 @@ on to the lab's list. Neither has been run.
 
 ## What it can't do
 
-- Go past 127 weapons with the stand-in, or 49 with the patched copy, which is 12 new ones. The patched copy has to fit every row
+- Go past 127 weapons with the stand-in (itself unproven: see What was tested), or 49 with the patched copy, which is 12 new ones. The patched copy has to fit every row
   in free space inside the exe while the file stays the same size, and short names matter too, as they share that space: with 12 new
   rows they get 152 bytes, about 11 characters each. It says so if they don't fit.
 - Insert or reorder rows.
@@ -152,10 +152,13 @@ As of 2026-11-05:
   store held 394 items with 127 weapons.
 - **On a real game, the patched copy with the plain PPC** (Windows 11 with DDrawCompat): on the official exe with a mounted disc image, and on a NOCD exe with
   ZipperFixup 0.1.1's DLL, the PPC is in the lab, last in the list, at 7 tons and 3 slots. It saves, reloads and fires.
-- **Not tested on a real game:** the stand-in, rows beyond the plain PPC, or any launcher other than ZipperFixup's install, and whether its line clamps went
-  in (they can't be seen directly).
-- **Not known:** whether a per-weapon array hides inside some object (the search only sees plain global arrays), and how the lab's lists behave past 125
-  items: the store is fine, but its screen hasn't run.
+- **On a real game, the stand-in with the plain PPC:** on the same two exes, 38 weapons, and the PPC fits, saves, reloads and fires. A bad row leaves the game running as usual with a clear
+  log line, and `restore` puts the original back.
+- **127 weapons, unproven.** With 90 made-up rows, 394 store items, the lab's weapon and ammo lists opened and scrolled to the end on a real game. Then, after Accept on the lab and the next click, the game crashed
+  once (0xc0000005 at `Mech3.exe+0x89d19`, on the Instant Action screen's enemy list). That code uses the screen's wave numbers, not the weapon table, and reading finds no limit on row count, so the cause is not known. The original
+  also crashes easily on Windows 11. Until that is settled, treat large lists as a risk.
+- **Not tested on a real game:** rows beyond the plain PPC, any launcher other than ZipperFixup's install, and whether its line clamps went in (they can't be seen directly).
+- **Not known:** whether a per-weapon array hides inside some object (the search only sees plain global arrays), and what caused the crash above.
 
 ## Running the checks
 
