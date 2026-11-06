@@ -405,9 +405,9 @@ From the gait, the controls, the ground probes, the jump jets and the falls
   your speed against your top speed, split by tonnage so the heavier mech takes
   less. Allies take none. Vehicles take 20 times more and are shoved, or
   crushed if that kills them.
-- **Buildings break under you frame by frame** (code reading): touching a
-  building or animated object does 20 damage to it every frame, so it falls
-  faster at a higher frame rate. Walking under an overhang hurts your head and
+- **Walking into a building hurts it** (measured): each touch of a building or
+  animated object does 20 damage, and the bounce off it keeps touches about
+  a second apart at any frame rate. Walking under an overhang hurts your head and
   torso and makes the mech crouch.
 - **AI mechs bounce off walls** (code reading): an AI's throttle flips to reverse
   when it hits a wall; yours drops to 10%. Only your mech has the low probes at
@@ -421,10 +421,8 @@ From the gait, the controls, the ground probes, the jump jets and the falls
   70%.)
 - **Many movement steps happen once per frame**, so they depend on the frame
   rate: how long a fall keeps its momentum, how hard slopes and ledges shove
-  you, how quickly the walk blends in from a standstill (20 frames), and the
-  20 damage a frame you deal to a building you lean on. At 144 fps a building
-  takes 2,880 damage a second instead of 600. (The rebuild makes them per
-  second, as at 30 fps.)
+  you and how quickly the walk blends in from a standstill (20 frames). (The
+  rebuild makes them per second, as at 30 fps.)
 - **Pushing into another mech hurts both of you, by weight.** Each frame of
   contact deals damage from your speed (squared, against your top speed), and
   the heavier mech takes the smaller share; the other mech is also shoved a

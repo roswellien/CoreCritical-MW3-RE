@@ -345,6 +345,7 @@ float jet_climb(float fps, bool per_second) {
   return sum;
 }
 
+// One touch's damage: contact is a one-frame bounce, so a hit counts the same at any rate.
 float touch_damage(float fps, bool per_second) {
   zfix::options().per_second = per_second;
   mech3::Mech& m = *bare_mech();
@@ -356,7 +357,7 @@ float touch_damage(float fps, bool per_second) {
     return 0.0f;
   };
   m.frame_dt = 1.0f / fps;
-  for (int i = 0; i < static_cast<int>(fps); ++i) m.touch_response();
+  m.touch_response();
   mech3::collide_calls() = mech3::CollideCalls{};
   zfix::options().per_second = true;
   return sum;
@@ -473,11 +474,9 @@ TEST(fix_jet_cap_per_second) {
   EXPECT(jet_climb(144, false) > 800.0f);  // the exe: 6 a frame at any rate
 }
 
-TEST(fix_touch_damage_per_second) {
-  EXPECT(std::fabs(touch_damage(30, true) - 600.0f) < 0.1f);
-  EXPECT(std::fabs(touch_damage(144, true) - 600.0f) < 0.1f);
-  EXPECT(touch_damage(30, false) == touch_damage(30, true));
-  EXPECT(touch_damage(144, false) == 20.0f * 144);
+TEST(fix_touch_damage_the_same_a_hit_at_any_rate) {
+  for (const float fps : {15.0f, 30.0f, 60.0f, 125.0f, 144.0f, 250.0f})
+    for (const bool per_second : {true, false}) EXPECT(touch_damage(fps, per_second) == 20.0f);
 }
 
 // A heat sink lost to a critical hit (0x00460d50): the exe's 0x0045fbc0

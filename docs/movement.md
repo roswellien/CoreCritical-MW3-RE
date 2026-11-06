@@ -106,8 +106,7 @@ checks the line). The step from 1 to 0.63 at 0.1 H goes with it.
 
 **Per frame, now per second.** The movement's per-frame steps (a fall's
 momentum x0.6, the skis' step, slope and ledge pushes and the far mechs'
-push x3, the jets' climb cap of 6, the 20-frame blend-in, 20 damage to
-touched objects) run per 1/30 s in the port (`FIX (B)`, `zfix::frame_steps`,
+push x3, the jets' climb cap of 6, the 20-frame blend-in) run per 1/30 s in the port (`FIX (B)`, `zfix::frame_steps`,
 fixes.md), equal to the exe's at 30 fps. So do the throttle keys' 0.025 a
 frame (controls.md).
 

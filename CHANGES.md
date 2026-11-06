@@ -60,9 +60,8 @@ it is clear what the designers meant.
   frame rate, and exactly as before at 30 fps. A turret aimed straight up
   or down also keeps its shape. Vehicles keep the original's damping.
 - **Mech movement plays the same at any frame rate.** Falls, the shoves from
-  slopes and ledges, the blend into a walk, jump-jet thrust and the damage
-  done to buildings you push into all went by frames; they now play as they
-  did at 30 fps.
+  slopes and ledges, the blend into a walk and jump-jet thrust all went by
+  frames; they now play as they did at 30 fps.
 - **The throttle keys open the throttle at the same speed at any frame
   rate.** Each frame a key was held added a fixed step, so on a fast computer
   the throttle ran up several times faster. It now moves as it did at
