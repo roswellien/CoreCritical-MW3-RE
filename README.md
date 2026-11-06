@@ -304,6 +304,9 @@ FOLDER` reads a mod as the game would and says what it would refuse. With
 no mods turned on, nothing changes. How to make one:
 [docs/modding.md](docs/modding.md).
 
+The original game has a tool of its own here: [tools/weapon-patch](tools/weapon-patch)
+adds weapons to the original `Mech3.exe`'s mech lab. It isn't part of the rebuild.
+
 ## Where your saves and settings go
 
 | | Folder |
