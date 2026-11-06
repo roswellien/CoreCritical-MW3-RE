@@ -212,4 +212,4 @@ goes to 0. A new row is reset like the others. A definition with no row is left 
 2. **Large lists.** The store held 394 items in the emulator, and on a real game the lab's weapon and ammo lists opened and scrolled to the end with them. The list code keeps its rows in growing vectors (0x48bac0, read). Then one crash, not yet
    repeated: a read fault at 0x489d19, in the Action screen's enemy list refill 0x489c10, indexing the wave table 0x5e33ac by `filling + 6 * wave` (+0x16fa4, +0x16fa0). It faults only with a wave beyond about 88,000 or below about -41,000, or as wild a `filling`, so that field
    or the object holding it was bad. Neither the weapon table nor the store is touched there, and no count-limited buffer was found by reading. Heap damage or a stale pointer isn't excluded, so 127 stays unproven.
-3. **Windows.** Both routes have run with the plain PPC (README.md). No launcher has been shown yet, and no antivirus reaction seen.
+3. **Windows.** Both routes have run with the plain PPC, the stand-in through a launcher that checks the exe's hash too (README.md). No antivirus reaction seen on the PC it ran on; others may differ.

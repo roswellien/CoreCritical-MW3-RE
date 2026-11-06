@@ -16,7 +16,7 @@ Made with AI assistance, by Claude, on Owen's project.
 |---|---|---|
 | What it does | replaces `IFORCE2.dll` with a small DLL that adds the rows in memory when the game starts | writes a new exe with the rows in it |
 | `Mech3.exe` | not touched | a changed copy, same size |
-| Launchers | works without editing the exe, so a launcher's hash check still passes (not yet shown through a launcher) | a launcher that verifies the exe's hash will refuse it, and that's for its author to allow |
+| Launchers | works without editing the exe, so a launcher's hash check still passes (run through a launcher that checks the exe's hash: works) | a launcher that verifies the exe's hash will refuse it, and that's for its author to allow |
 | Weapons in all | 127 at most, unproven past the lab's lists (What was tested) | 49 |
 | Exes | official 1.2, NOCD 1.2, and either with ZipperFixup: anything else is left alone | only the ones in `ACCEPTED` |
 | Needs | a built DLL | Python only |
@@ -157,7 +157,8 @@ As of 2026-11-05:
 - **127 weapons, unproven.** With 90 made-up rows, 394 store items, the lab's weapon and ammo lists opened and scrolled to the end on a real game. Then, after Accept on the lab and the next click, the game crashed
   once (0xc0000005 at `Mech3.exe+0x89d19`, on the Instant Action screen's enemy list). That code uses the screen's wave numbers, not the weapon table, and reading finds no limit on row count, so the cause is not known. The original
   also crashes easily on Windows 11. Until that is settled, treat large lists as a risk.
-- **Not tested on a real game:** rows beyond the plain PPC, any launcher other than ZipperFixup's install, and whether its line clamps went in (they can't be seen directly).
+- **On a real game, through a launcher that checks the exe's hash:** the stand-in works, with the PPC fitted, saved, restarted, fired and damaging a target. A patched copy is refused there.
+- **Not tested on a real game:** rows beyond the plain PPC, and whether its line clamps went in (they can't be seen directly).
 - **Not known:** whether a per-weapon array hides inside some object (the search only sees plain global arrays), and what caused the crash above.
 
 ## Running the checks
