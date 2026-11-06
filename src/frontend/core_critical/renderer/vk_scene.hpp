@@ -22,7 +22,6 @@
 #include "d3d_scene_frag.h"
 #include "d3d_scene_vert.h"
 #include "draw_emissions.hpp"
-#include "dxgi_present.hpp"
 #include "effect_lighting_settings.hpp"
 
 #include "effect_scene_frag.h"
@@ -37,6 +36,9 @@
 #include "launcher_display.hpp"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
+#include "platform/vk_loader.hpp"
+#include "platform/wsi_surface.hpp"
+#include "platform/wsi_win32_dxgi.hpp"
 #include "renderer_bridge_config.hpp"
 #include "status_model_fit.hpp"
 #include "sun_lighting.hpp"
@@ -67,8 +69,6 @@
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan_core.h>
-#include <vulkan/vulkan_win32.h>
-#include <windows.h>
 
 namespace mw34::vkscene {
 // rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour
@@ -277,7 +277,7 @@ public:
   // support); the caller then uses its other presenter.
   bool present(HWND hwnd, const std::uint8_t *pixels, unsigned w, unsigned h,
                unsigned pitch, bool wide_world = false, bool rgba32 = false) {
-    if (!::IsWindowVisible(hwnd))
+    if (!cc_mw3_re::platform::is_window_visible(hwnd))
       return true; // hidden: nothing to present
     // SDL owns the native WSI surface. The legacy presenter uses a disabled,
     // hit-test-transparent child covering the game window's client area.
@@ -287,8 +287,10 @@ public:
         dropSurface();
       }
       if (child)
-        ::DestroyWindow(child);
-      child = surface_source.create ? nullptr : makeChild(hwnd);
+        cc_mw3_re::platform::destroy_present_child(child);
+      child = surface_source.create
+                  ? nullptr
+                  : cc_mw3_re::platform::make_present_child(hwnd);
       presentParent = hwnd;
       if (!child && bridge_config.dxgi_present)
         throw std::runtime_error(
@@ -315,13 +317,7 @@ public:
       presentInFlight = false;
     }
     if (child) {
-      RECT rc{};
-      ::GetClientRect(hwnd, &rc);
-      RECT cc{};
-      ::GetClientRect(child, &cc);
-      if (cc.right != rc.right || cc.bottom != rc.bottom)
-        ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                       SWP_NOZORDER | SWP_NOACTIVATE);
+      cc_mw3_re::platform::sync_present_child_size(hwnd, child);
     }
     if (!swapchainReady())
       return true; // minimized: nothing to present
@@ -499,18 +495,13 @@ public:
   // can synchronously message the owning thread.
   void resize_present_window(HWND hwnd) {
     if (child) {
-      RECT rc{}, cc{};
-      ::GetClientRect(hwnd, &rc);
-      ::GetClientRect(child, &cc);
-      if (cc.right != rc.right || cc.bottom != rc.bottom)
-        ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                       SWP_NOZORDER | SWP_NOACTIVATE);
+      cc_mw3_re::platform::sync_present_child_size(hwnd, child);
     }
   }
   bool present_resident(HWND hwnd, unsigned w, unsigned h,
                         bool manage_window = true) {
     finish_world();
-    if (!::IsWindowVisible(hwnd))
+    if (!cc_mw3_re::platform::is_window_visible(hwnd))
       return true;
     if (hwnd != presentParent || (!child && !surface_source.create) ||
         !presentable || (!windowSurface && !dxgi.active()) ||
@@ -980,7 +971,9 @@ public:
       // Capability queries can precede the first Flip. Select against the
       // actual window now, before texture banks bind us to an adapter.
       if (::IsWindow(window)) {
-        child = surface_source.create ? nullptr : makeChild(window);
+        child = surface_source.create
+                    ? nullptr
+                    : cc_mw3_re::platform::make_present_child(window);
         if (!child && !surface_source.create)
           throw std::runtime_error(
               "Cannot create Vulkan capability-query window");
@@ -2020,22 +2013,17 @@ private:
   // adapter supports, without creating a device before presentation can choose.
   static unsigned unbound_texture_dimension() {
     struct Probe {
-      HMODULE library{};
+      cc_mw3_re::platform::VulkanLoader loader;
       VkInstance instance{};
       PFN_vkDestroyInstance destroy{};
       ~Probe() {
         if (instance && destroy)
           destroy(instance, nullptr);
-        if (library)
-          ::FreeLibrary(library);
       }
     } probe;
-    probe.library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr,
-                                     LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!probe.library)
+    if (!probe.loader.load())
       throw std::runtime_error("Vulkan capability loader unavailable");
-    const auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
-        ::GetProcAddress(probe.library, "vkGetInstanceProcAddr"));
+    const auto get = probe.loader.get_instance_proc_addr();
     if (!get)
       throw std::runtime_error("Vulkan capability entry point unavailable");
     const auto create = reinterpret_cast<PFN_vkCreateInstance>(
@@ -2142,7 +2130,7 @@ private:
     std::uint64_t hash{};
     bool valid{};
   };
-  void *library{};
+  cc_mw3_re::platform::VulkanLoader loader;
   VkInstance instance{};
   VkPhysicalDevice gpu{};
   VkPhysicalDeviceMemoryProperties memory{};
@@ -2752,13 +2740,10 @@ private:
     if (bridge_requested && exclusiveRequested())
       throw std::runtime_error(
           "DXGI presentation bridge requires windowed or borderless mode");
-    library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr,
-                               LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!library)
+    if (!loader.load())
       throw std::runtime_error(
           "Vulkan scene renderer: system Vulkan loader unavailable");
-    auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(::GetProcAddress(
-        static_cast<HMODULE>(library), "vkGetInstanceProcAddr"));
+    auto get = loader.get_instance_proc_addr();
     if (!get)
       throw std::runtime_error(
           "Vulkan scene renderer: vkGetInstanceProcAddr unavailable");
@@ -2831,13 +2816,8 @@ private:
       presentWindow = forPresent;
     } else if (!bridge_requested && forPresent && !instanceExtensions.empty() &&
                f.vkCreateWin32SurfaceKHR) {
-      VkWin32SurfaceCreateInfoKHR ci{};
-      ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-      ci.hinstance = ::GetModuleHandleW(nullptr);
-      ci.hwnd = forPresent;
-      if (f.vkCreateWin32SurfaceKHR(instance, &ci, nullptr, &probe) !=
-          VK_SUCCESS)
-        probe = {};
+      probe = cc_mw3_re::platform::create_win32_surface(
+          instance, forPresent, f.vkCreateWin32SurfaceKHR);
     }
     unsigned count = 0;
     check(f.vkEnumeratePhysicalDevices(instance, &count, nullptr),
@@ -4108,33 +4088,7 @@ private:
     f.vkCmdCopyImageToBuffer(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                              buf, 1, &c);
   }
-  // The child owns presentation pixels while input remains with the game
-  // window. Suppress background erasure to avoid flashes between presented
-  // images.
-  static LRESULT CALLBACK childProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (m == WM_NCHITTEST)
-      return HTTRANSPARENT;
-    if (m == WM_ERASEBKGND)
-      return 1;
-    return ::DefWindowProcW(h, m, w, l);
-  }
-  static HWND makeChild(HWND parent) {
-    static const ATOM cls = [] {
-      WNDCLASSW wc{};
-      wc.lpfnWndProc = childProc;
-      wc.hInstance = ::GetModuleHandleW(nullptr);
-      wc.lpszClassName = L"MW34VulkanPresent";
-      return ::RegisterClassW(&wc);
-    }();
-    if (!cls)
-      return nullptr;
-    RECT rc{};
-    ::GetClientRect(parent, &rc);
-    return ::CreateWindowExW(
-        WS_EX_NOPARENTNOTIFY, L"MW34VulkanPresent", L"",
-        WS_CHILD | WS_VISIBLE | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0, rc.right,
-        rc.bottom, parent, nullptr, ::GetModuleHandleW(nullptr), nullptr);
-  }
+
   bool surface(HWND hwnd) {
     if (dxgi.active()) {
       presentWindow = hwnd;
@@ -4145,11 +4099,10 @@ private:
       presentWindow = hwnd;
       return windowSurface != VK_NULL_HANDLE;
     }
-    VkWin32SurfaceCreateInfoKHR ci{};
-    ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    ci.hinstance = ::GetModuleHandleW(nullptr);
-    ci.hwnd = hwnd;
-    check(f.vkCreateWin32SurfaceKHR(instance, &ci, nullptr, &windowSurface),
+    windowSurface = cc_mw3_re::platform::create_win32_surface(
+        instance, hwnd, f.vkCreateWin32SurfaceKHR);
+    check(windowSurface != VK_NULL_HANDLE ? VK_SUCCESS
+                                          : VK_ERROR_INITIALIZATION_FAILED,
           "window surface");
     VkBool32 ok = VK_FALSE;
     check(
@@ -4196,37 +4149,42 @@ private:
   // semaphores.
   bool swapchainReady() {
     if (dxgi.active()) {
-      RECT client{};
-      ::GetClientRect(child, &client);
-      if (::IsIconic(presentParent) || client.right <= 0 || client.bottom <= 0)
+      long cw = 0, ch = 0;
+      cc_mw3_re::platform::get_window_client_rect(child, &cw, &ch);
+      if (cc_mw3_re::platform::is_window_iconic(presentParent) || cw <= 0 ||
+          ch <= 0)
         return false;
-      dxgi.prepare(child, unsigned(client.right), unsigned(client.bottom));
-      swapExtent = {unsigned(client.right), unsigned(client.bottom)};
+      dxgi.prepare(child, unsigned(cw), unsigned(ch));
+      swapExtent = {unsigned(cw), unsigned(ch)};
       return true;
     }
     VkSurfaceCapabilitiesKHR caps{};
     if (const VkResult r = f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
             gpu, windowSurface, &caps);
         r != VK_SUCCESS) {
-      RECT rc{};
-      ::GetClientRect(presentWindow, &rc);
+      long rw = 0, rh = 0;
+      cc_mw3_re::platform::get_window_client_rect(presentWindow, &rw, &rh);
       throw std::runtime_error(
           "Vulkan presenter: surface capabilities failed (" +
           std::to_string(int(r)) + ") for window " +
           std::to_string(reinterpret_cast<std::uintptr_t>(presentWindow)) +
-          " valid " + std::to_string(::IsWindow(presentWindow)) + " visible " +
-          std::to_string(::IsWindowVisible(presentWindow)) + " client " +
-          std::to_string(rc.right) + "x" + std::to_string(rc.bottom) +
+          " valid " +
+          std::to_string(cc_mw3_re::platform::is_window_valid(presentWindow)) +
+          " visible " +
+          std::to_string(
+              cc_mw3_re::platform::is_window_visible(presentWindow)) +
+          " client " + std::to_string(rw) + "x" + std::to_string(rh) +
           " style " +
-          std::to_string(::GetWindowLongW(presentWindow, GWL_STYLE)) +
+          std::to_string(cc_mw3_re::platform::get_window_style(presentWindow)) +
           " exstyle " +
-          std::to_string(::GetWindowLongW(presentWindow, GWL_EXSTYLE)));
+          std::to_string(
+              cc_mw3_re::platform::get_window_exstyle(presentWindow)));
     }
     VkExtent2D e = caps.currentExtent;
     if (e.width == 0xffffffffu) {
-      RECT rc{};
-      ::GetClientRect(presentWindow, &rc);
-      e = {unsigned(rc.right), unsigned(rc.bottom)};
+      long rw = 0, rh = 0;
+      cc_mw3_re::platform::get_window_client_rect(presentWindow, &rw, &rh);
+      e = {unsigned(rw), unsigned(rh)};
     }
     if (!e.width || !e.height)
       return false;
@@ -4392,8 +4350,7 @@ private:
       dropSurface();
       if (instance && f.vkDestroyInstance)
         f.vkDestroyInstance(instance, nullptr);
-      if (library)
-        ::FreeLibrary(static_cast<HMODULE>(library));
+      loader.unload();
       return;
     }
     f.vkDeviceWaitIdle(device);
@@ -4463,7 +4420,7 @@ private:
     dropSwapchain();
     dropSurface();
     if (child)
-      ::DestroyWindow(child);
+      cc_mw3_re::platform::destroy_present_child(child);
     if (srcImage.view)
       f.vkDestroyImageView(device, srcImage.view, nullptr);
     if (srcImage.image)
@@ -4549,7 +4506,7 @@ private:
     f.vkDestroyCommandPool(device, commandPool, nullptr);
     f.vkDestroyDevice(device, nullptr);
     f.vkDestroyInstance(instance, nullptr);
-    ::FreeLibrary(static_cast<HMODULE>(library));
+    loader.unload();
     device = {};
   }
 #include "quality_stage.inc"

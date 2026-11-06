@@ -707,6 +707,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 } // namespace
 
 #include "geometry_checks.inc"
+#include "platform_checks.inc"
 #include "prepared_gpu_checks.inc"
 #include "ultrawide_checks.inc"
 
@@ -809,6 +810,7 @@ int main(int argc, char **argv) {
   int result = 0;
   try {
     check_renderer_bridge_config();
+    cc_mw3_re::platform::run_platform_checks();
     require(window != nullptr, SDL_GetError());
     if (native_wsi) {
       auto *invalid =

@@ -9,6 +9,8 @@
 #include "renderer/geometry/reference.hpp"
 
 #include "frontend/sdl/sdl_child.h"
+#include "platform/wsi_surface.hpp"
+#include "platform/wsi_win32_dxgi.hpp"
 #include "vk_scene.hpp"
 #include <SDL3/SDL_vulkan.h>
 
@@ -103,25 +105,13 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
 }
 
 vk::Renderer::WindowSurface sdl_surface(SDL_Window *window) {
-  if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN))
-    throw std::runtime_error(
-        "SDL Vulkan surface: window requires SDL_WINDOW_VULKAN");
-  Uint32 count = 0;
-  const auto *extensions = SDL_Vulkan_GetInstanceExtensions(&count);
-  if (!extensions)
-    throw std::runtime_error(std::string("SDL Vulkan extensions: ") +
-                             SDL_GetError());
   vk::Renderer::WindowSurface source;
-  source.extensions.assign(extensions, extensions + count);
+  source.extensions = cc_mw3_re::platform::get_instance_extensions();
   source.create = [window](VkInstance instance) {
-    VkSurfaceKHR surface{};
-    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
-      throw std::runtime_error(std::string("SDL Vulkan surface: ") +
-                               SDL_GetError());
-    return surface;
+    return cc_mw3_re::platform::create_surface(window, instance);
   };
   source.destroy = [](VkInstance instance, VkSurfaceKHR surface) {
-    SDL_Vulkan_DestroySurface(instance, surface, nullptr);
+    cc_mw3_re::platform::destroy_surface(instance, surface);
   };
   return source;
 }
@@ -184,9 +174,7 @@ public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
                          const sdlfe::CoreCriticalQuality &quality,
                          const sdlfe::CoreCriticalAssets &assets)
-      : window_(window), hwnd_(static_cast<HWND>(SDL_GetPointerProperty(
-                             SDL_GetWindowProperties(window),
-                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))),
+      : window_(window), hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         prepared_(assets), geometry_mode_(parse_geometry(assets.geometry)),
@@ -207,9 +195,7 @@ public:
       worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
         // Process only synchronous window messages, without consuming
         // input or reentering the game. DXGI may send one while waiting.
-        MSG message{};
-        ::PeekMessageW(&message, nullptr, 0, 0,
-                       PM_NOREMOVE | PM_QS_SENDMESSAGE);
+        cc_mw3_re::platform::pump_presentation_messages();
       });
       std::fprintf(stderr,
                    "Core Critical render worker: enabled (8 jobs, 128 MiB)\n");
