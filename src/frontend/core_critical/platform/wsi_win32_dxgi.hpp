@@ -74,9 +74,11 @@ inline HWND get_window_hwnd(SDL_Window *window) {
         props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
     if (hwnd) {
       register_window_hwnd(window, hwnd);
-      SDL_SetPointerPropertyWithCleanup(props, "cc_mw3_re.window_cleanup",
-                                        window, on_window_destroyed_cleanup,
-                                        nullptr);
+      if (!SDL_GetPointerProperty(props, "cc_mw3_re.window_cleanup", nullptr)) {
+        SDL_SetPointerPropertyWithCleanup(props, "cc_mw3_re.window_cleanup",
+                                          window, on_window_destroyed_cleanup,
+                                          nullptr);
+      }
     }
     return hwnd;
   }
