@@ -16,7 +16,7 @@
 
 namespace mech3::source {
 
-#ifdef MW3_HAVE_LIBARCHIVE
+#if MW3_HAVE_LIBARCHIVE
 bool archives_supported() { return true; }
 #else
 bool archives_supported() { return false; }
