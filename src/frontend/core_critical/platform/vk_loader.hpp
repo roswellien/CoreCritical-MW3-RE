@@ -4,8 +4,6 @@
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan_core.h>
 
-#include "wsi_win32_dxgi.hpp"
-
 #include <stdexcept>
 
 namespace cc_mw3_re::platform {
@@ -20,18 +18,11 @@ public:
 
   VulkanLoader(VulkanLoader &&other) noexcept
       : loaded_(other.loaded_), sdl_loaded_(other.sdl_loaded_),
-        get_proc_(other.get_proc_)
-#ifdef _WIN32
-        ,
-        win32_module_(other.win32_module_)
-#endif
-  {
+        shared_object_(other.shared_object_), get_proc_(other.get_proc_) {
     other.loaded_ = false;
     other.sdl_loaded_ = false;
+    other.shared_object_ = nullptr;
     other.get_proc_ = nullptr;
-#ifdef _WIN32
-    other.win32_module_ = nullptr;
-#endif
   }
 
   VulkanLoader &operator=(VulkanLoader &&other) noexcept {
@@ -39,13 +30,11 @@ public:
       unload();
       loaded_ = other.loaded_;
       sdl_loaded_ = other.sdl_loaded_;
+      shared_object_ = other.shared_object_;
       get_proc_ = other.get_proc_;
-#ifdef _WIN32
-      win32_module_ = other.win32_module_;
-      other.win32_module_ = nullptr;
-#endif
       other.loaded_ = false;
       other.sdl_loaded_ = false;
+      other.shared_object_ = nullptr;
       other.get_proc_ = nullptr;
     }
     return *this;
@@ -66,31 +55,34 @@ public:
       SDL_Vulkan_UnloadLibrary();
     }
 
-#ifdef _WIN32
-    win32_module_ = load_vulkan_library();
-    if (win32_module_) {
-      get_proc_ = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
-          get_proc_address(win32_module_, "vkGetInstanceProcAddr"));
-      if (get_proc_) {
+#if defined(_WIN32)
+    const char *fallback_name = "vulkan-1.dll";
+#elif defined(__APPLE__)
+    const char *fallback_name = "libvulkan.dylib";
+#else
+    const char *fallback_name = "libvulkan.so.1";
+#endif
+    shared_object_ = SDL_LoadObject(fallback_name);
+    if (shared_object_) {
+      auto proc = SDL_LoadFunction(shared_object_, "vkGetInstanceProcAddr");
+      if (proc) {
+        get_proc_ = reinterpret_cast<PFN_vkGetInstanceProcAddr>(proc);
         loaded_ = true;
         return true;
       }
-      free_vulkan_library(win32_module_);
-      win32_module_ = nullptr;
+      SDL_UnloadObject(shared_object_);
+      shared_object_ = nullptr;
     }
-#endif
     return false;
   }
 
   void unload() noexcept {
     if (!loaded_)
       return;
-#ifdef _WIN32
-    if (win32_module_) {
-      free_vulkan_library(win32_module_);
-      win32_module_ = nullptr;
+    if (shared_object_) {
+      SDL_UnloadObject(shared_object_);
+      shared_object_ = nullptr;
     }
-#endif
     if (sdl_loaded_) {
       SDL_Vulkan_UnloadLibrary();
       sdl_loaded_ = false;
@@ -108,10 +100,8 @@ public:
 private:
   bool loaded_{false};
   bool sdl_loaded_{false};
+  SDL_SharedObject *shared_object_{nullptr};
   PFN_vkGetInstanceProcAddr get_proc_{nullptr};
-#ifdef _WIN32
-  HMODULE win32_module_{nullptr};
-#endif
 };
 
 } // namespace cc_mw3_re::platform

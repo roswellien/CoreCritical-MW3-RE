@@ -4,25 +4,11 @@
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan_core.h>
 
-#include "platform/prepared_visuals.h"
-#include "platform/render3d.h"
-
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#ifdef DrawState
-#undef DrawState
-#endif
-
 namespace cc_mw3_re::platform {
-
-using ::platform::DrawState;
-using ::platform::ModelDrawContext;
-using ::platform::Primitive;
-using ::platform::Render3D;
-using ::platform::TLVertex;
-namespace prepared = ::platform::prepared;
 
 inline VkSurfaceKHR create_surface(SDL_Window *window, VkInstance instance) {
   if (!window)

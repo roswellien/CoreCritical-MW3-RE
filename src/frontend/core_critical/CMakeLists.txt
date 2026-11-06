@@ -36,7 +36,9 @@ mw3_cc_shader(sun_world_vert sun_world.vert)
 mw3_cc_shader(world_coverage_frag world_coverage.frag)
 mw3_cc_shader(world_scene_vert world_scene.vert)
 
-add_executable(mw3ccvulkan_checks adapter_checks.cpp)
+add_executable(mw3ccvulkan_checks adapter_checks.cpp platform_portable_contract.cpp)
+
+target_compile_definitions(mw3ccvulkan_checks PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(mw3ccvulkan_checks PRIVATE mw3sdl)
 target_include_directories(mw3ccvulkan_checks PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" "${MW3_VULKAN_HEADERS}" . platform renderer "${CMAKE_CURRENT_BINARY_DIR}")
 if(MSVC)

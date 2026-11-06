@@ -406,8 +406,8 @@ public:
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
     if (destination.left || destination.top ||
-        destination.right != LONG(swapExtent.width) ||
-        destination.bottom != LONG(swapExtent.height)) {
+        destination.right != int32_t(swapExtent.width) ||
+        destination.bottom != int32_t(swapExtent.height)) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
       f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -584,8 +584,8 @@ public:
     const int dw = destination.right - destination.left;
     const int dh = destination.bottom - destination.top;
     if (destination.left || destination.top ||
-        destination.right != LONG(swapExtent.width) ||
-        destination.bottom != LONG(swapExtent.height)) {
+        destination.right != int32_t(swapExtent.width) ||
+        destination.bottom != int32_t(swapExtent.height)) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
       f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -970,7 +970,9 @@ public:
     if (!device) {
       // Capability queries can precede the first Flip. Select against the
       // actual window now, before texture banks bind us to an adapter.
-      if (::IsWindow(window)) {
+      if (surface_source.create
+              ? (window != nullptr)
+              : cc_mw3_re::platform::is_window_valid(window)) {
         child = surface_source.create
                     ? nullptr
                     : cc_mw3_re::platform::make_present_child(window);
@@ -2088,7 +2090,12 @@ private:
     struct Fns {
 #define MW34_VK_FNS(X) X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceFeatures) \
     X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkEnumerateDeviceExtensionProperties)
-#define MW34_VK_WSI_FNS(X) X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
+#if defined(_WIN32)
+#define MW34_VK_WIN32_WSI_FNS(X) X(vkCreateWin32SurfaceKHR)
+#else
+#define MW34_VK_WIN32_WSI_FNS(X)
+#endif
+#define MW34_VK_WSI_FNS(X) MW34_VK_WIN32_WSI_FNS(X) X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
     X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR)
 #define MW34_VK_SWAP_FNS(X) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) X(vkAcquireNextImageKHR) X(vkQueuePresentKHR) \
     X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage) X(vkCmdClearColorImage)
@@ -2780,10 +2787,11 @@ private:
             return true;
         return false;
       };
-      if (has(VK_KHR_SURFACE_EXTENSION_NAME) &&
-          has(VK_KHR_WIN32_SURFACE_EXTENSION_NAME))
-        instanceExtensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                              VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+      const char *plat_surface_ext =
+          cc_mw3_re::platform::get_platform_surface_extension_name();
+      if (plat_surface_ext && has(VK_KHR_SURFACE_EXTENSION_NAME) &&
+          has(plat_surface_ext))
+        instanceExtensions = {VK_KHR_SURFACE_EXTENSION_NAME, plat_surface_ext};
       if (exclusiveRequested()) {
         if (!has(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
             !has(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
@@ -2814,10 +2822,13 @@ private:
         throw std::runtime_error("SDL did not create a Vulkan window surface");
       probe = windowSurface;
       presentWindow = forPresent;
-    } else if (!bridge_requested && forPresent && !instanceExtensions.empty() &&
-               f.vkCreateWin32SurfaceKHR) {
-      probe = cc_mw3_re::platform::create_win32_surface(
-          instance, forPresent, f.vkCreateWin32SurfaceKHR);
+    } else if (!bridge_requested && forPresent && !instanceExtensions.empty()) {
+#if defined(_WIN32)
+      if (f.vkCreateWin32SurfaceKHR) {
+        probe = cc_mw3_re::platform::create_win32_surface(
+            instance, forPresent, f.vkCreateWin32SurfaceKHR);
+      }
+#endif
     }
     unsigned count = 0;
     check(f.vkEnumeratePhysicalDevices(instance, &count, nullptr),
@@ -2967,9 +2978,14 @@ private:
         f.vkEnumerateDeviceExtensionProperties(gpu, nullptr, &n, props.data());
       }
       for (const auto &p : props) {
-        if (!std::strcmp(p.extensionName, swapExt))
+        if (!std::strcmp(p.extensionName, swapExt)) {
+          bool native_surface_supported = false;
+#if defined(_WIN32)
+          native_surface_supported = (f.vkCreateWin32SurfaceKHR != nullptr);
+#endif
           presentable = !instanceExtensions.empty() &&
-                        (surface_source.create || f.vkCreateWin32SurfaceKHR);
+                        (surface_source.create || native_surface_supported);
+        }
         if (exclusiveRequested() &&
             !std::strcmp(p.extensionName,
                          VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME))
@@ -4099,8 +4115,12 @@ private:
       presentWindow = hwnd;
       return windowSurface != VK_NULL_HANDLE;
     }
+#if defined(_WIN32)
     windowSurface = cc_mw3_re::platform::create_win32_surface(
         instance, hwnd, f.vkCreateWin32SurfaceKHR);
+#else
+    windowSurface = VK_NULL_HANDLE;
+#endif
     check(windowSurface != VK_NULL_HANDLE ? VK_SUCCESS
                                           : VK_ERROR_INITIALIZATION_FAILED,
           "window surface");
@@ -4210,21 +4230,13 @@ private:
     VkSwapchainCreateInfoKHR sc{};
     sc.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     sc.surface = windowSurface;
-    VkSurfaceFullScreenExclusiveWin32InfoEXT monitor{};
-    monitor.sType =
-        VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
-    monitor.hmonitor =
-        ::MonitorFromWindow(presentParent, MONITOR_DEFAULTTONEAREST);
-    VkSurfaceFullScreenExclusiveInfoEXT full{};
-    full.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
-    full.fullScreenExclusive =
-        VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
-    full.pNext = &monitor;
+    cc_mw3_re::platform::PlatformExclusiveFullscreenChain exclusive_chain;
+    exclusive_chain.setup(presentParent);
     if (exclusiveDevice) {
       VkPhysicalDeviceSurfaceInfo2KHR info{};
       info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
       info.surface = windowSurface;
-      info.pNext = &full;
+      info.pNext = exclusive_chain.pNext();
       VkSurfaceCapabilitiesFullScreenExclusiveEXT supported{};
       supported.sType =
           VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_FULL_SCREEN_EXCLUSIVE_EXT;
@@ -4236,7 +4248,7 @@ private:
       if (!supported.fullScreenExclusiveSupported)
         throw std::runtime_error("Exclusive fullscreen is not supported for "
                                  "this window and monitor");
-      sc.pNext = &full;
+      sc.pNext = exclusive_chain.pNext();
     }
     sc.minImageCount = std::max(caps.minImageCount, 2u);
     if (caps.maxImageCount)
@@ -4306,8 +4318,8 @@ private:
   bool syncExclusive() {
     if (!exclusiveDevice)
       return true;
-    const bool foreground = ::GetAncestor(::GetForegroundWindow(), GA_ROOT) ==
-                            ::GetAncestor(presentParent, GA_ROOT);
+    const bool foreground =
+        cc_mw3_re::platform::is_window_foreground_root(presentParent);
     if (!foreground) {
       if (exclusiveHeld) {
         check(releaseExclusive(device, swapchain),

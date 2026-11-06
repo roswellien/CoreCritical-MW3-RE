@@ -15,7 +15,11 @@
 #include <vulkan/vulkan_win32.h>
 #include <windows.h>
 
+#undef DrawState // Win32's DrawState macro conflicts with platform::DrawState
+
 namespace cc_mw3_re::platform {
+
+using NativeWindowHandle = HWND;
 
 inline HWND get_window_hwnd(SDL_Window *window) {
   if (!window)
@@ -25,18 +29,12 @@ inline HWND get_window_hwnd(SDL_Window *window) {
                              SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
 }
 
-inline HMODULE load_vulkan_library() {
-  return ::LoadLibraryExW(L"vulkan-1.dll", nullptr,
-                          LOAD_LIBRARY_SEARCH_SYSTEM32);
+inline NativeWindowHandle get_window_native_handle(SDL_Window *window) {
+  return get_window_hwnd(window);
 }
 
-inline void free_vulkan_library(HMODULE mod) {
-  if (mod)
-    ::FreeLibrary(mod);
-}
-
-inline void *get_proc_address(HMODULE mod, const char *name) {
-  return mod ? reinterpret_cast<void *>(::GetProcAddress(mod, name)) : nullptr;
+inline const char *get_platform_surface_extension_name() {
+  return VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
 }
 
 inline VkSurfaceKHR
@@ -111,12 +109,16 @@ inline void get_window_client_rect(HWND hwnd, long *w, long *h) {
     *h = rc.bottom;
 }
 
-inline bool is_window_iconic(HWND hwnd) { return hwnd && ::IsIconic(hwnd); }
+inline bool is_window_iconic(HWND hwnd) {
+  return hwnd ? (::IsIconic(hwnd) != FALSE) : false;
+}
 
-inline bool is_window_valid(HWND hwnd) { return hwnd && ::IsWindow(hwnd); }
+inline bool is_window_valid(HWND hwnd) {
+  return hwnd ? (::IsWindow(hwnd) != FALSE) : true;
+}
 
 inline bool is_window_visible(HWND hwnd) {
-  return hwnd && ::IsWindowVisible(hwnd);
+  return hwnd ? (::IsWindowVisible(hwnd) != FALSE) : true;
 }
 
 inline long get_window_style(HWND hwnd) {
@@ -132,11 +134,114 @@ inline void pump_presentation_messages() {
   ::PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
 }
 
+inline bool is_window_foreground_root(HWND window) {
+  if (!window)
+    return false;
+  HWND foreground = ::GetForegroundWindow();
+  if (!foreground)
+    return false;
+  return ::GetAncestor(foreground, GA_ROOT) == ::GetAncestor(window, GA_ROOT);
+}
+
+struct PlatformExclusiveFullscreenChain {
+  VkSurfaceFullScreenExclusiveWin32InfoEXT win32_info{};
+  VkSurfaceFullScreenExclusiveInfoEXT exclusive_info{};
+
+  void setup(HWND window) {
+    win32_info.sType =
+        VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
+    win32_info.pNext = nullptr;
+    win32_info.hmonitor =
+        window ? ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST)
+               : nullptr;
+
+    exclusive_info.sType =
+        VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
+    exclusive_info.pNext = &win32_info;
+    exclusive_info.fullScreenExclusive =
+        VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
+  }
+
+  void *pNext() { return &exclusive_info; }
+};
+
 } // namespace cc_mw3_re::platform
+
+namespace mw34::display {
+// Own the fullscreen Windows mode without persisting a desktop configuration
+// change.
+class ExclusiveMode {
+  std::wstring device_name_;
+  DEVMODEW original_mode_{}, requested_mode_{};
+  bool owns_mode_{}, changing_mode_{};
+  HWND window_{};
+
+public:
+  ~ExclusiveMode() { release(); }
+  void release() noexcept {
+    if (!owns_mode_ || changing_mode_)
+      return;
+    changing_mode_ = true;
+    const LONG change_result = ::ChangeDisplaySettingsExW(
+        device_name_.c_str(), &original_mode_, nullptr, 0, nullptr);
+    if (change_result == DISP_CHANGE_SUCCESSFUL)
+      owns_mode_ = false;
+    changing_mode_ = false;
+  }
+  void acquire(HWND window_handle, unsigned width, unsigned height) {
+    if (changing_mode_)
+      return;
+    if (owns_mode_ && window_ == window_handle &&
+        requested_mode_.dmPelsWidth == width &&
+        requested_mode_.dmPelsHeight == height)
+      return;
+    release();
+    MONITORINFOEXW monitor_info{};
+    monitor_info.cbSize = sizeof(monitor_info);
+    if (!::GetMonitorInfoW(
+            ::MonitorFromWindow(window_handle, MONITOR_DEFAULTTONEAREST),
+            &monitor_info))
+      throw std::runtime_error("Cannot locate fullscreen monitor");
+    device_name_ = monitor_info.szDevice;
+    original_mode_ = {};
+    original_mode_.dmSize = sizeof(original_mode_);
+    if (!::EnumDisplaySettingsExW(device_name_.c_str(), ENUM_CURRENT_SETTINGS,
+                                  &original_mode_, 0))
+      throw std::runtime_error("Cannot read desktop display mode");
+    requested_mode_ = original_mode_;
+    requested_mode_.dmPelsWidth = width;
+    requested_mode_.dmPelsHeight = height;
+    requested_mode_.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+    changing_mode_ = true;
+    LONG change_result = ::ChangeDisplaySettingsExW(
+        device_name_.c_str(), &requested_mode_, nullptr, CDS_TEST, nullptr);
+    if (change_result == DISP_CHANGE_SUCCESSFUL)
+      change_result =
+          ::ChangeDisplaySettingsExW(device_name_.c_str(), &requested_mode_,
+                                     nullptr, CDS_FULLSCREEN, nullptr);
+    changing_mode_ = false;
+    if (change_result != DISP_CHANGE_SUCCESSFUL)
+      throw std::runtime_error(
+          "Exclusive fullscreen mode is not supported by this monitor (Windows "
+          "result " +
+          std::to_string(change_result) + ")");
+    window_ = window_handle;
+    owns_mode_ = true;
+  }
+};
+
+inline ExclusiveMode &exclusive() {
+  static ExclusiveMode mode;
+  return mode;
+}
+} // namespace mw34::display
 
 #else
 
+#include <array>
+
 // Non-Win32 portable stub declarations
+using NativeWindowHandle = void *;
 using HWND = void *;
 using HMODULE = void *;
 using LRESULT = long long;
@@ -144,26 +249,52 @@ using UINT = unsigned int;
 using WPARAM = unsigned long long;
 using LPARAM = long long;
 
+struct VkWin32KeyedMutexAcquireReleaseInfoKHR {
+  VkStructureType sType;
+  const void *pNext;
+  uint32_t acquireCount;
+  const VkDeviceMemory *pAcquireSyncs;
+  const uint64_t *pAcquireKeys;
+  const uint32_t *pAcquireTimeouts;
+  uint32_t releaseCount;
+  const VkDeviceMemory *pReleaseSyncs;
+  const uint64_t *pReleaseKeys;
+};
+
 namespace mw34::vkscene {
 class DxgiPresent {
 public:
+  DxgiPresent() = default;
+  ~DxgiPresent() = default;
+  static bool requested(bool = false) { return false; }
   bool active() const { return false; }
-  void detach() {}
+  VkImage image() const { return VK_NULL_HANDLE; }
+  void attach(VkDevice, const VkPhysicalDeviceIDProperties &, unsigned,
+              PFN_vkGetDeviceProcAddr, VkExtent3D) {}
   void reset_window() {}
-  void request_pixel(int, int) {}
-  uint32_t read_pixel() { return 0; }
+  void detach() noexcept {}
+  void prepare(HWND, unsigned, unsigned) {}
+  void acquire_image(VkCommandBuffer, PFN_vkCmdPipelineBarrier,
+                     PFN_vkCmdClearColorImage) {}
+  void release_image(VkCommandBuffer, PFN_vkCmdPipelineBarrier) {}
+  VkWin32KeyedMutexAcquireReleaseInfoKHR synchronization() const { return {}; }
+  bool present(bool) { return false; }
+  void request_pixel(unsigned, unsigned) {}
+  std::array<unsigned char, 4> read_pixel() { return {}; }
 };
 } // namespace mw34::vkscene
 
 namespace cc_mw3_re::platform {
 
+using NativeWindowHandle = void *;
+
 inline void *get_window_hwnd(SDL_Window *) { return nullptr; }
 
-inline HMODULE load_vulkan_library() { return nullptr; }
+inline NativeWindowHandle get_window_native_handle(SDL_Window *w) {
+  return static_cast<NativeWindowHandle>(w);
+}
 
-inline void free_vulkan_library(HMODULE) {}
-
-inline void *get_proc_address(HMODULE, const char *) { return nullptr; }
+inline const char *get_platform_surface_extension_name() { return nullptr; }
 
 inline VkSurfaceKHR create_win32_surface(VkInstance, HWND, void *) {
   return VK_NULL_HANDLE;
@@ -184,9 +315,9 @@ inline void get_window_client_rect(HWND, long *w, long *h) {
 
 inline bool is_window_iconic(HWND) { return false; }
 
-inline bool is_window_valid(HWND hwnd) { return hwnd != nullptr; }
+inline bool is_window_valid(HWND) { return true; }
 
-inline bool is_window_visible(HWND hwnd) { return hwnd != nullptr; }
+inline bool is_window_visible(HWND) { return true; }
 
 inline long get_window_style(HWND) { return 0; }
 
@@ -194,6 +325,35 @@ inline long get_window_exstyle(HWND) { return 0; }
 
 inline void pump_presentation_messages() {}
 
+inline bool is_window_foreground_root(HWND) { return true; }
+
+struct PlatformExclusiveFullscreenChain {
+  VkSurfaceFullScreenExclusiveInfoEXT exclusive_info{};
+
+  void setup(NativeWindowHandle) {
+    exclusive_info.sType =
+        VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
+    exclusive_info.pNext = nullptr;
+    exclusive_info.fullScreenExclusive =
+        VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
+  }
+
+  void *pNext() { return &exclusive_info; }
+};
+
 } // namespace cc_mw3_re::platform
+
+namespace mw34::display {
+class ExclusiveMode {
+public:
+  void release() noexcept {}
+  void acquire(void *, unsigned, unsigned) {}
+};
+
+inline ExclusiveMode &exclusive() {
+  static ExclusiveMode mode;
+  return mode;
+}
+} // namespace mw34::display
 
 #endif

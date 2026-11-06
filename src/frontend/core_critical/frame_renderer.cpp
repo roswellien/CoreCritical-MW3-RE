@@ -33,9 +33,9 @@ namespace cc_mw3_re {
 namespace {
 
 namespace vk = mw34::vkscene;
-using platform::DrawState;
-using platform::Primitive;
-using platform::TLVertex;
+using ::platform::DrawState;
+using ::platform::Primitive;
+using ::platform::TLVertex;
 
 // Wall durations on the calling CPU thread, including waits inside the measured
 // operation. Disabled intervals do not read a clock or change rendering inputs.
@@ -124,12 +124,12 @@ struct Texture {
   unsigned scene_index = no_binding;
   unsigned sharp_index = no_binding;
   bool held_copy{};
-  const platform::prepared::Image *replacement{};
+  const ::platform::prepared::Image *replacement{};
   unsigned source_width{}, source_height{};
   std::vector<std::uint32_t> pixels;
 };
 
-std::vector<uint32_t> image_pixels(const platform::prepared::Image &image,
+std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
                                    const uint8_t *source = nullptr,
                                    unsigned source_width = 0,
                                    unsigned source_height = 0) {
@@ -184,8 +184,9 @@ public:
     if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
       throw std::runtime_error(
           "Geometry normal debug requires an explicit geometry mode");
-    if (!hwnd_) {
-      throw std::runtime_error("SDL window has no Win32 handle");
+    if (!native_wsi_ && !hwnd_) {
+      throw std::runtime_error(
+          "Direct3D presentation requires a Win32 window handle");
     }
     if (backend == sdlfe::RendererBackend::sdl)
       throw std::runtime_error(
@@ -245,7 +246,7 @@ public:
     return suppress_model_draws_;
   }
   void end_model_draw() noexcept override { suppress_model_draws_ = false; }
-  void begin_model_draw(const platform::ModelDrawContext &context) override {
+  void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
     // into the native polygon producer that resumes after this callback.
     VisualFloatScope float_scope;
@@ -523,7 +524,7 @@ public:
   }
 
 private:
-  int32_t prepared_normal(const platform::prepared::NormalImage &image) {
+  int32_t prepared_normal(const ::platform::prepared::NormalImage &image) {
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())
       return found->second;
@@ -732,7 +733,7 @@ private:
 #include "frame_presentation.inc"
 
 private:
-  int32_t prepared_texture(const platform::prepared::Image &image) {
+  int32_t prepared_texture(const ::platform::prepared::Image &image) {
     const auto found = prepared_textures_.find(&image);
     if (found != prepared_textures_.end())
       return found->second;
@@ -745,7 +746,7 @@ private:
   }
 
   std::shared_ptr<const vk::ModelGeometry>
-  prepared_geometry(const platform::prepared::Batch &batch) {
+  prepared_geometry(const ::platform::prepared::Batch &batch) {
     const auto found = prepared_geometry_.find(&batch);
     if (found != prepared_geometry_.end())
       return found->second;
@@ -769,7 +770,7 @@ private:
   }
 
   void emit_prepared(const PreparedBatchDraw &source,
-                     const platform::ModelDrawContext &context) {
+                     const ::platform::ModelDrawContext &context) {
     CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
     if (geometry_mode_ != cc::geometry::Mode::legacy &&
         source.deformed.empty()) {
@@ -953,9 +954,10 @@ private:
   std::atomic<std::uint64_t> presented_frames_{}, resident_draws_{};
   std::uint64_t retired_geometry_buffers_{};
   QualityStatistics retired_quality_{};
-  std::map<const platform::prepared::Image *, int32_t> prepared_textures_;
-  std::map<const platform::prepared::NormalImage *, int32_t> prepared_normals_;
-  std::map<const platform::prepared::Batch *,
+  std::map<const ::platform::prepared::Image *, int32_t> prepared_textures_;
+  std::map<const ::platform::prepared::NormalImage *, int32_t>
+      prepared_normals_;
+  std::map<const ::platform::prepared::Batch *,
            std::shared_ptr<const vk::ModelGeometry>>
       prepared_geometry_;
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
@@ -965,7 +967,7 @@ private:
   std::uint64_t retired_lit_draws_{}, retired_normal_draws_{};
   unsigned texture_limit_{}, resident_width_{}, resident_height_{};
   int held_width_{}, held_height_{};
-  LONG present_window_width_{}, present_window_height_{};
+  int32_t present_window_width_{}, present_window_height_{};
   bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
   const bool cpu_profile_ = cpu_profile_requested();
   std::uint64_t render_ticks_{}, transport_ticks_{};

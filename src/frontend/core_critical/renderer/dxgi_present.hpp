@@ -400,7 +400,7 @@ public:
     const auto result = swap_->Present(vsync ? 1 : 0, flags);
     check_hr(result, "present");
     capture_ready_ = captured && result == S_OK;
-    return result == S_OK;
+    return SUCCEEDED(result);
   }
   // Explicit diagnostic readback, never part of normal presentation. It
   // verifies shared-image channel order and destination placement in tests.
