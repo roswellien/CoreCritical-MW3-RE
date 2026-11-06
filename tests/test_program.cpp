@@ -249,6 +249,9 @@ void reset_process_state() {
   mech3::mission_maps() = mech3::MissionMaps{};
   // The hit factors 0x00413e60 sets at the mechs' set-up: the exe's data.
   mech3::hit_globals_reset();
+  // The mission's salvage ([0x00609990]): a real launch empties it (0x00491150),
+  // the tests' debug launches don't, so an earlier kill's rows hid a later one's.
+  mech3::mission_salvage().clear();
   // The scripts' tolerances (doubles in zModel's data) and the skipped calls' count.
   zmod::tolerances_reset();
   zint::null_calls().clear();
