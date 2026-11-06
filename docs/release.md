@@ -53,6 +53,21 @@ every box here is ticked:
   later playtest, not a gate (Owen, 2026-10-31).
 - [ ] Every check in sections 1-4 below passes on all three platforms.
 
+## After Pirate's Moon: Rebuild Upgrades (planned for 1.1.0)
+
+Owen, 2026-11-05. Work starts when Pirate's Moon is finished. Today one switch,
+bug fixes, covers every play change. The bigger departures from the original move
+to a new settings page, each with its own switch, all on by default, so a player
+can turn them off for the original experience:
+
+- The mobile field bases regrouping as soon as a repair is done.
+- The improved AI (lancemates finding a way round walls, and so on).
+- The water movement.
+
+Still to decide when the work starts: exactly which fixes move to the page, and
+what stays under bug fixes; how the switches and bug fixes combine; and how
+multiplayer keeps every player on the same settings.
+
 ## 1. Before
 
 - [ ] `main` is the commit to release, with nothing uncommitted.
@@ -84,6 +99,9 @@ The version is git's: `git describe --tags --always --dirty` (CMake reads it
 into `MW3_VERSION`, which `mw3 --version`, the Windows version resource, the
 Mac's Info.plist and every package's file name carry), and the commit count
 into `MW3_BUILD_NUMBER`.
+
+**Numbering (Owen, 2026-11-05):** each part is one digit. 1.0.9 is followed by
+1.1.0 and 1.1.9 by 1.2.0, whatever is in the release; there is never a 1.1.10.
 
 - [ ] Owen tags the commit (`git tag -a v0.1 -m ...`), or approves the tag.
       Until then the version is the commit's short hash.
