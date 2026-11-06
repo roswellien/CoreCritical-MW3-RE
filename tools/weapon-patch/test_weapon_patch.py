@@ -34,7 +34,7 @@ spec.loader.exec_module(pw)
 
 EXE = ROOT / 'game' / 'mw3-1.2' / 'Mech3.exe'
 GAME = ROOT / 'game' / 'mw3-1.2'
-ORIGINAL = EXE.read_bytes()
+ORIGINAL = OFFICIAL = EXE.read_bytes()
 
 NAME, LABEL, HAS_TECH, USES_AMMO, FAMILY, INDEX_OF = 0x484900, 0x484920, 0x484940, 0x484960, 0x4853c0, 0x4848a0
 SELF_CHECK, FIND_DEF, RESET_TIMERS, ADD_WEAPON_DEF = 0x4854c0, 0x581ed0, 0x4b4bd0, 0x4b2230
@@ -62,8 +62,8 @@ GUARDS = (0x484904, 0x484924, 0x484944, 0x484964)  # `cmp ecx, n; jge` in each a
 class Machine:
     """An exe in the emulator, loaded from its own section table."""
 
-    def __init__(self, data):
-        self.cpu = cpu = Original(exe='mw3')
+    def __init__(self, data, exe='mw3'):
+        self.cpu = cpu = Original(exe=exe)
         pe = struct.unpack_from('<I', data, 0x3c)[0]
         count = struct.unpack_from('<H', data, pe + 6)[0]
         table = pe + 24 + struct.unpack_from('<H', data, pe + 20)[0]
@@ -374,12 +374,12 @@ def equipment_names(m, table):
     return [m.cstr(m.r32(table + i * 0x14 + 4)) for i in range(15)]
 
 
-def check_equipment(base, patched):
+def check_equipment(base, patched, table=None):
     """The moved table through all its references: 0x484980 the label, 0x484a00 the tech, 0x485360 +8, 0x4849a0
     (walk and kind)."""
     out = []
     names = equipment_names(base, pw.EQUIPMENT)
-    out += fails('equipment names', equipment_names(patched, pw.EQUIPMENT_NEW), names)
+    out += fails('equipment names', equipment_names(patched, table or pw.EQUIPMENT_NEW), names)
     for i in list(range(-2, 18)):
         for m in (base, patched):
             m.cpu.call(EQUIP_LABEL, ecx=i)

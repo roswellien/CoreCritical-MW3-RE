@@ -41,6 +41,7 @@ ROW = 0x18
 OLD_ROWS = 37
 SPACE_END = 0x5e6998  # the self-check's second range starts here
 MAX_ROWS = (SPACE_END - TABLE) // ROW  # 49
+MAX_ROWS_PROXY = 127  # the run-time route (proxy/): its table is in its own memory; the compares are signed imm8
 MAX_FAMILY = 14
 MAX_NAME = 31
 TECH = {'none': 0, 'clan': 1, 'sphere': 2, 'both': 3}

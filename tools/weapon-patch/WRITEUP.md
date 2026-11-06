@@ -1,6 +1,6 @@
 # Patching Mech3.exe 1.2 for new weapons: the write-up
 
-How `patch_weapons.py` works and how it was checked. `README.md` is the short version, with
+How the two routes work and how they were checked. `README.md` is the short version, with
 what was tested. This is separate from the rebuild: no game build uses anything in this folder.
 
 **Measured** means computed from the bytes or run in the emulator; **read** means from the
@@ -148,11 +148,32 @@ equipment table, 15 rows of 0x14 bytes from 0x5e6868 to 0x5df8b4, which a run-ti
 | 0x48498f | table +0x0c | the label |
 | 0x484a0f | table +0x10 | the tech |
 
-**At run time.** A DLL could copy the game's 37 rows into its own memory, add the new ones, and write all eight table pointers
+**At run time.** A DLL copies the game's 37 rows into its own memory, adds the new ones, and writes all eight table pointers
 above and the nine counts, before the game first uses the table. The exe's file doesn't change, so its hash still matches, and a
-launcher that checks the hash still accepts it. Its own memory means no 49-row limit, and no need to move the equipment table. The
+launcher that checks the hash still accepts it (not yet run). Its own memory means no 49-row limit, and no need to move the equipment table. The
 compares still stop it at 127 unless they are rewritten, being signed imm8. The self-check doesn't cover any of these addresses (measured). All eight
-references only read the table, so its memory can be read-only (read). This has not been built.
+references only read the table, so its memory is read-only (measured below). `proxy/` is that DLL.
+
+## The stand-in DLL
+
+`proxy/iforce2_proxy.c`, a freestanding C DLL with kernel32 its only import, and `iforce2_proxy.def`, which forwards all 10 of `IFORCE2.dll`'s exports by name and
+ordinal to the renamed original (checked against the real DLL's export table). Build:
+
+    i686-w64-mingw32-gcc -shared -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin \
+      -fno-tree-loop-distribute-patterns -fno-asynchronous-unwind-tables -O2 -Wall -Wextra -s \
+      -Wl,-e,_DllMain@12,--image-base=0x62000000,--dynamicbase,--no-insert-timestamp -o IFORCE2.dll iforce2_proxy.c iforce2_proxy.def -lkernel32
+
+No timestamp is linked in, so the same source and compiler give the same file.
+
+**Why IFORCE2.dll.** The exe imports it by name from its own folder, so the DLL loads before the exe's entry point (read), and no fix or wrapper we know of
+uses it. It isn't a system DLL. `ddraw.dll` is DDrawCompat's or a wrapper's, and `Mech3Msg.dll` is what modders edit.
+
+**In order, in DllMain:** every site holds Mech3.exe 1.2's value, each count's opcode too, with the image large enough to read them, or nothing changes. The row file: at most
+64 KB of plain text, the patcher's grammar, at most 127 weapons, no name the game has or twice; one bad line refuses the file. Each message id is in the `Mech3Msg.dll` beside it, read from the file
+with every offset checked. The table is built and made read-only. Each site's page goes writable, is written and goes back. If a protection call fails, it undoes what it did. It frees all else, and writes one log
+line. It always returns TRUE. `weapons.zrd`'s definitions are not read at load: a row without one makes no weapon; `proxy_install.py check` tests that beforehand.
+
+`proxy_install.py`'s `install` and `restore` rename `IFORCE2.dll` to `IFORCE2o.dll` and back, never overwrite, and remove only a file holding the stand-in's marker.
 
 ## 0x4b4bd0
 
@@ -161,6 +182,16 @@ indices from -1 to the count: -1 reads "noweapon", which finds no definition; ea
 goes to 0. A new row is reset like the others. A definition with no row is left alone, as it is today.
 
 ## Tests
+
+`test_proxy.py` maps the built DLL in the emulator with kernel32 stubbed, Windows' page protection applied for real, and runs its DllMain. On each of the three exes:
+
+- The same row, equipment, count, store fill, timer, loadout, self-check and unpatched-save checks, with 1, 2 and 90 new rows. The code pages are read-and-execute and the table read-only throughout, so
+  any write faults (measured: this is the proof nothing writes the table), and a test store into each does fault. No byte off the sites changes, and no other memory stays allocated.
+- 26 row-file cases, each leaving the exe byte-identical, nothing allocated and one log line: missing, empty, each bad field, a repeat, too many, too big, a NUL, a missing message id, a broken DLL.
+  Each of the 17 sites, and two opcodes, changed in turn; a small image; a different base; Pirate's Moon's exe; an exe patched on disk.
+- The exports against the real DLL, and the exe's four imports among them. The installer, including foreign files at every name it uses.
+- 37 breaks, each a change to the source, rebuilt: all sites, the protection restores, the read-only table, every parser check, and the log.
+- With 127 weapons the store fill 0x470e30 holds 394 items. The lab's lists past that aren't reached here, so that stays open.
 
 `test_weapon_patch.py`, against the unpatched exe. All pass, in about ten seconds, on each of the three exes:
 
@@ -179,4 +210,5 @@ goes to 0. A new row is reset like the others. A definition with no row is left 
 1. **Arrays inside objects.** 75 weapon-handling functions index no global array but this table, but that search sees only absolutely addressed arrays. PM
    went from 37 to 56 on the same code base, and its 8 widened count sites match 8 of ours, but its new functions are not compared. Nothing rules out a
    per-weapon array inside an object; a real run would show it.
-2. **Past 125 store items.** The lab's lists are read, not run, and the rebuild has gone only to 125. PM's 56 rows suggest the code base copes, but that is PM's build.
+2. **Past 125 store items.** The store itself held 394 in the emulator (measured). The lab's lists are read, not run, and the rebuild has gone only to 125. PM's 56 rows suggest the code base copes, but that is PM's build.
+3. **Windows.** Neither route has been loaded by Windows. The stand-in's load order, forwarding and antivirus reaction are all still to be seen.
