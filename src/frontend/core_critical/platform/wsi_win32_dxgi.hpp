@@ -33,6 +33,14 @@ inline NativeWindowHandle get_window_native_handle(SDL_Window *window) {
   return static_cast<NativeWindowHandle>(window);
 }
 
+inline HWND resolve_window_hwnd(NativeWindowHandle handle) {
+  if (!handle)
+    return nullptr;
+  if (::IsWindow(static_cast<HWND>(handle)))
+    return static_cast<HWND>(handle);
+  return get_window_hwnd(static_cast<SDL_Window *>(handle));
+}
+
 inline const char *get_platform_surface_extension_name() {
   return VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
 }
@@ -40,7 +48,7 @@ inline const char *get_platform_surface_extension_name() {
 inline VkSurfaceKHR
 create_win32_surface(VkInstance instance, NativeWindowHandle hwnd,
                      PFN_vkCreateWin32SurfaceKHR create_fn) {
-  HWND h = static_cast<HWND>(hwnd);
+  HWND h = resolve_window_hwnd(hwnd);
   if (!create_fn || !h || !instance)
     return VK_NULL_HANDLE;
   VkWin32SurfaceCreateInfoKHR ci{};
@@ -54,7 +62,7 @@ create_win32_surface(VkInstance instance, NativeWindowHandle hwnd,
 }
 
 inline HWND make_present_child(NativeWindowHandle parent) {
-  HWND parent_hwnd = static_cast<HWND>(parent);
+  HWND parent_hwnd = resolve_window_hwnd(parent);
   static const ATOM cls = [] {
     WNDCLASSW wc{};
     wc.lpfnWndProc = [](HWND h, UINT m, WPARAM w, LPARAM l) -> LRESULT {
@@ -80,8 +88,9 @@ inline HWND make_present_child(NativeWindowHandle parent) {
 
 inline void destroy_present_child(NativeWindowHandle child) {
   if (child) {
-    HWND h = static_cast<HWND>(child);
-    ::DestroyWindow(h);
+    HWND h = resolve_window_hwnd(child);
+    if (h)
+      ::DestroyWindow(h);
   }
 }
 
@@ -89,8 +98,8 @@ inline void sync_present_child_size(NativeWindowHandle parent,
                                     NativeWindowHandle child) {
   if (!parent || !child)
     return;
-  HWND parent_hwnd = static_cast<HWND>(parent);
-  HWND child_hwnd = static_cast<HWND>(child);
+  HWND parent_hwnd = resolve_window_hwnd(parent);
+  HWND child_hwnd = resolve_window_hwnd(child);
   RECT rc{}, cc{};
   ::GetClientRect(parent_hwnd, &rc);
   ::GetClientRect(child_hwnd, &cc);
@@ -109,7 +118,14 @@ inline void get_window_client_rect(NativeWindowHandle window, long *w,
       *h = 0;
     return;
   }
-  HWND hwnd = static_cast<HWND>(window);
+  HWND hwnd = resolve_window_hwnd(window);
+  if (!hwnd) {
+    if (w)
+      *w = 0;
+    if (h)
+      *h = 0;
+    return;
+  }
   RECT rc{};
   ::GetClientRect(hwnd, &rc);
   if (w)
@@ -121,36 +137,33 @@ inline void get_window_client_rect(NativeWindowHandle window, long *w,
 inline bool is_window_iconic(NativeWindowHandle window) {
   if (!window)
     return false;
-  HWND hwnd = static_cast<HWND>(window);
-  return ::IsIconic(hwnd) != FALSE;
+  HWND hwnd = resolve_window_hwnd(window);
+  return hwnd ? (::IsIconic(hwnd) != FALSE) : false;
 }
 
 inline bool is_window_valid(NativeWindowHandle window) {
   if (!window)
     return true;
-  HWND hwnd = static_cast<HWND>(window);
-  return ::IsWindow(hwnd) != FALSE;
+  HWND hwnd = resolve_window_hwnd(window);
+  return hwnd ? (::IsWindow(hwnd) != FALSE) : false;
 }
 
 inline bool is_window_visible(NativeWindowHandle window) {
-  if (!window)
-    return true;
-  HWND hwnd = static_cast<HWND>(window);
-  return ::IsWindowVisible(hwnd) != FALSE;
+  return window != nullptr;
 }
 
 inline long get_window_style(NativeWindowHandle window) {
   if (!window)
     return 0;
-  HWND hwnd = static_cast<HWND>(window);
-  return ::GetWindowLongW(hwnd, GWL_STYLE);
+  HWND hwnd = resolve_window_hwnd(window);
+  return hwnd ? ::GetWindowLongW(hwnd, GWL_STYLE) : 0;
 }
 
 inline long get_window_exstyle(NativeWindowHandle window) {
   if (!window)
     return 0;
-  HWND hwnd = static_cast<HWND>(window);
-  return ::GetWindowLongW(hwnd, GWL_EXSTYLE);
+  HWND hwnd = resolve_window_hwnd(window);
+  return hwnd ? ::GetWindowLongW(hwnd, GWL_EXSTYLE) : 0;
 }
 
 inline void pump_presentation_messages() {
@@ -161,8 +174,8 @@ inline void pump_presentation_messages() {
 inline bool is_window_foreground_root(NativeWindowHandle window) {
   if (!window)
     return false;
-  HWND hwnd = static_cast<HWND>(window);
-  if (!::IsWindow(hwnd))
+  HWND hwnd = resolve_window_hwnd(window);
+  if (!hwnd || !::IsWindow(hwnd))
     return false;
   HWND foreground = ::GetForegroundWindow();
   if (!foreground)
@@ -220,7 +233,7 @@ public:
   }
 
   void setup_swapchain_chain(NativeWindowHandle window) {
-    HWND hwnd = static_cast<HWND>(window);
+    HWND hwnd = resolve_window_hwnd(window);
     win32_info_ = {};
     win32_info_.sType =
         VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
@@ -269,31 +282,32 @@ public:
     if (!foreground) {
       if (held_) {
         if (releaseExclusive && device && swapchain) {
-          releaseExclusive(device, swapchain);
+          const auto r = releaseExclusive(device, swapchain);
+          if (r != VK_SUCCESS)
+            throw std::runtime_error("release fullscreen on focus loss failed");
         }
         held_ = false;
       }
-      return true;
+      return false;
     }
     if (!held_) {
       if (!acquireExclusive || !device || !swapchain)
         return false;
       const auto r = acquireExclusive(device, swapchain);
-      if (r == VK_SUCCESS) {
-        held_ = true;
-      } else if (r == VK_ERROR_INITIALIZATION_FAILED) {
-        return false;
-      } else {
-        return false;
-      }
+      if (r != VK_SUCCESS)
+        throw std::runtime_error("acquire Vulkan exclusive fullscreen failed");
+      held_ = true;
+      std::fprintf(stderr, "Vulkan exclusive fullscreen acquired\n");
     }
     return true;
   }
 
   void release(VkDevice device, VkSwapchainKHR swapchain) {
     if (held_ && releaseExclusive && device && swapchain) {
-      releaseExclusive(device, swapchain);
+      const auto r = releaseExclusive(device, swapchain);
       held_ = false;
+      if (r != VK_SUCCESS)
+        throw std::runtime_error("release Vulkan exclusive fullscreen failed");
     }
   }
 

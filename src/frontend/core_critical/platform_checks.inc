@@ -80,6 +80,25 @@ inline void run_platform_checks() {
       throw std::runtime_error(
           "Platform check failed: invalid SDL drawable pixel extent");
     }
+
+    // 6. SDL window state thread-ownership contract
+    SdlWindowStateTracker tracker(test_win);
+    tracker.sample_owner();
+    bool foreign_query_rejected = false;
+    std::thread worker([&] {
+      try {
+        tracker.sample_owner();
+      } catch (const std::runtime_error &) {
+        foreign_query_rejected = true;
+      }
+    });
+    worker.join();
+    if (!foreign_query_rejected) {
+      SDL_DestroyWindow(test_win);
+      throw std::runtime_error(
+          "Platform check failed: foreign thread must not query SDL window "
+          "state");
+    }
     SDL_DestroyWindow(test_win);
   }
 }

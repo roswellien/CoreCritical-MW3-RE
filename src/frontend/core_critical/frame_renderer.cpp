@@ -104,7 +104,10 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
   return result;
 }
 
-vk::Renderer::WindowSurface sdl_surface(SDL_Window *window) {
+vk::Renderer::WindowSurface
+sdl_surface(SDL_Window *window,
+            const std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
+                &tracker) {
   vk::Renderer::WindowSurface source;
   source.extensions = cc_mw3_re::platform::get_instance_extensions();
   source.create = [window](VkInstance instance) {
@@ -113,30 +116,48 @@ vk::Renderer::WindowSurface sdl_surface(SDL_Window *window) {
   source.destroy = [](VkInstance instance, VkSurfaceKHR surface) {
     cc_mw3_re::platform::destroy_surface(instance, surface);
   };
-  source.is_visible = [](cc_mw3_re::platform::NativeWindowHandle w) {
+  source.is_visible = [tracker](cc_mw3_re::platform::NativeWindowHandle w) {
     if (!w)
       return false;
-    auto *sdl_win = static_cast<SDL_Window *>(w);
-    return (SDL_GetWindowFlags(sdl_win) &
-            (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0;
-  };
-  source.get_drawable_size = [](cc_mw3_re::platform::NativeWindowHandle w,
-                                long *width, long *height) {
-    if (!w) {
-      if (width)
-        *width = 0;
-      if (height)
-        *height = 0;
-      return;
+    if (tracker) {
+      if (tracker->is_owner_thread()) {
+        tracker->sample_owner();
+        return tracker->current_state().visible;
+      }
+      return tracker->worker_visible();
     }
-    auto *sdl_win = static_cast<SDL_Window *>(w);
-    int px_w = 0, px_h = 0;
-    SDL_GetWindowSizeInPixels(sdl_win, &px_w, &px_h);
-    if (width)
-      *width = px_w;
-    if (height)
-      *height = px_h;
+    return true;
   };
+  source.get_drawable_size =
+      [tracker](cc_mw3_re::platform::NativeWindowHandle w, long *width,
+                long *height) {
+        if (!w) {
+          if (width)
+            *width = 0;
+          if (height)
+            *height = 0;
+          return;
+        }
+        if (tracker) {
+          if (tracker->is_owner_thread()) {
+            tracker->sample_owner();
+            if (width)
+              *width = tracker->current_state().drawable_width;
+            if (height)
+              *height = tracker->current_state().drawable_height;
+          } else {
+            if (width)
+              *width = tracker->worker_drawable_width();
+            if (height)
+              *height = tracker->worker_drawable_height();
+          }
+          return;
+        }
+        if (width)
+          *width = 0;
+        if (height)
+          *height = 0;
+      };
   return source;
 }
 
@@ -199,6 +220,11 @@ public:
                          const sdlfe::CoreCriticalQuality &quality,
                          const sdlfe::CoreCriticalAssets &assets)
       : window_(window),
+        window_state_tracker_(
+            backend == sdlfe::RendererBackend::core_critical_wsi
+                ? std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(
+                      window)
+                : nullptr),
         native_window_(
             backend == sdlfe::RendererBackend::core_critical_wsi
                 ? cc_mw3_re::platform::get_window_native_handle(window)
@@ -832,8 +858,8 @@ private:
     }
   }
   void initialize_renderer() {
-    auto source =
-        native_wsi_ ? sdl_surface(window_) : vk::Renderer::WindowSurface{};
+    auto source = native_wsi_ ? sdl_surface(window_, window_state_tracker_)
+                              : vk::Renderer::WindowSurface{};
     renderer_ = std::make_unique<vk::Renderer>(
         vk::Renderer::ColorTarget::rgba8, std::move(source), quality_,
         !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy,
@@ -870,7 +896,13 @@ private:
       return;
     }
     int width = 0, height = 0;
-    SDL_GetWindowSizeInPixels(window_, &width, &height);
+    if (native_wsi_ && window_state_tracker_) {
+      const auto state = window_state_tracker_->sample_and_get();
+      width = state.drawable_width;
+      height = state.drawable_height;
+    } else {
+      SDL_GetWindowSizeInPixels(window_, &width, &height);
+    }
     if (width <= 0 || height <= 0) {
       width = resident_width_ ? int(resident_width_) : 640;
       height = resident_height_ ? int(resident_height_) : 480;
@@ -952,6 +984,8 @@ private:
   }
 
   SDL_Window *window_;
+  std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
+      window_state_tracker_;
   cc_mw3_re::platform::NativeWindowHandle native_window_;
   HWND hwnd_;
   const bool native_wsi_;

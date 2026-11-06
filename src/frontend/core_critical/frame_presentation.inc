@@ -7,8 +7,14 @@ void present() override {
     save_capture();
     return;
   }
-  if ((SDL_GetWindowFlags(window_) &
-       (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) != 0) {
+  const auto window_state =
+      window_state_tracker_
+          ? window_state_tracker_->sample_and_get()
+          : cc_mw3_re::platform::SdlWindowState{
+                (SDL_GetWindowFlags(window_) &
+                 (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0,
+                0, 0};
+  if (!window_state.visible) {
     return;
   }
   CpuInterval interval(cpu_profile_ ? &transport_ticks_ : nullptr);
@@ -38,7 +44,12 @@ void present() override {
     presented_ = window_bound_;
   } else {
     int window_width = 0, window_height = 0;
-    SDL_GetWindowSizeInPixels(window_, &window_width, &window_height);
+    if (window_state_tracker_) {
+      window_width = window_state.drawable_width;
+      window_height = window_state.drawable_height;
+    } else {
+      SDL_GetWindowSizeInPixels(window_, &window_width, &window_height);
+    }
     if (window_width != present_window_width_ ||
         window_height != present_window_height_) {
       if (worker_)
@@ -48,9 +59,11 @@ void present() override {
       present_window_height_ = window_height;
     }
     const auto present = [this, width = resident_width_,
-                          height = resident_height_] {
+                          height = resident_height_, window_state] {
       CpuInterval interval(worker_ && cpu_profile_ ? &worker_present_ticks_
                                                    : nullptr);
+      if (window_state_tracker_)
+        window_state_tracker_->set_worker_state(window_state);
       const auto before = renderer_->presents;
       if (!renderer_->present_resident(native_window_, width, height, false))
         throw std::runtime_error("Core Critical resident present failed");

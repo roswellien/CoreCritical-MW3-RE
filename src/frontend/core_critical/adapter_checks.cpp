@@ -827,6 +827,22 @@ int main(int argc, char **argv) {
       SDL_DestroyWindow(invalid);
       require(rejected,
               "Native WSI accepted a window without Vulkan surface support");
+
+      auto tracker =
+          std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(window);
+      require(tracker->is_owner_thread(),
+              "Adapter check must execute on the SDL owner thread");
+      bool foreign_sample_rejected = false;
+      std::thread foreign([&] {
+        try {
+          tracker->sample_owner();
+        } catch (const std::runtime_error &) {
+          foreign_sample_rejected = true;
+        }
+      });
+      foreign.join();
+      require(foreign_sample_rejected,
+              "Foreign thread must not query SDL window state");
     }
     const auto backend = native_wsi
                              ? sdlfe::RendererBackend::core_critical_wsi
