@@ -952,6 +952,10 @@ HudZView::HudZView(const char* name, HudViewWindow* w, uint32_t wd) {
   k.camera_set_zone(camera, 0xffffff01);  // [0x005e8854]: the default zone
 }
 
+// Mech3.exe 1.2 @ 0x0043f9c0: the window the constructor made is freed (the
+// port had left it, one each zoom view; MW3 frees it too).
+HudZoomView::~HudZoomView() { delete view.window; }
+
 // Mech3.exe 1.2 @ 0x0043f660
 HudZoomView::HudZoomView(int32_t px, int32_t py, int32_t w, int32_t h)
     : Object2D(0, 0), view("camx", new HudViewWindow("winx"), g_hooks->world()) {

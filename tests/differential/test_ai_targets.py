@@ -65,6 +65,8 @@ def setup_probe(probe):
     probe.probe_aitarget_call.argtypes = [ctypes.c_int32, ctypes.c_int32, U32, U32]
     probe.probe_aitarget_call.restype = U32
     probe.probe_aitarget_state.argtypes = [P]
+    probe.probe_aitarget_sets.argtypes = [P, ctypes.c_int32]
+    probe.probe_aitarget_sets.restype = ctypes.c_int32
     probe.probe_targets_poke.argtypes = [U32, U32]
     probe.probe_targets_add_record.argtypes = [ctypes.c_int32, P, P, P, P, ctypes.c_int32]
     probe.probe_targets_handles.argtypes = [P, ctypes.c_int32]
@@ -137,6 +139,7 @@ def pick_original(case):
     e = Emu(t)
     e.cpu.fpu_control(0x007f)
     from unicorn import UC_HOOK_CODE
+    from unicorn.x86_const import UC_X86_REG_ESP
 
     def hit(uc, address, size, user):
         REACHED1.add(address)
@@ -190,9 +193,14 @@ def pick_original(case):
         'game.vt+0x2c': case['game'],
     }
     fn, side, arg = case['fn'], case['side'] & 0xffffffff, case['arg']
+    sets = []
     if fn == 0:
         ret = e.call(0x4d6b90, ecx=obj, stack=(side,))
     elif 1 <= fn <= 6:
+        # Every set goes through vt+0xc0 (a mech's tells the HUD, 0x0041d890).
+        def vt_c0(uc, address, size, user):
+            sets.append(e.r32(uc.reg_read(UC_X86_REG_ESP) + 4))
+        e.uc.hook_add(UC_HOOK_CODE, vt_c0, begin=0x4d5e40, end=0x4d5e40)
         e.call(KEYS[fn - 1], ecx=obj, stack=(side,))
         ret = 0
     elif fn == 7:
@@ -212,7 +220,7 @@ def pick_original(case):
         ret = e.call(0x4d6190, ecx=obj, stack=(side, vehicles[arg])) & 0xff
     state = [e.r32(obj + 0x6c + 4 * i) for i in range(4)] + [e.r32(obj + o) for o in (0x9c, 0xa0, 0xa4)]
     return t, ret, state, dict(mem=mem, contacts=contacts, vehicles=vehicles, obj=obj, s2v=s2v, v2b=v2b,
-                                player=player, game=game)
+                                player=player, game=game, sets=sets)
 
 
 def pick_rebuild(probe, case, w):
@@ -242,7 +250,9 @@ def pick_rebuild(probe, case, w):
     ret = probe.probe_aitarget_call(fn, side, arg, w['obj'])
     out = (U32 * 7)()
     probe.probe_aitarget_state(out)
-    return t, ret, list(out)
+    sets = (U32 * 16)()
+    n_sets = probe.probe_aitarget_sets(sets, 16)
+    return t, ret, list(out), list(sets[:n_sets])
 
 
 def run_picks(probe, count):
@@ -251,12 +261,15 @@ def run_picks(probe, count):
     for seed in range(count):
         case = make_pick_case(seed)
         a, ra, sa, w = pick_original(case)
-        b, rb, sb = pick_rebuild(probe, case, w)
+        b, rb, sb, sets = pick_rebuild(probe, case, w)
         name = f'pick seed {seed} (fn {case["fn"]}, side {case["side"]}, {case["n"]} contacts)'
         if not compare(name, a.log, b.log):
             die()
         if ra != rb or sa != sb:
             print(f'{name}: returned {ra:#x} / {rb:#x}; state {[hex(x) for x in sa]} / {[hex(x) for x in sb]}')
+            die()
+        if 1 <= case['fn'] <= 6 and w['sets'] != sets:
+            print(f'{name}: vt+0xc0 calls {[hex(x) for x in w["sets"]]} / {[hex(x) for x in sets]}')
             die()
         calls += len(a.log)
         fns[case['fn']] = fns.get(case['fn'], 0) + 1
@@ -469,6 +482,7 @@ def targets_original(recs, traps, ops, seed, answers, r_world):
     e = Emu(t)
     e.cpu.fpu_control(0x007f)
     from unicorn import UC_HOOK_CODE
+    from unicorn.x86_const import UC_X86_REG_ESP
 
     def hit(uc, address, size, user):
         REACHED.add(address)

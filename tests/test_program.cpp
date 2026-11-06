@@ -249,6 +249,9 @@ void reset_process_state() {
   mech3::mission_maps() = mech3::MissionMaps{};
   // The hit factors 0x00413e60 sets at the mechs' set-up: the exe's data.
   mech3::hit_globals_reset();
+  // The mission's salvage ([0x00609990]): a real launch empties it (0x00491150),
+  // the tests' debug launches don't, so an earlier kill's rows hid a later one's.
+  mech3::mission_salvage().clear();
   // The scripts' tolerances (doubles in zModel's data) and the skipped calls' count.
   zmod::tolerances_reset();
   zint::null_calls().clear();
@@ -9175,6 +9178,252 @@ TEST(mission_c1m1_unported_survey_headless) {
   mech3::options() = mech3::Options{};
 }
 
+// The destroy valves on the real hooks (0x004e34b0, ai.md section 13): c2m2's
+// gas, its two shipped records aimed at mechs. The Air Refinery shot down, its
+// animation sets the valve apcan01 (event 0x2b, the binder's valve named as its
+// node); with dominic_in_gas (a region's) that destroys Dominic Paine, with
+// player_in_gas the player.
+TEST(mission_c2m2_gas_destroys_the_mechs_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("mission_valve_destroy_write"));
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::player_controls_instance() = nullptr;
+  mech3::options() = mech3::Options{};
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    mech3::GameEngine::Launch l;
+    l.index = 1, l.op = 2, l.number = 2;
+    l.mech = 3;
+    engine.set_launch(l);
+    app.post_intro_ = &mech3::states().load;
+    int frames = 0, fired_at = -1;
+    void* player = nullptr;
+    void* dominic = nullptr;
+    void* gun = nullptr;
+    void* refinery = nullptr;
+    int dominic_state = -1, player_state = -1, player_after_dominic = -1;
+    float armor_before = -1, armor_after = -1;
+    const auto state = [](void* m) {
+      mech3::LaunchedMech o;
+      mech3::describe_mech(m, &o);
+      return o.anim_state;
+    };
+    const auto valve = [](const char* name) {
+      mech3::ai::Valve* v = mech3::ai::valve_find(name);
+      return v ? v->get() : -1;
+    };
+    const auto set = [](const char* name) {
+      if (mech3::ai::Valve* v = mech3::ai::valve_find(name)) v->set(1);
+    };
+    int before_canister = -1;
+    engine.on_present = [&](int) {
+      if (app.current() != &mech3::states().core) return;
+      ++frames;
+      if (frames == 5) {
+        player = mech3::mech_mission_player();
+        int32_t made = 0;
+        const mech3::AiMechMade* ai = mech3::mission_ai_mechs(&made);
+        for (int32_t i = 0; i < made; ++i)
+          if (ai[i].name && std::strcmp(ai[i].name, "Dominic_Paine") == 0) dominic = ai[i].mech;
+        gun = mech3::chain_weapon();
+        for (int32_t i = 0; i < zcls::nodes().capacity; ++i)
+          if (zcls::Node* n = zcls::node_at(i); n && std::strcmp(n->name(), "apcan01") == 0) refinery = n;
+        if (player) armor_before = [&] { mech3::LaunchedMech o; mech3::describe_mech(player, &o); return o.armor; }();
+        set("dominic_in_gas");
+      }
+      if (!dominic || !player || !refinery) return;
+      if (frames == 20) before_canister = state(dominic);
+      if (fired_at < 0) {
+        if (valve("apcan01") == 1) fired_at = frames, set("dominic_in_gas");  // (his region clears it while he is out)
+        else if (frames > 20) mech3::chain_hit_node(refinery, gun);
+        return;
+      }
+      if (frames == fired_at + 10) {
+        dominic_state = state(dominic);
+        player_after_dominic = state(player);
+        set("player_in_gas");
+      }
+      if (frames == fired_at + 20) {
+        player_state = state(player);
+        mech3::LaunchedMech o;
+        mech3::describe_mech(player, &o);
+        armor_after = o.armor;
+      }
+    };
+    CountingPump pump;
+    pump.stop = [&] { return fired_at > 0 && frames >= fired_at + 21; };
+    pump.limit = 6000;
+    app.run(pump);
+    std::printf("  apcan01 set at frame %d (%.1f s); Dominic's state %d -> %d; the player's %d -> %d, armor %.3f -> %.3f; 0x0041cfa0 unported %d\n",
+                fired_at, static_cast<double>(fired_at) * 0.016, before_canister, dominic_state, player_after_dominic, player_state,
+                armor_before, armor_after, static_cast<int>(engine.unported_counts().count("0x0041cfa0")));
+    EXPECT(dominic && player && refinery);
+    EXPECT(fired_at > 20);                                   // the game's own setter, not this test's
+    EXPECT(before_canister != 10);                           // in the gas before the canister goes: nothing
+    EXPECT(dominic_state == 10 && player_after_dominic != 10);  // Mech::Die's +0x578: Dominic only
+    EXPECT(player_state == 10 && armor_after < armor_before);
+    EXPECT(engine.unported_counts().count("0x0041cfa0") == 0);
+    EXPECT(engine.unported_counts().count("obj.vt+0x50") == 0 && engine.unported_counts().count("obj.vt+0x70") == 0);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
+}
+
+// The target keys through the mech's vt+0xc0 (0x0041d890), as the exe's
+// 0x004d6710 and its neighbours call it (hud.md): E, Ctrl+E and Shift+E pressed
+// on c1m1, T between them. Each new target starts TARGET's pulse
+// (0.3 s) and the target sound on the new target's mech.
+TEST(mission_c1m1_target_keys_tell_the_hud_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("mission_target_keys_write"));
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::player_controls_instance() = nullptr;
+  mech3::options() = mech3::Options{};
+  struct Keys : platform::Input {
+    std::vector<platform::KeyEvent> queue;
+    uint32_t t = 0;
+    void key(uint32_t dik, bool down) { queue.push_back({dik, down ? 0x80u : 0u, ++t, t}); }
+    bool open(Device d) override { return d == kKeyboard; }
+    void close(Device) override {}
+    int32_t acquire(Device) override { return 0; }
+    int32_t unacquire(Device) override { return 0; }
+    int32_t keyboard_data(platform::KeyEvent* out, uint32_t* count) override {
+      const uint32_t n = std::min<uint32_t>(*count, static_cast<uint32_t>(queue.size()));
+      std::copy(queue.begin(), queue.begin() + n, out);
+      queue.erase(queue.begin(), queue.begin() + n);
+      *count = n;
+      return 0;
+    }
+    int32_t mouse_state(platform::MouseState*) override { return kNotAcquired; }
+    int32_t joystick_state(platform::JoyState*) override { return kNotAcquired; }
+  } keys;
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  p.input = &keys;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    mech3::GameEngine::Launch l;  // c1m1, the Bushwhacker
+    l.op = 1, l.number = 1, l.index = 0;
+    l.mech = 3;
+    engine.set_launch(l);
+    app.post_intro_ = &mech3::states().load;
+    int frames = 0;
+    void* player = nullptr;
+    void* owens = nullptr;
+    // E, then with T clearing the target between them Ctrl+E and Shift+E.
+    const int keys_of[3] = {0x46, 0x4c, 0x4d};
+    struct Seen { bool targeted = false; float pulse = 0; int sounds = 0; } seen[3];
+    int sounds_before = 0, other_sounds = -1;
+    bool other_picked = false;
+    auto press = [&](int code, bool down) {
+      if (code & 0x200) keys.key(0x1d, down);
+      if (code & 0x400) keys.key(0x2a, down);
+      keys.key(static_cast<uint32_t>(code & 0xff), down);
+    };
+    engine.on_present = [&](int) {
+      if (app.current() != &mech3::states().core) return;
+      ++frames;
+      if (frames == 3) {
+        player = engine.object_of(engine.field32(engine.pilot(), 0x14));
+        int32_t made = 0;
+        const mech3::AiMechMade* ai = mech3::mission_ai_mechs(&made);
+        owens = made == 1 ? ai[0].mech : nullptr;
+        mech3::HudReport r;
+        if (mech3::program_hud_report(&r)) sounds_before = r.target_sounds;
+        if (owens) {
+          mech3::LaunchedMech o;
+          mech3::describe_mech(owens, &o);
+          const float x = o.pos[0] - 150.0f, z = o.pos[2];
+          const float at[3] = {x, ground_under(x, o.pos[1] + 50.0f, z), z};
+          mech3::move_mech(player, at, -1.5707964f);
+        }
+      }
+      if (!player || !owens) return;
+      // Every 20 frames: the key down at 0, up at 1, read at 2; T down at 10, up at 11.
+      const int at = frames - 20, i = at / 20, step = at % 20;
+      if (at < 0 || i > 2) return;
+      const int code = static_cast<int>(zin::key1_of(keys_of[i]));
+      if (step == 0) press(code, true);
+      if (step == 1) press(code, false);
+      if (step == 2) {
+        mech3::HudReport r;
+        if (mech3::program_hud_report(&r)) {
+          seen[i].targeted = mech3::mech_target_object(player) == owens;
+          seen[i].pulse = r.target_pulse;
+          seen[i].sounds = r.target_sounds - sounds_before;
+        }
+      }
+      if (i == 2 && step == 5) {  // another mech's pick is none of the view's HUD
+        auto* t = const_cast<mech3::ai::AiTarget*>(mech3::ai::brain_hooks().targetable(engine.handle_of(owens)));
+        t->nearest_enemy(0);
+        other_picked = t->target != nullptr;
+        mech3::HudReport r;
+        if (mech3::program_hud_report(&r)) other_sounds = r.target_sounds - sounds_before;
+      }
+      if (step == 10) press(static_cast<int>(zin::key1_of(0x49)), true);
+      if (step == 11) press(static_cast<int>(zin::key1_of(0x49)), false);
+    };
+    CountingPump pump;
+    pump.stop = [&] { return frames >= 82; };
+    pump.limit = 1500;
+    app.run(pump);
+    int n = 0;
+    for (const Seen& v : seen) {
+      std::printf("  targeted %d, pulse %.3f, target sounds %d\n", v.targeted, v.pulse, v.sounds);
+      EXPECT(v.targeted && v.pulse > 0.0f && v.sounds == ++n);
+    }
+    EXPECT(other_picked && other_sounds == 3);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
+}
+
 // Playtest #25, LRMs home: the Bushwhacker (roster 3) 150 m west of the
 // Owens facing it, E targets it, the HUD locks (0x00443d20, the manager's
 // +0x88); then it turns away until the reticle is well off the Owens (the
@@ -9254,7 +9503,7 @@ static LrmRun lrm_after_lock(bool turn_away) {
         left = zin::key1_of(2) & 0xff;           // turn left
         next_enemy = zin::key1_of(0x46) & 0xff;  // TARGET_NEXT_E
         mech3::describe_mech(owens, &o);
-        const float x = o.pos[0] - kLrmRange, z = o.pos[2];
+        const float x = o.pos[0] - 150.0f, z = o.pos[2];
         const float at[3] = {x, ground_under(x, o.pos[1] + 50.0f, z), z};
         mech3::move_mech(player, at, -1.5707964f);
         for (int32_t g = 0; g < 5; ++g) {
@@ -11142,6 +11391,110 @@ TEST(mod_world_plays_in_instant_action_headless) {
   mech3::options() = mech3::Options{};
 }
 
+// A campaign's debriefing by the real hooks (tests/probe_debriefing.cpp stubs
+// them; campaign.md section 3): c1m1 and c1m2 played from the menus, won with
+// the objectives the test marks. The rows are the mission's own lists, 2500 a
+// done one, a hidden one neither listed nor scored; the campaign's score and
+// the rank (a step per 100,000) count them from the score the pilot had.
+TEST(campaign_debriefing_scores_the_missions_objectives_headless) {
+  if (!have_game()) return;
+  SavedMounts keep;
+  zutl::mounts() = zutl::Mounts{};
+  zutl::mount(MW3_GAME_DIR);
+  zutl::set_write_dir(temp_dir("debrief_objectives_write"));
+  mech3::reset_states();
+  reset_process_state();
+  mech3::missions() = mech3::Missions{};
+  mech3::mech_types_forget();
+  mech3::options() = mech3::Options{};
+  FakeWindow window;
+  FakeAlert alert;
+  FakeClock clock;
+  FakeScreen screen;
+  platform::SilentSoundOutput sound;
+  mech3::MountFiles files;
+  mech3::Platform p;
+  p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
+  {
+    mech3::GameEngine engine(p, "mech3.exe -nofmv");
+    engine.quiet = true;
+    mech3::Mech3App app(&engine);
+    mech3::set_app(&app);
+    EXPECT(app.init_instance());
+    int stage = 0, core_frames = 0;
+    std::string rows[2], rank[2];
+    int32_t kept[2] = {-1, -1};
+    int mission = 0;
+    engine.on_present = [&](int) {
+      if (stage == 0 && app.current() == &mech3::states().main && mech3::main_menu()) {
+        const_cast<mech3::MainMenu*>(mech3::main_menu())->buttons[1].on_left_up();  // NEW CAMPAIGN
+        stage = 1;
+      } else if (stage == 1) {
+        auto* ps = dynamic_cast<mech3::PilotState*>(app.current());
+        if (!ps || !ps->screen) return;
+        ps->screen->new_bar.set_text("Scorer");
+        ps->screen->new_bar.on_return();
+        ps->screen->on_button(0x18, 0, 0);  // ACCEPT
+        stage = 2;
+      } else if (stage == 2) {
+        mech3::BriefingScreen* b = mech3::briefing_screen();
+        if (!b || app.current() != &mech3::states().load || !b->loaded) return;
+        b->on_button(mech3::BriefingScreen::kBtnLaunch, 0, 0);
+        core_frames = 0;
+        stage = 3;
+      } else if (stage == 3 && app.current() == &mech3::states().core) {
+        if (++core_frames != 30) return;
+        const mech3::Objectives& o = mech3::mission_objectives();
+        std::vector<mech3::Objective*> first, second;
+        if (o.primary) for (const auto& i : o.primary->items) first.push_back(i.get());
+        if (o.secondary) for (const auto& i : o.secondary->items) second.push_back(i.get());
+        if (first.size() >= 2) first[0]->done = 1;
+        if (mission == 0) {
+          // c1m1: a score the pilot already had, the second objective left undone.
+          if (mech3::CampaignGame* c = mech3::current_pilot()->campaign()) c->c4 = 99000;
+        } else if (first.size() >= 2 && !second.empty()) {
+          // c1m2: its second objective hidden though done, the secondary done.
+          first[1]->done = 1, first[1]->visible = 0;
+          second[0]->done = 1;
+        }
+        mech3::missions().ended = 1;
+        mech3::missions().on_command(0x71);
+        stage = 4;
+      } else if (stage == 4 && app.current() == &mech3::states().end_win) {
+        auto* d = dynamic_cast<mech3::DebriefScreen*>(engine.screen_of(mech3::states().end_win.screen_));
+        if (!d) return;
+        rows[mission] = mech3::debrief_rows(*d);
+        rank[mission] = d->rank.labels.empty() ? "" : d->rank.labels[0]->text;
+        mech3::CampaignGame* c = mech3::current_pilot()->campaign();
+        kept[mission] = c ? c->c4 : -1;  // the Win State's copy, already made
+        d->on_button(mech3::DebriefScreen::kContinue, 0, 0);
+        stage = ++mission == 2 ? 5 : 2;
+      }
+    };
+    CountingPump pump;
+    pump.limit = 3000;
+    pump.stop = [&] { return stage == 5; };
+    app.run(pump);
+    std::printf("  c1m1: %s\n  c1m2: %s\n", rows[0].c_str(), rows[1].c_str());
+    EXPECT(stage == 5);
+    EXPECT(rows[0].rfind("Primary Objectives | Take Com. Center Offline | 2500 | Destroy Fixed Emplacements | Failed | "
+                         "Secondary Objectives | Campaign Total | 101500 | Mission Total | 2500 | ", 0) == 0);
+    EXPECT(rows[1].rfind("Primary Objectives | Capture Enemy Barracks | 2500 | Secondary Objectives | "
+                         "Destroy Smoke Jaguar Forces | 2500 | Campaign Total | 106500 | Mission Total | 5000 | ", 0) == 0);
+    EXPECT(kept[0] == 101500 && kept[1] == 106500);
+    EXPECT(rank[0] == zutl::messages().get_text(0x1d9));  // over 100,000: the rank moved on the objectives' points
+    EXPECT(engine.unported_counts().count("0x0045e080") == 0);
+    mech3::missions().cleanup(false);
+    app.stop_game();
+    app.exit_instance();
+    mech3::set_app(nullptr);
+  }
+  zrdr::close_archives(true);
+  mech3::reset_states();
+  reset_process_state();
+  mech3::options() = mech3::Options{};
+}
+
 // Instant Action through the menus (frontend-plan item 12b): INSTANT ACTION,
 // a new pilot, the Action screen (menus.md 13) set to Battle Progression
 // with a Champion lancemate, ACCEPT, the briefing's LAUNCH. Wave 1 (a
@@ -11178,8 +11531,8 @@ TEST(instant_action_menus_to_wave1_tallies_headless) {
     mech3::set_app(&app);
     EXPECT(app.init_instance());
     int stage = 0, core_frames = 0, wave2_at = -1;
-    std::string wave_row, enemy_row, config_row, header;
-    int32_t store_items = -1, made_enemies = 0;
+    std::string wave_row, enemy_row, config_row, header, debrief_rows;
+    int32_t store_items = -1, made_enemies = 0, round_mode = -1, round_wave = -1, round_won = -1;
     bool reopened = false, waves_offered = false, dummy_seen = false, saved_at_launch = false;
     std::vector<void*> killed;
     mech3::ActionGame* game = nullptr;
@@ -11252,6 +11605,8 @@ TEST(instant_action_menus_to_wave1_tallies_headless) {
       } else if (stage == 5 && app.current() == &mech3::states().end_win) {
         auto* d = dynamic_cast<mech3::DebriefScreen*>(engine.screen_of(mech3::states().end_win.screen_));
         if (!d) return;
+        engine.action_rounds(&round_mode, &round_wave, &round_won);
+        debrief_rows = mech3::debrief_rows(*d);
         d->on_button(mech3::DebriefScreen::kAbort, 0, 0);
         dummy_seen = true;
         stage = 6;
@@ -11284,6 +11639,12 @@ TEST(instant_action_menus_to_wave1_tallies_headless) {
     EXPECT(header == zutl::format_message(0x231, {"1", zutl::messages().get_text(0x284)}));
     EXPECT(game && game->player_kills == 2 && game->lancemate_kills == 0 && game->enemy_kills == 0);
     EXPECT(game && game->waves == 1 && game->mode == 2 && game->x74 == 0 && game->x78 == 1);
+    // The debriefing by the real hook (0x0047b430): Progression, one wave won
+    // and left with the mission ended on wave 2: 1000 + 2 x 100, and the lance's.
+    EXPECT(round_mode == 2 && round_wave == 2 && round_won == 1);
+    int defeated = 0;
+    EXPECT(std::sscanf(debrief_rows.c_str(), "%*[^|]| %*[^|]| %d", &defeated) == 1 && defeated > 0);
+    EXPECT(debrief_rows.find("Mission Total | " + std::to_string(1200 + defeated)) != std::string::npos);
     mech3::missions().cleanup(false);
     app.stop_game();
     app.exit_instance();
@@ -13873,10 +14234,11 @@ TEST(mission_c1m4_dominic_takes_the_order_and_the_lance_turns_headless) {
     // in the 2 s before the order (was 53 frames), 103 frames aiming (phase 2,
     // was 2) before each burst, and the player taken for 186 frames, not 385,
     // the plan in hand kept to its end before the next pick; before, 53 / 1009
-    // / 1139, 71.189, 385, phases 2 2 1009 126.
+    // / 1139, 71.189, 385, phases 2 2 1009 126. The throttle's snap by the frame
+    // (fixes.md): he eases a little longer at these 16 ms frames; closest was 86.592.
     if (!std::getenv("MW3_LANCE_AT") && !std::getenv("MW3_LANCE_DIR") && data_is_12()) {
       EXPECT(seen.fired_before == 0 && seen.fired_after == 901 && seen.on_enemy == 1133);
-      EXPECT(std::fabs(seen.d0 - 399.597f) < 1e-3f && std::fabs(seen.closest - 86.592f) < 1e-3f);
+      EXPECT(std::fabs(seen.d0 - 399.597f) < 1e-3f && std::fabs(seen.closest - 86.789f) < 1e-3f);
       EXPECT(seen.enemies_before == 0xfffffffcu && seen.enemies_after == 0x7ffffffeu);
       EXPECT(seen.on_player == 186);  // his next pick, once the player is 30 m off
       EXPECT(seen.phases[2] == 103 && seen.phases[3] == 3 && seen.phases[4] == 901 && seen.phases[5] == 132);
@@ -14369,8 +14731,9 @@ TEST(mission_c1m4_dominic_stops_at_a_no_go_patch_headless) {
     // on 17 m into the patch as he slows, is sent back out to its pushed-out
     // outline (from inside: the nearest point) and stops there, 5.7 m east of
     // the patch (exact: the run repeats with reset_process_state's fixed seed).
+    // 5.72693 before the throttle's snap went by the frame, the same frames inside.
     EXPECT(seen.inside == 287 && seen.first_in == 837 && seen.last_in == 1123);
-    EXPECT(std::fabs(seen.west - 1004.9f) < 0.05f && std::fabs(east_gap - 5.72693f) < 1e-3f);
+    EXPECT(std::fabs(seen.west - 1004.9f) < 0.05f && std::fabs(east_gap - 5.79883f) < 1e-3f);
     mech3::missions().cleanup(false);
     app.stop_game();
     app.exit_instance();
@@ -19629,12 +19992,13 @@ TEST(mission_c1m2_destroy_objectives_met_by_mech_kills_headless) {
 // the box as a player would: `step` runs on each core frame, with the engine
 // and the keyboard, `other` on the frames after the mission in other states,
 // until one says done or `limit` frames pass.
+platform::JoyState* g_cheat_stick = nullptr;  // a fake stick for the launch; none the default
 struct CheatKeys : platform::Input {
   std::vector<platform::KeyEvent> queue;
   uint32_t t = 0;
   void key(uint32_t dik, bool down) { queue.push_back({dik, down ? 0x80u : 0u, ++t, t}); }
   void press(uint32_t dik) { key(dik, true), key(dik, false); }
-  bool open(Device d) override { return d == kKeyboard; }
+  bool open(Device d) override { return d == kKeyboard || (d == kJoystick && g_cheat_stick); }
   void close(Device) override {}
   int32_t acquire(Device) override { return 0; }
   int32_t unacquire(Device) override { return 0; }
@@ -19646,8 +20010,13 @@ struct CheatKeys : platform::Input {
     return 0;
   }
   int32_t mouse_state(platform::MouseState*) override { return kNotAcquired; }
-  int32_t joystick_state(platform::JoyState*) override { return kNotAcquired; }
+  int32_t joystick_state(platform::JoyState* out) override {
+    if (!g_cheat_stick) return kNotAcquired;
+    *out = *g_cheat_stick;
+    return 0;
+  }
 };
+const char* g_cheat_mission_dir = nullptr;  // the launch's write dir kept (a saved controls file); none a fresh one
 platform::Settings* g_cheat_mission_settings = nullptr;  // the launch's saved settings; none the default
 int g_cheat_mission_op = 0;  // the campaign's operation for the launch (a lancemate comes with it); 0 the default
 int cheat_mission(const char* write, int32_t index, int32_t number, int limit,
@@ -19656,7 +20025,7 @@ int cheat_mission(const char* write, int32_t index, int32_t number, int limit,
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
   zutl::mount(MW3_GAME_DIR);
-  zutl::set_write_dir(temp_dir(write));
+  zutl::set_write_dir(g_cheat_mission_dir ? std::string(g_cheat_mission_dir) : temp_dir(write));
   mech3::reset_states();
   reset_process_state();
   mech3::missions() = mech3::Missions{};
@@ -19777,6 +20146,205 @@ TEST(controls_saved_stick_axes_with_no_stick_do_not_walk_the_mech_headless) {
   const NoStick original = no_stick_run("nostick_original", "joystick(Slider0)\tslope(-0.000015)\tintercept(1.000000)\tdeadzone(0.000000)");
   zfix::options().bugs = true;
   EXPECT(original.moved > 5.0f);
+}
+
+
+// A Thrustmaster report (latest, model unknown): the slider backwards, Invert
+// changing nothing. A fake stick through the real screens and a mission.
+namespace {
+struct LeverStick {
+  platform::JoyState st;
+  int32_t source = 3;
+  bool high_up = false;  // the reading rises as the lever goes up
+  void set(float up) {
+    const float r = high_up ? up : 1.0f - up;
+    if (source == 3) st.z = static_cast<int32_t>(std::lround(2000.0f * r - 1000.0f));
+    else st.slider[source - 7] = static_cast<int32_t>(std::lround(65535.0f * r));
+  }
+};
+// The screens: `untick` clicks Invert (shown checked for the defaults) before
+// OK, `save` answers ACCEPT's question. The axis left bound at the main menu.
+mech3::AxisBinding lever_screens(const std::string& dir, LeverStick& k, bool assign, bool untick, bool save) {
+  g_cheat_stick = &k.st;
+  k.set(0.5f);
+  CheatKeys keys;
+  int stage = 0, wait = 0;
+  mech3::AxisBinding bound;
+  w40_run(dir, nullptr, nullptr, [&](mech3::GameEngine& engine, mech3::Mech3App& app) {
+    engine.on_message_box = [&](int32_t, int32_t, int32_t) { return save ? 1u : 0u; };
+    auto* os = dynamic_cast<mech3::OptionsState*>(app.current());
+    auto* c = os ? dynamic_cast<mech3::ControlsScreen*>(engine.screen_of(os->screen_)) : nullptr;
+    if (!assign) {
+      bound = mech3::axis_table().axes[0];
+      return at_main_menu(app);
+    }
+    if (stage == 0 && at_main_menu(app)) {
+      const_cast<mech3::MainMenu*>(mech3::main_menu())->buttons[mech3::MainMenuButton::kOptions].on_left_up();
+      stage = 1;
+    } else if (stage == 1 && os) {
+      auto* g = dynamic_cast<mech3::GameOptionsScreen*>(engine.screen_of(os->screen_));
+      if (!g) return false;
+      g->controls.on_left_up();
+      stage = 2;
+    } else if (stage == 2 && c) {
+      c->select_command(0);
+      c->assign_axis.on_left_up();
+      stage = 3;
+    } else if (stage == 3) {
+      auto* st = dynamic_cast<mech3::AxisPopupState*>(app.current());
+      if (!st || !st->popup) return ++wait > 60;
+      mech3::AxisCycle& src = st->popup->sources;
+      for (int32_t i = 0; i < 16; ++i) {
+        src.select(i);
+        if (src.selected_value() == k.source) break;
+      }
+      EXPECT(src.selected_value() == k.source && st->popup->invert.checked == 1);
+      if (untick) st->popup->invert.CheckButton::on_left_up();
+      st->popup->ok.on_left_up();
+      stage = 4;
+    } else if (stage == 4 && c) {
+      c->accept.on_left_up();
+      stage = 5;
+    } else if (stage == 5) {
+      auto* st = dynamic_cast<mech3::LoadSavePopupState*>(app.current());
+      if (st && st->popup) {
+        st->popup->ok.on_left_up();
+        stage = 6;
+      } else if (at_main_menu(app) || (os && !c)) {
+        stage = 7;
+      }
+    } else if (stage == 6 && c) {
+      c->accept.on_left_up();
+      stage = 7;
+    } else if (stage == 7) {
+      if (os) {
+        if (auto* g = dynamic_cast<mech3::GameOptionsScreen*>(engine.screen_of(os->screen_))) {
+          g->accept.on_left_up();
+          stage = 8;
+        }
+      } else if (at_main_menu(app)) {
+        stage = 8;
+      }
+    } else if (stage == 8 && at_main_menu(app)) {
+      bound = mech3::axis_table().axes[0];
+      return true;
+    }
+    return ++wait > 500;
+  }, &keys);
+  g_cheat_stick = nullptr;
+  EXPECT(!assign || stage == 8);
+  return bound;
+}
+struct LeverRun { float up = 0, down = 0, after_up = 0, after_down = 0; bool flag = false; int32_t source = 0; float scale = 0; };
+// A mission with the lever up then down; `act` at the end of that (1
+// Backspace, 2 button 10, 3 throttle-down tapped, 4 the stop key; 5 Backspace
+// with the lever still up), then up and down again.
+LeverRun lever_mission(const std::string& dir, LeverStick& k, int act) {
+  LeverRun r;
+  g_cheat_stick = &k.st;
+  platform::RegFile settings(dir + "/settings.reg");
+  g_cheat_mission_settings = &settings;
+  g_cheat_mission_dir = dir.c_str();
+  auto target = [] { auto* c = mech3::player_controls_instance(); return c ? c->throttle_target : -9.0f; };
+  cheat_mission("lever_unused", 0, 1, 900, [&](int f, mech3::GameEngine&, CheatKeys& keys) {
+    k.st.buttons[9] = 0;
+    if (f == 1) k.set(0.5f);
+    if (f == 5) {
+      r.source = mech3::axis_table().axes[0].source, r.scale = mech3::axis_table().axes[0].scale;
+      k.set(1.0f);
+    }
+    if (f == 15) {
+      r.up = target();
+      if (act == 5) keys.press(0x0e);
+      else k.set(0.0f);
+    }
+    if (f == 25) {
+      r.down = target();
+      if (act == 1) keys.press(0x0e);
+      if (act == 2) k.st.buttons[9] = 0x80;
+      if (act == 3) keys.key(0xd0, true);
+      if (act == 4) keys.press(0x02);
+    }
+    if (f == 27 && act == 3) keys.key(0xd0, false);
+    if (f == 35) k.set(1.0f);
+    if (f == 45) { r.after_up = target(); k.set(0.0f); }
+    if (f == 55) {
+      r.after_down = target();
+      auto* c = mech3::player_controls_instance();
+      r.flag = c && c->reverse;
+      return true;
+    }
+    return false;
+  });
+  g_cheat_mission_settings = nullptr;
+  g_cheat_mission_dir = nullptr;
+  g_cheat_stick = nullptr;
+  std::printf("  lever, act %d: axis %d x %g; up %.2f down %.2f; then up %.2f down %.2f, reverse flag %d\n", act, r.source, r.scale, r.up, r.down, r.after_up, r.after_down, r.flag);
+  return r;
+}
+}  // namespace
+
+TEST(controls_lever_direction_through_the_screens_and_a_mission_headless) {
+  if (!have_game()) return;
+  zfix::Options fix_was = zfix::options();
+  const mech3::AxisTable axes_was = mech3::axis_table();
+  auto is = [](const LeverRun& r, float up) {  // full one way up, the other down, before and after
+    return r.up == up && r.down == -up && r.after_up == up && r.after_down == -up;
+  };
+  for (const int32_t source : {3, 7})
+    for (const bool high_up : {false, true}) {
+      LeverStick k;
+      k.source = source, k.high_up = high_up;
+      const float normal = high_up ? -1.0f : 1.0f;  // the defaults take a falling reading as up
+      {  // Invert as shown (checked), saved, restarted: the defaults' direction.
+        W40Setup w("lever_write");
+        const mech3::AxisBinding b = lever_screens(w.dir, k, true, false, true);
+        EXPECT(b.source == source && b.scale < 0.0f);
+        lever_screens(w.dir, k, false, false, false);
+        EXPECT(mech3::axis_table().axes[0].source == source && mech3::axis_table().axes[0].scale < 0.0f);
+        EXPECT(is(lever_mission(w.dir, k, 0), normal));
+      }
+      {  // Invert unticked, saved, restarted: the other way.
+        W40Setup w("lever_write");
+        const mech3::AxisBinding b = lever_screens(w.dir, k, true, true, true);
+        EXPECT(b.source == source && b.scale > 0.0f);
+        lever_screens(w.dir, k, false, false, false);
+        EXPECT(mech3::axis_table().axes[0].source == source && mech3::axis_table().axes[0].scale > 0.0f);
+        EXPECT(is(lever_mission(w.dir, k, 0), -normal));
+      }
+      {  // Not saved: kept for the session, gone at the next start.
+        W40Setup w("lever_write");
+        const mech3::AxisBinding b = lever_screens(w.dir, k, true, true, false);
+        EXPECT(b.source == source && b.scale > 0.0f && mech3::axis_table().ready == 0);
+        lever_screens(w.dir, k, false, false, false);
+        EXPECT(mech3::axis_table().axes[0].source == 3 && mech3::axis_table().axes[0].scale < 0.0f);
+      }
+    }
+  // Backspace, button 10 and a tapped key never flip the lever, ahead or behind
+  // stop, either way of reading; the stop key's a key's, and the lever takes over.
+  for (const bool high_up : {false, true}) {
+    LeverStick k;
+    k.high_up = high_up;
+    for (const int act : {1, 2, 3, 4}) {
+      W40Setup w("lever_write");
+      EXPECT(is(lever_mission(w.dir, k, act), high_up ? -1.0f : 1.0f));
+    }
+  }
+  // The original's lever keeps its flag: Backspace with the lever ahead
+  // flips it to the mission's end, bug fixes off and with the switch off.
+  for (const bool bugs : {false, true}) {
+    zfix::options().bugs = bugs;
+    zfix::options().throttle_reverse = false;
+    LeverStick k;
+    W40Setup w("lever_write");
+    k.set(1.0f);
+    const LeverRun r = lever_mission(w.dir, k, 5);
+    EXPECT(r.flag && r.after_up < -0.9f);
+    zfix::options() = fix_was;
+  }
+  mech3::axis_table() = axes_was;
+  zin::state().joy_ready = 0;  // no stick for the tests after (joy_init leaves it when none opens)
+  zin::state().joy_open = false;
 }
 
 // Food for thought: a mech that lost a leg comes whole and a vehicle's

@@ -148,8 +148,15 @@ vehicle: the vehicle hooks were unset, so 0x4237c0 found no target.
     met by the feet.
 
 **Touch (0x423c90)**: buildings and animated objects with a damage handler
-take 20 per frame of contact (0x5836b0 -> node +0xbc slot 1); while they
+take 20 a hit (0x5836b0 -> node +0xbc slot 1); while they
 stand, the wall response blocks.
+
+The 20 is per hit, not per frame, and stays the exe's. The bounce keeps touches
+apart at any rate: walking into c2m1's 30-health buildings (15 approaches a
+rate, each touch 20) gave 87, 90, 78 and 81 hits, 1.04, 1.04, 1.15 and 1.05 a
+second, at 33, 16, 8 and 4 ms. Scaling it by the frame time, as an earlier fix
+did, gave a building an eighth of the damage at 4 ms. Nearly every shipped
+touchable object has 30 health or less, so most go in one or two hits.
 
 **Ceiling (0x423600)**: airborne and rising: vertical speed * -0.66, the mech
 put just under the contact, 0.002 head damage. On foot: damage by the volume

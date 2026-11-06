@@ -15,6 +15,89 @@ Microsoft or MicroProse.
 
 > Found a bug? Please [report it](#reporting-a-bug).
 
+## What's new
+
+Every release's full notes are on the [Releases](../../releases) page, and
+[CHANGES.md](CHANGES.md) lists everything the rebuild changes from the
+original.
+
+### Coming in the next release
+
+- **The same acceleration above 83 fps.** Holding a throttle key above about
+  83 fps skipped the mech's slow build-up of speed, so it pulled away nearly
+  2 seconds sooner than at 30 or 60 fps. It now builds up the same at any
+  frame rate.
+- **Walking into a building does its full damage at any frame rate.** An
+  earlier fix scaled the 20 damage of each touch by the frame time, so the
+  higher your frame rate the less a building took (about a fifth at 144 fps).
+  Each touch does 20 again, as in the original.
+- **Where a foot reads the ground.** The original never filled in the setting
+  that decides when a foot uses the ground under its middle. Our fix guessed
+  at it; it now uses the value the original team's own Pirate's Moon sets. This
+  changes slightly how feet sit on slopes and when a foot counts as in water.
+  This is part of bug fixes.
+- **The target keys tell the HUD again.** Choosing a target with E, W or their
+  Ctrl and Shift forms now does what Z and Q already did: the target triangle
+  pulses, the target's mech sound plays, and a missile lock starts over on the new
+  target instead of carrying across.
+- **A stick's throttle lever stays the right way round.** Tapping throttle-down
+  with the lever below stop, or pressing Toggle throttle direction (Backspace or
+  stick button 10) with it above stop, could leave the lever backwards until the
+  mission ended. That toggle no longer affects a lever. If yours runs backwards
+  from the start, use the Invert box (Options, Controls, Assign Axis).
+- **Op 2 Mission 2's gas kills.** After the Air Refinery goes down, standing in its
+  gas now destroys you, or Dominic, as the original does; before, nothing happened.
+- **The debriefing's scores.** A campaign debriefing now lists the mission's
+  objectives, each worth 2500 when done, and counts them in the mission and
+  campaign totals and the rank; before, it listed none and scored none. Instant
+  Action's Battle Waves and Progression now score 1000 a wave plus a bonus for
+  how far you got, as the original does, in place of a flat 1000, so a round that
+  clears no wave scores nothing but its kills. Scores you already have stay as
+  saved; new missions add to them.
+
+**1.0.3 (2026-11-05)**
+
+- **Your data folder can live on another drive:** GAME FILES, MY DATA FOLDER in the
+  launcher copies it, checks the copy, then switches over, and removes the old
+  copy only if you say so. If the drive is missing at start the game says so
+  instead of starting afresh.
+- **Linux:** the game no longer closes at the end of the intro movies.
+- **Linux:** an install in any letter case now works (all lower case, all upper
+  case, or mixed).
+- **A softer message for mods:** when files match neither 1.0 nor 1.2, it now says
+  data mods are read, though they may not play right, and that a mod which
+  patches the old Mech3.exe won't apply. It never stopped the game.
+- **Crashes say why:** a crash or a failed start now leaves a line in the log
+  and shows a message box, on every platform.
+- **Windows:** the installer asks for a folder every time, so you can install
+  somewhere other than C.
+- **Vehicles on fast machines:** small bumps throw them much less. On rough
+  ground they still tip more than at 30 fps, and they still jump off steep
+  banks at full speed, as in the original.
+- **A band under the sky:** where nothing is drawn between the far ground and
+  the sky, the game now shows the fog's colour.
+- Smaller fixes: a memory leak in the zoom views, a light's position, and the
+  pitch of moving sounds.
+
+**1.0.2 (2026-11-04)**
+
+- **Lancemates walk round things.** When a straight walk fails, they find a
+  way round walls, up ramps and across rivers. Part of bug fixes; not for
+  enemies or in multiplayer.
+- **Lights made during play work.** Jump jets and gunfire light your mech.
+- **A mech no longer walks by itself** when saved stick controls are used with
+  no stick attached.
+
+**1.0.1 (2026-11-03)**
+
+- **Op 1, Mission 2's missile platforms** no longer vanish at high frame rates,
+  which could make the mission impossible to win.
+- **Custom key bindings** work on the Controls screen.
+- **Flight sticks:** twist and throttle reach the right axes, and the throttle
+  lever reaches reverse.
+- **A crash late in a fight** is fixed, along with the end credits on wide
+  screens and the mech lab's "Overwrite?" box.
+
 ## What you need
 
 - **Your own MechWarrior 3**, any of these:
@@ -132,9 +215,11 @@ installed copy does not have. Two ways to get it back:
   (one word a stick axis: X, Y, Z, Rx, Ry, Rz, S0, S1, or - for none).
   `mw3.log` lists every device found and the line in use.
 - A stick's throttle lever covers reverse too: full reverse at the bottom,
-  stop a little over a third of the way up. `throttle_reverse=0` in
-  `mw3.cfg` gives the original's stop at the bottom (reverse is then
-  Backspace, "Toggle throttle direction").
+  stop a little over a third of the way up. If yours runs backwards, untick
+  Invert in Options, Controls, Assign Axis on Forward Throttle, and save
+  when Accept asks. Toggle throttle direction (Backspace) is for the keys
+  and does not flip a lever. `throttle_reverse=0` in `mw3.cfg` gives the original's
+  stop at the bottom (reverse is then Backspace).
 - On a widescreen every screen uses the whole width: the missions, the
   menus, the mech lab, the briefings and the multiplayer screens. For the
   original's 4:3 menus, put `widemenus=0` in `mw3.cfg` (or start with
@@ -226,6 +311,9 @@ turn them on; `mw3 --mods` lists what it found, and `mw3 --check-mod
 FOLDER` reads a mod as the game would and says what it would refuse. With
 no mods turned on, nothing changes. How to make one:
 [docs/modding.md](docs/modding.md).
+
+The original game has a tool of its own here: [tools/weapon-patch](tools/weapon-patch)
+adds weapons to the original `Mech3.exe`'s mech lab. It isn't part of the rebuild.
 
 ## Where your saves and settings go
 

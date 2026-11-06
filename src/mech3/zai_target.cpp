@@ -121,12 +121,12 @@ struct Keys {
 void AiTarget::nearest_ally(int32_t side) {
   Keys k{*this, side, false};
   for (Contact* c : contacts)
-    if (k.wanted(c, vehicle_of(c))) return (void)set_target(c, false);
+    if (k.wanted(c, vehicle_of(c))) return g_hooks->target_set(*this, c);
 }
 void AiTarget::nearest_enemy(int32_t side) {
   Keys k{*this, side, true};
   for (Contact* c : contacts)
-    if (k.wanted(c, vehicle_of(c))) return (void)set_target(c, false);
+    if (k.wanted(c, vehicle_of(c))) return g_hooks->target_set(*this, c);
 }
 
 namespace {
@@ -137,7 +137,7 @@ bool last_pick(AiTarget& t, int32_t side, bool enemy) {
   if (side == 0) last = enemy ? t.enemy_target : t.ally_target;
   else if (side == 1) last = enemy ? t.ally_target : t.enemy_target;
   if (last && last != t.target) {
-    t.set_target(last, false);
+    g_hooks->target_set(t, last);
     return true;
   }
   return false;
@@ -163,10 +163,10 @@ void AiTarget::prev_ally(int32_t side) {
         if (k.wanted(c, vehicle_of(c))) break;
         --q;
       }
-      if (q - 1 != 0) return (void)set_target(contacts[q - 2], false);
+      if (q - 1 != 0) return g_hooks->target_set(*this, contacts[q - 2]);
       for (size_t it = n; it != p; --it) {
         Contact* c = contacts[it - 1];
-        if (k.wanted(c, vehicle_of(c))) return (void)set_target(c, false);
+        if (k.wanted(c, vehicle_of(c))) return g_hooks->target_set(*this, c);
       }
       return;
     }
@@ -189,10 +189,10 @@ void AiTarget::prev_enemy(int32_t side) {
         if (k.wanted(c, vehicle_of(c))) break;
         --q;
       }
-      if (q - 1 != 0) return (void)set_target(contacts[q - 2], false);
+      if (q - 1 != 0) return g_hooks->target_set(*this, contacts[q - 2]);
       for (size_t it = n; it != p; --it) {
         Contact* c = contacts[it - 1];
-        if (k.wanted(c, vehicle_of(c))) return (void)set_target(c, false);
+        if (k.wanted(c, vehicle_of(c))) return g_hooks->target_set(*this, c);
       }
       return;
     }
@@ -224,7 +224,7 @@ void AiTarget::next_ally(int32_t side) {
         }
         if (q == p) return;
       }
-      return (void)set_target(contacts[q], false);
+      return g_hooks->target_set(*this, contacts[q]);
     }
   }
   nearest_ally(side);
@@ -251,7 +251,7 @@ void AiTarget::next_enemy(int32_t side) {
         }
         if (q == p) return;
       }
-      return (void)set_target(contacts[q], false);
+      return g_hooks->target_set(*this, contacts[q]);
     }
   }
   nearest_enemy(side);

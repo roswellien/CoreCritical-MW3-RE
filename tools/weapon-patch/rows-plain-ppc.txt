@@ -1,0 +1,5 @@
+# The plain PPC as a 38th weapon: weapons.zrd defines it and Mech3Msg.dll names it,
+# but the mech lab's table has no row for it.
+#
+# name  family  tech    ammo  label
+PPC     3       sphere  no    0x2fd

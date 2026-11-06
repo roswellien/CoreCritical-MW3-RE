@@ -25,7 +25,7 @@ cmake -S . -B build-linux-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release -DMW3_PACKAGE=
 cmake --build build-linux-pkg --target mw3 mw3launcher
 cmake --build build-linux-pkg --target mw3import 2>/dev/null || echo "mw3import not built (no FFmpeg): the package has no movie importer"
 
-VER=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+VER=$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
 APPDIR=build-linux-pkg/AppDir
 mkdir -p "$APPDIR/usr/bin/assets/launcher" "$APPDIR/usr/share/doc/mw3/licenses"
 # The launcher is the AppImage's entry (mw3.desktop's Exec); the game beside it.

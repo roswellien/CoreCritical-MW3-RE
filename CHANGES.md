@@ -21,7 +21,7 @@ it is clear what the designers meant.
 
 ## Bug fixes that change play
 
-- **A joystick's throttle lever reaches reverse.** The original's lever ran from stop to full ahead; reverse took the Toggle throttle direction key (Backspace). Now the lever covers the whole range, full reverse at the bottom to full ahead at the top, with stop a little over a third of the way up (reverse is slower, so each step of the lever is the same change of speed both ways) and a small band around it that holds stop. A lever left at the bottom does not send the mech backwards at the start of a mission. Backspace still flips the direction; `throttle_reverse=0` in `mw3.cfg` gives the original's lever. Gamepad triggers are unchanged. The controls screen's Assign Axis also offers the stick's sliders, where many throttle levers are.
+- **A joystick's throttle lever reaches reverse.** The original's lever ran from stop to full ahead; reverse took the Toggle throttle direction key (Backspace). Now the lever covers the whole range, full reverse at the bottom to full ahead at the top, with stop a little over a third of the way up (reverse is slower, so each step of the lever is the same change of speed both ways) and a small band around it that holds stop. A lever left at the bottom does not send the mech backwards at the start of a mission. Toggle throttle direction (Backspace, stick button 10) flips the keys' throttle but not the lever, so nothing can leave the lever backwards for the rest of a mission; a lever that runs backwards on your stick is cured by unticking Invert in Assign Axis. `throttle_reverse=0` in `mw3.cfg` gives the original's lever, which Backspace flips. Gamepad triggers are unchanged. The controls screen's Assign Axis also offers the stick's sliders, where many throttle levers are.
 - **A laser's beam leaves from the arm after a quick click.** A short laser keeps firing for a moment after you let go of the button, and the original left it at the point where the arm was when you let go, so on a walking mech the beam hung back a metre or more behind the arm (and fired from there). It now follows the arm until it ends, as it does while the button is held.
 - **Every nav point you pass on your objectives' list is ticked off.** The game marks a nav point an objective watches as reached (and says its line) when you come within 25 m, but once its check passed the currently selected nav point it skipped the rest of the list, so those were only ticked off once selected. Now all of them are checked.
 - **Turrets do not slow down mission after mission.** Each turret looks for a target, aims and fires on only one frame in so many, and the original counted that over every turret the game had made since it started: the more missions you had played in one sitting, the less often each mission's turrets acted. The count now starts again with each mission's turrets.
@@ -60,14 +60,16 @@ it is clear what the designers meant.
   frame rate, and exactly as before at 30 fps. A turret aimed straight up
   or down also keeps its shape. Vehicles keep the original's damping.
 - **Mech movement plays the same at any frame rate.** Falls, the shoves from
-  slopes and ledges, the blend into a walk, jump-jet thrust and the damage
-  done to buildings you push into all went by frames; they now play as they
-  did at 30 fps.
+  slopes and ledges, the blend into a walk and jump-jet thrust all went by
+  frames; they now play as they did at 30 fps.
 - **The throttle keys open the throttle at the same speed at any frame
   rate.** Each frame a key was held added a fixed step, so on a fast computer
   the throttle ran up several times faster. It now moves as it did at
   30 fps: from stop to full in about 1.3 seconds (with the lance command
   panel open too, which has its own copy of the keys).
+  The mech's speed then follows at the same pace too: above about 83 fps an
+  earlier version of this fix let it skip its slow build-up and pull away
+  nearly 2 seconds sooner.
 - **Lasers and TAG recharge at the same speed at any frame rate.** The
   original dropped the fraction of each frame's recharge, so the faster the
   game ran the slower beams came back: TAG took 67 seconds at 30 fps, 83 at
@@ -89,7 +91,8 @@ it is clear what the designers meant.
 - **Feet use the ground under their middle.** Each foot reads the ground
   at its front, middle and back, but the setting that picks the middle was
   never filled in, so the game used leftover memory: usually the front or
-  back reading, sometimes any. The middle is used now when it is nearest.
+  back reading, sometimes any. The middle is now used when the foot is close
+  to it, by the value the original team's own Pirate's Moon sets.
   This touches how feet sit on slopes and riverbanks and when a foot counts
   as in water.
 - **Both feet ease into a walk.** For the first two thirds of a second of
@@ -150,6 +153,8 @@ it is clear what the designers meant.
 - **A mech put back on the ground looks 10 m above where it stands**, as everything else in the game does. The original looked y + 10 above a mech at height y, so below sea level it found nothing and dropped to the lowest surface (under a bridge), and high up it could land on a roof overhead. No mission's starting place changes: all 195 placements in the 24 campaign missions and all 768 records in every campaign, Instant Action and multiplayer file land exactly where they did. What changes is a mech re-placed where it stands (swapping mechs mid-mission or in multiplayer), which now stays put.
 - **Cut ground keeps its texture lined up.** When a crater cut a ground polygon and a corner of a cut piece lay on a straight edge, the original dropped that corner from the piece's points but not from its texture coordinates and colours, so every corner after it took the next one's: the texture and shading on that piece slid by one corner (about 1 in 200 of the polygons a crater adds). The extra corner's texture coordinates and colours now go with it.
 - **Craters next to an earlier crater are judged on the earlier one.** The original refuses a crater that would come within 5 m of an earlier crater in the same patch of ground, but it checked against the earlier crater's record after freeing it, so the answer depended on what the memory held by then. The rebuild keeps the earlier craters' outlines for the test.
+- From high up, no dark band between the far ground and the sky: what nothing draws takes the fog's colour (bug fixes on).
+- A light carried by something that moves now shines from where it is, not from the world's origin.
 
 ## Crashes and broken data that no longer break the game
 
@@ -653,3 +658,8 @@ Known quirks the rebuild deliberately keeps:
 - Lancemates find their way when their straight walk fails (bug fixes on, single player): round walls and parked vehicles, up ramps and along narrow walkways, and across a river at its bridge or ford, for follow, attack and repair orders. A lancemate will now come to you inside the areas the original told the AI to keep out of, if there is a way. They notice doors opening and buildings falling. On open ground they walk exactly as before.
 - With no joystick attached, a saved controls file with axes on the stick no longer makes your mech walk or its torso turn by itself (bug fixes on). The original moved the axes off the stick only for a file exactly like the defaults; a slider, or just a changed deadzone, kept them. The binding is kept for when the stick is back.
 - On fast machines, small bumps throw vehicles much less: the suspension's reaction to the ground is capped at what it is at 30 fps. On rough ground they still tip more than at 30 fps, and they still jump off steep banks at full speed now and then, as in the original.
+- Linux: the game no longer closes at the end of the intro movies. The launcher closed when the game appeared, which unmounted the AppImage the game was still running from; it now waits, out of sight, until the game ends.
+- A crash now says so, in the log and in a message box that names the log, as does a start that cannot open its window or graphics. It used to just close.
+- Linux: an install whose files are in another letter case (all lower case, all upper case, mixed) now works. Windows ignores case, so the game's names never had to match; on Linux it could not find them.
+- A softer message when files match neither 1.0 nor 1.2: they look modded or from another version, data mods are read but may not play right, and a mod that patches the old Mech3.exe won't apply. It never stopped the game, and still doesn't.
+- Your data folder (settings, pilots, saves, converted movies) can live on another drive: GAME FILES, MY DATA FOLDER in the launcher copies it, checks the copy, then switches over, and removes the old copy only if you say so. If the drive is missing at start the game says so instead of starting afresh.

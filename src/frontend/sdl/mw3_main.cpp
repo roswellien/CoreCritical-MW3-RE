@@ -70,6 +70,8 @@
 #include "frontend/sdl/modes_chain.h"
 #include "frontend/sdl/debug_states.h"
 #include "frontend/sdl/first_run_import.h"
+#include "frontend/sdl/crash_report.h"
+#include "frontend/sdl/data_folder_start.h"
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/launcher.h"
@@ -602,10 +604,8 @@ std::string vfw_helper_path(const std::string& given) {
 }
 
 #if defined(_WIN32)
-constexpr const char* kSelf = "mw3.exe";
 constexpr const char* kImporter = "mw3import.exe";
 #else
-constexpr const char* kSelf = "mw3";
 constexpr const char* kImporter = "mw3import";
 #endif
 
@@ -613,8 +613,6 @@ constexpr const char* kImporter = "mw3import";
 // 1.2's, and no music. Lines for a box; flat() makes one for the log.
 std::vector<std::string> start_notes(const mech3::DataVersion& d, const std::string& write_dir) {
   std::vector<std::string> out;
-  const std::string patch = std::string("If you have the official 1.2 patch, start once with:\n    ") + kSelf +
-                            " --patch \"<the patch's ZIP or folder>\"\nYour install is not changed (README.txt).";
   auto list = [](const std::vector<std::string>& v) {
     std::string s;
     for (size_t i = 0; i < v.size() && i < 6; ++i) s += (i ? ", " : "") + v[i];
@@ -623,8 +621,7 @@ std::vector<std::string> start_notes(const mech3::DataVersion& d, const std::str
   };
   // 1.0's data and a mix need no note: they load as 1.2 (docs/patch12.md).
   if (d.name == "unknown")
-    out.push_back("Some MechWarrior 3 files are neither version 1.0's nor 1.2's (another version or a mod): " + list(d.unknown) +
-                  ". They may not play right. " + patch);
+    out.push_back(mech3::mod_note(list(d.unknown)));
   else if (d.name == "incomplete")
     out.push_back("Some MechWarrior 3 files are missing from the install: " + list(d.unknown) +
                   ". Reinstall MechWarrior 3 from its disc.");
@@ -666,6 +663,7 @@ std::string codec_path(const std::string& install) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (sdlfe::crash_box_main(argc, argv)) return 0;
   // In order with the log on stderr. Windows' CRT has no line buffering (and takes size 0 as
   // an invalid argument): unbuffered there.
 #if defined(_WIN32)
@@ -677,12 +675,15 @@ int main(int argc, char** argv) {
   if (!parse(argc, argv, a)) return 2;
   if (!a.shot.empty()) a.hidden = true;
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK)) {
-    std::fprintf(stderr, "mw3: SDL_Init: %s\n", SDL_GetError());
+    sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
     return 1;
   }
   // The write dir: saves and settings, outside the install (assets-layer.md).
-  if (a.write_dir.empty()) {
-    if (char* p = SDL_GetPrefPath("MicroProse", "MechWarrior 3")) a.write_dir = p, SDL_free(p);
+  // --write-dir wins; else the usual folder, or the one its pointer names (data_folder.h).
+  const bool write_dir_given = !a.write_dir.empty();
+  if (!write_dir_given && !sdlfe::data_folder_at_start(&a.write_dir, !a.hidden)) {
+    SDL_Quit();
+    return 1;
   }
   while (a.write_dir.size() > 1 && a.write_dir.back() == '/') a.write_dir.pop_back();
   // A --write-dir that does not exist is made, as SDL_GetPrefPath makes the default.
@@ -700,6 +701,7 @@ int main(int argc, char** argv) {
     std::printf("mw3 (MechWarrior 3 rebuild) %s: %s\n", MW3_VERSION, argc > 1 ? "started with arguments" : "started");
   else if (!a.write_dir.empty() && run_log.open(a.write_dir))
     std::printf("mw3 (MechWarrior 3 rebuild) %s, log %s\n", MW3_VERSION, run_log.path().c_str());
+  if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
   if (!a.mods_given) a.mods = a.cfg_mods;
   if (a.no_mods) a.mods.clear();
@@ -762,6 +764,7 @@ int main(int argc, char** argv) {
   if (setup_only) {
     sdlfe::LauncherOptions lo;
     lo.setup_only = setup_only;
+    lo.write_dir_fixed = write_dir_given;
     lo.write_dir = a.write_dir, lo.cfg_install = a.cfg_install, lo.cfg_mw1_game = a.cfg_mw1_game;
 #ifdef MW3_GAME_DIR
     if (!std::getenv("MW3_FIND_INSTALL")) lo.more_installs.push_back(MW3_GAME_DIR);
@@ -817,7 +820,7 @@ int main(int argc, char** argv) {
   zutl::set_write_dir(a.write_dir);
   zutl::mounts().confined = true;  // ours: names from data and the network stay inside these folders
   std::error_code ec;
-  if (!std::filesystem::exists(a.install + "/zbd/reader.zbd", ec)) {
+  if (zutl::any_case(a.install, "zbd/reader.zbd").empty()) {
     const std::string msg = "No MechWarrior 3 install at \"" + a.install +
                             "\". Start mw3 with the folder that holds Mech3.exe and zbd (README.txt).";
     std::fprintf(stderr, "mw3: %s\n", msg.c_str());
@@ -900,6 +903,7 @@ int main(int argc, char** argv) {
   int result = 1;
   try {
     result = run(a, vfw.get());
+    std::printf("mw3: closed, result %d\n", result);
   } catch (const std::exception& error) {
     std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
   }
@@ -918,7 +922,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
   if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
     return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
-  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality, a.cc_assets)) return 1;
+  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality, a.cc_assets)) {
+    // The reason is in the line before this (SdlWindow::init).
+    sdlfe::fatal_box(std::string("MechWarrior 3 could not open its window or graphics (Vulkan on Linux): ") + SDL_GetError(), a.hidden);
+    return 1;
+  }
   sdlfe::SdlInput input;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)

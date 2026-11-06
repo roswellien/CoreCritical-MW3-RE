@@ -184,7 +184,10 @@ int32_t update_3d(Voice* v, const float* pos, const float* vel, int32_t doppler)
       const float k = 1.0f - closing * inv * st.inv_speed_of_sound;
       uint32_t hz = 0;
       out()->get_frequency(v->buffer, &hz);
-      out()->set_frequency(v->buffer, static_cast<uint32_t>(static_cast<int64_t>(static_cast<double>(hz) * k)));
+      // fild qword, fmul dword, ftol (0x005722e8), the x87 at 53 bits in play
+      // (zfix fpu53); at the emulator's 24 the product rounds to float first.
+      const double scaled = static_cast<double>(hz) * k;
+      out()->set_frequency(v->buffer, static_cast<uint32_t>(static_cast<int64_t>(zfix::options().fpu53 ? scaled : static_cast<float>(scaled))));
     }
   } else {
     vol = muted() ? -10000 : v->volume;

@@ -152,6 +152,11 @@ DataVersion detect_data_version() {
   return v;
 }
 
+std::string mod_note(const std::string& files) {
+  return "Some files look modded or from another version" + (files.empty() ? std::string() : " (" + files + ")") +
+         ". The rebuild reads data mods, but they may not play right; a mod that patches the old Mech3.exe won't apply.";
+}
+
 std::string DataVersion::describe() const {
   std::string s = "data version " + name;
   if (name == "1.0 with 1.2 files")

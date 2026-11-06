@@ -166,10 +166,20 @@ into the target straight (+0x3c) and never touches it. So the defaults' 0..1
 lever drives 0..-1 after Backspace. The axis popup's OK (0x0042e5b0) takes
 the lever's place at OK as 0: pressed with the lever centred, its lower half
 is reverse; at an end, stop to full only. Ours (W56, fixes.md): with bugs the
-lever covers reverse itself (`lever_throttle`).
+lever covers reverse itself (`lever_throttle`), and the flag no longer flips it:
+a tapped throttle-down key with the lever behind stop, or Backspace or button 10
+with it ahead, left up meaning reverse until the mission's end, while Backspace
+with it behind stop did nothing. The keys' throttle keeps the flag. A lever that
+reads high at its top runs backwards until Invert is unticked in Assign Axis.
+Open: a Thrustmaster player (model unknown, a Reddit comment, no log) said the
+reversed option changed nothing. Not reproduced: Invert flips the lever through
+the screens, saved and restarted, on Z and a slider, reading either way. The
+T.16000M lever reading low at its top is an assumption, never checked on a stick
+and with no public source, so the default stays.
 
 FIX (B): the throttle keys' 0.025 is per 1/30 s (`zfix::frame_steps`;
-fixes.md).
+fixes.md), and so is the 0.009 at which the throttle takes its target
+(0x00426960), at most 0.009.
 
 The singleton `[0x6056ec]` is made by 0x427280(mode) (ported, mech-build.md section 7), called from 0x491150 (mission.cpp),
 with mode 3 or 6. A second call only reapplies the mode (0x426650). The fields

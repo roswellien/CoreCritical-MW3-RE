@@ -1,5 +1,7 @@
 #include "gamez/znetwork/znet_object.h"
 
+#include <cstddef>
+
 namespace znet {
 
 Registry& registry() {
@@ -19,7 +21,7 @@ Object::~Object() {
 
 // Mech3.exe 1.2 @ 0x0058b060
 Element* Object::elem(int32_t i) const {
-  if (i >= 0 && uint32_t(i) < elems.size()) return elems[size_t(i)];
+  if (i >= 0 && uint32_t(i) < elems.size()) return elems[std::size_t(i)];
   // The exe asks element 0 unchecked; an empty object has none (FIX (bug):
   // the exe reads past an empty vector).
   return elems.empty() || !elems[0] ? nullptr : elems[0]->miss();
@@ -27,7 +29,7 @@ Element* Object::elem(int32_t i) const {
 
 // Mech3.exe 1.2 @ 0x0058b130
 int32_t Object::index_of(const Element* e) const {
-  for (size_t i = 0; i < elems.size(); ++i)
+  for (std::size_t i = 0; i < elems.size(); ++i)
     if (elems[i] == e) return int32_t(i);
   return -1;
 }

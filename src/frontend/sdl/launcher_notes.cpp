@@ -1,4 +1,6 @@
 #include "frontend/sdl/launcher_notes.h"
+#include "gamez/zutil/zutl_path.h"
+#include "mech3/data_version.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -9,8 +11,7 @@ std::vector<std::string> launcher_notes(const std::string& version, bool music, 
   std::vector<std::string> out;
   // 1.0's data and a mix need no note: they load as 1.2 (docs/patch12.md).
   if (version == "unknown")
-    out.push_back("Some MechWarrior 3 files are neither version 1.0's nor 1.2's (another version or a mod). They may not "
-                  "play right.");
+    out.push_back(mech3::mod_note());
   const std::string rip = "or put your own rip of the music in " + music_dir + " as track02.ogg, track03.ogg and so on.";
   if (!movies && !music)
     out.push_back("Your install has no movies (they stayed on the CD) and no music (the original played it from the "
@@ -29,7 +30,7 @@ bool have_movies(const std::string& install, const std::string& write_dir) {
   std::error_code ec;
   for (const std::string& d : {install, write_dir}) {
     if (d.empty()) continue;
-    for (const auto& e : std::filesystem::directory_iterator(std::filesystem::path(d) / "video", ec)) {
+    for (const auto& e : std::filesystem::directory_iterator(zutl::any_case(d, "video"), ec)) {
       std::string x = e.path().extension().string();
       for (char& c : x) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
       if (x == ".avi" || x == ".fmv") return true;

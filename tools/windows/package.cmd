@@ -32,7 +32,7 @@ if not exist build-win-pkg\mw3import.exe (echo mw3import.exe was not built: FFmp
 rem The helper, 32-bit (its own vcvarsall x86, in a child shell).
 cmd /c tools\windows\build_indeo.cmd build-win-pkg || exit /b 1
 
-for /f "usebackq delims=" %%v in (`git describe --tags --always --dirty 2^>nul`) do set VER=%%v
+for /f "usebackq delims=" %%v in (`git describe --tags --match "v[0-9]*" --always --dirty 2^>nul`) do set VER=%%v
 if not defined VER set VER=dev
 set NAME=mw3-%VER%-win64
 set DIST=build-win\dist\%NAME%

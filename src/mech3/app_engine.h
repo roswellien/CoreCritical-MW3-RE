@@ -272,6 +272,8 @@ class GameEngine : public Engine {
   std::string message_format_is(int32_t id, int32_t a, const char* s) override;
   std::string message_format_isi(int32_t id, int32_t a, const char* s, int32_t b) override;
   std::vector<LanceMech> debrief_lance() override;     // the ported mechs
+  std::vector<Objective> debrief_objectives(int32_t which) override;  // the mission's lists
+  const char* objective_text(Handle obj) override;     // 0x0045e080(0)
   uint32_t player_allies() override;
   bool vehicle_armor(Handle v, LanceArmor* a) override;
   const char* mech_name_of(int32_t mech) override;

@@ -12,6 +12,7 @@
 #include "mech3/patch_import.h"
 #include "mech3/source_install.h"
 #include "platform/cue_audio.h"
+#include "gamez/zutil/zutl_path.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -100,8 +101,7 @@ Result install_from_disc(const std::string& source, const std::string& out_dir, 
                                 : " The disc's " + std::to_string(d.music) + " music tracks were added too.";
     if (r.version == "1.0") r.warnings.push_back("This is version 1.0. Applying the official 1.2 patch is recommended.");
     if (r.version == "unknown")
-      r.warnings.push_back("Some of its files are not the ones on the MechWarrior 3 1.0 disc, so this may be "
-                           "another release or a modified copy. It may still play.");
+      r.warnings.push_back(mod_note());
     for (const std::string& w : d.warnings)
       if (w.rfind("music: ", 0) == 0) r.warnings.push_back("The music could not be copied: " + w.substr(7) + ".");
     return r;
@@ -429,7 +429,7 @@ Result check_install(const std::string& dir, const std::string& write_dir) {
   Result r;
   r.install_dir = dir;
   std::error_code ec;
-  if (!fs::exists(fs::path(dir) / "zbd" / "reader.zbd", ec)) {
+  if (zutl::any_case(dir, "zbd/reader.zbd").empty()) {
     r.summary = "No MechWarrior 3 was found in " + dir + ": it has no zbd folder with the game's data.";
     return r;
   }
@@ -439,7 +439,7 @@ Result check_install(const std::string& dir, const std::string& write_dir) {
   r.summary = "Found " + version_words(r.version) + " at " + dir + ".";
   if (r.version == "1.0" || r.version == "1.0 with 1.2 files")
     r.warnings.push_back("Applying the official 1.2 patch is recommended.");
-  if (!fs::is_directory(fs::path(dir) / "video", ec))
+  if (zutl::any_case(dir, "video").empty())
     r.warnings.push_back("It has no video folder, so the game will play without its movies.");
   return r;
 }
@@ -448,7 +448,7 @@ Result probe_source(const std::string& path) {
   Result r;
   std::error_code ec;
   // An installed copy, not a disc.
-  if (fs::is_directory(path, ec) && fs::exists(fs::path(path) / "zbd" / "reader.zbd", ec)) {
+  if (fs::is_directory(path, ec) && !zutl::any_case(path, "zbd/reader.zbd").empty()) {
     r = check_install(path, "");
     if (r.ok) r.summary = "This is an installed copy of " + version_words(r.version) + ", not a disc. Use it as your install instead.";
     return r;

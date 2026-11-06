@@ -271,10 +271,14 @@ and the Win State's copy goes into the same campaign. Not yet: a
 lancemate's name is now its brain's (0x004aee70, AiParams +0xd4), so its
 record matches by name (FIX (bug), behind `bugs`: the Win State's copy
 keeps a card's +0xb4 when the card had no record line, where the exe
-writes 0; fixes.md); the objective lists ([0x0060994c],
-[0x00609950]: objectives.zrd's objects are not ported) are empty; Instant
-Action's +0x44, +0x6c, +0x70 are not mapped on the ported `ActionGame`
-(scored as mode 0, 1000).
+writes 0; fixes.md). The objective lists are the mission's own
+(`GameEngine::debrief_objectives`, `objective_text`, from
+`mission_objectives()`) and Instant Action's +0x44, +0x6c, +0x70 the pilot's
+`ActionGame` (`Engine::action_rounds`). They stood empty and flat in the
+port until 2026-11-05, because the differential's probe stubs both hooks:
+`campaign_debriefing_scores_the_missions_objectives_headless` and
+`instant_action_menus_to_wave1_tallies_headless` run the real ones, and the
+chains check the rows they log (`debrief_rows`).
 
 The press 0x0047d030: CONTINUE: a campaign over goes to the Win Movie
 State 0x00608be8; passed (and clean): cleanup(0), the Load state (the next

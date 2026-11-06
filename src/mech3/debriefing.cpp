@@ -42,12 +42,11 @@ int32_t Engine::campaign_record(int32_t i) {
   return c && i >= 0 && i < 4 ? c->b4[i] : 0;
 }
 bool Engine::mission_ended() { return missions().ended != 0; }
-// Instant Action's +0x44, +0x6c and +0x70 are not mapped on the ported
-// ActionGame yet (campaign.md section 7): mode 0 scores the flat 1000.
 void Engine::action_rounds(int32_t* mode, int32_t* rounds, int32_t* waves) {
-  *mode = 0;
-  *rounds = 0;
-  *waves = 0;
+  ActionGame* g = current_pilot() ? current_pilot()->action() : nullptr;
+  *mode = g ? g->mode : 0;
+  *rounds = g ? g->x6c : 0;
+  *waves = g ? g->x70 : 0;
 }
 void Engine::win_keep_scores(Handle screen, int32_t n) {
   for (int32_t i = 0; i < n; ++i) {
@@ -599,6 +598,16 @@ void DebriefScreen::results(int32_t kind) {
   add(&lines[0]);
   for (ztwod::Text* t : texts) add(t);
   rank.set_rank(top);
+}
+
+// (ours) The results' texts in order, for the logs and the tests.
+std::string debrief_rows(const DebriefScreen& d) {
+  std::string out;
+  for (const ztwod::Text* t : d.texts) {
+    if (!out.empty()) out += " | ";
+    out += t->text;
+  }
+  return out;
 }
 
 // Mech3.exe 1.2 @ 0x0047c920

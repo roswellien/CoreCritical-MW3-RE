@@ -64,6 +64,39 @@ build/mw3 [install-dir] [options] [-nofmv] [-seasick] [-cdN]
   survives the restart a player makes before reporting it. Each stream
   goes through a pipe and a thread that writes the console's own handle and
   the file; at exit the handles are put back and the threads drained.
+- **The data folder** (ours, `mech3/data_folder.cpp`, `data_folder_start.h`;
+  Owen, 2026-11-04): the write dir on another drive, chosen in the launcher (GAME
+  FILES, MY DATA FOLDER). `data-folder.txt` in the usual folder names it, and
+  `mw3-data-folder.txt` in the folder says it is ours; with no pointer nothing
+  changes. mw3, mw3launcher and mw3import all read it, and `--write-dir` wins (and
+  hides the setting); the launcher passes the folder on to the game. A pointer's
+  folder that is missing, unmarked, read-only or full is said, with Try again and
+  Quit (hidden runs and mw3import exit 1), and no fresh folder ever stands in.
+  A move: the plan refuses a target inside or around the folder, one holding
+  files (a picked folder that is not empty and not ours gets a `MechWarrior 3
+  Data` folder inside it), or short of room; then each file is copied and read
+  back, `mw3.cfg`'s paths under the old folder follow (a disc install lives in
+  `<folder>/install`), and the pointer switches last, by rename. Failure or
+  cancel removes only what that run made; cut off outright, the pointer still
+  names the old folder, and `mw3-data-copying.txt` lets a new move finish the half
+  copy. The old copy goes only on the player's yes, and only in that session:
+  the files that move copied, one by one (never `remove_all`), when the pointer
+  names the new folder and it has every one; folders only when that empties
+  them. Logs stay behind: they are in use, and each start makes new ones.
+  Anything in the folder it cannot read stops the move before the switch.
+  The top level's `.DS_Store`, `Thumbs.db` and `desktop.ini` count as not data,
+  neither copied nor removed. On Windows a destination's name must be plain ASCII for
+  now: the dialog gives UTF-8, and `fs::path` reads narrow strings in the ANSI code page
+  (installs have the same limit).
+  `MW3_USUAL_FOLDER`, `MW3_LAUNCHER_MOVE_TO`, `MW3_LAUNCHER_MOVE_OLD`: for checks.
+- **A crash says why** (ours, `crash_report.cpp`; not in hidden runs): a
+  crash signal, a Windows exception or an uncaught exception puts a line in
+  the log (`mw3: crashed: ...`, with a backtrace where the system has one) and
+  shows a box naming the log. A signal handler cannot use SDL, so it starts
+  its own program with `--crash-box <text>` and ends; the launcher's box
+  stands in where it stays for an AppImage (`docs/linux.md`, Packaging).
+  A failed start (SDL, the window, the GPU device) also shows a box. A normal
+  end logs `mw3: closed, result N`, so a log with neither line was killed.
 - **The start's notes** (ours, `start_notes` in `mw3_main.cpp`): after the
   data version, a note when it is not 1.2's (1.0, a mix: `--patch`; files
   of neither version; files missing) and when no `music/trackNN` is found
@@ -159,7 +192,7 @@ They run inside the original main loop, after the original start-up.
   each frame, to watch a mech up close (its damage decals with `--fire`,
   damage-decals.md). The mission's opening camera still runs first.
 - `--debug-camera` (ours; `debugcamera=1` in mw3.cfg): Shift+F12 opens
-  Zipper's Battlesport game editor over the mission (debug command 0x9a,
+  The "BATTLESPORT GAME EDITOR" over the mission (debug command 0x9a,
   which the exe binds to no key; F11 stays the lancemate command screen):
   the view on the stealth object, flown with the movement keys, and the
   editor's menu; Shift+F12 again or EXIT GAME EDIT closes it and (ours)

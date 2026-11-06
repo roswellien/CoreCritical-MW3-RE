@@ -30,5 +30,8 @@ void fog_set_far(float range);         // 0x00526c00
 void fog_set_alt_high(float alt);      // 0x00526c50
 void fog_set_alt_low(float alt);       // 0x00526c90
 void fog_apply();                      // 0x00526de0
+// Ours: FIX (bug, Owen 2026-11-04): what the frame's colour clear fills in a mission, so that pixels no draw
+// covers (a band between the far ground and the sky, seen from height) are the fog's colour; black with fog off.
+void fog_frame_fill(uint8_t* r, uint8_t* g, uint8_t* b);
 
 }  // namespace zmod

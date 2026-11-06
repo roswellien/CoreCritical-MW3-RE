@@ -1,5 +1,6 @@
 #include "mech3/mech_control.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -41,7 +42,9 @@ int MechControls::update(float dt) {
     return 1;
   }
   if (throttle_target - throttle != 0.0f) {
-    if (std::fabs(throttle_target - throttle) < 0.009) {
+    // FIX (B): the snap's gap goes with the frame, as the keys' step does; else
+    // below 12 ms that step is inside it and the easing never runs (fixes.md).
+    if (std::fabs(throttle_target - throttle) < 0.009 * std::min(zfix::frame_steps(dt), 1.0f)) {
       throttle = throttle_target;
     } else {
       const float rate = std::fabs(throttle) <= std::fabs(throttle_target) ? owner->throttle_up
@@ -306,8 +309,10 @@ void PlayerControls::read_axes(float dt, float* thr, float* tn, float* p, float*
   const auto bound = [&](const AxisBinding& a) { return a.source != 0 && !(no_stick && a.source <= 8); };
   if (bound(ax[3])) *tn = ax[3].value(j, m);
   if (bound(ax[0])) {
+    // Ours: a lever with reverse of its own is not flipped by the flag, which a
+    // tapped key or button 10 could leave set until the mission's end (fixes.md).
     const float sign = reverse ? -1.0f : 1.0f;  // IControls +0x18
-    *thr = (lever_reverse_on(ax[0]) ? lever_throttle(ax[0], j) : ax[0].value(j, m)) * sign;
+    *thr = lever_reverse_on(ax[0]) ? lever_throttle(ax[0], j) : ax[0].value(j, m) * sign;
   }
   if (ax[2].source >= 9 && ax[1].source >= 9) {
     const float inv = 1.0f / dt;

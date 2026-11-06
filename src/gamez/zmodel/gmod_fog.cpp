@@ -1,5 +1,7 @@
 #include "gamez/zmodel/gmod_fog.h"
 
+#include <algorithm>
+
 #include "gamez/zrender/zrndr_fog.h"
 
 namespace zmod {
@@ -53,5 +55,12 @@ void fog_set_alt_low(float alt) {
 
 // Mech3.exe 1.2 @ 0x00526de0
 void fog_apply() { zrndr::set_fog_color(g_fog.color); }
+
+void fog_frame_fill(uint8_t* r, uint8_t* g, uint8_t* b) {
+  const auto byte = [](float v) { return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+  *r = g_fog.on ? byte(g_fog.color[0]) : 0;
+  *g = g_fog.on ? byte(g_fog.color[1]) : 0;
+  *b = g_fog.on ? byte(g_fog.color[2]) : 0;
+}
 
 }  // namespace zmod

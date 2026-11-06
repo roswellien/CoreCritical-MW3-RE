@@ -40,6 +40,12 @@ bool mod_may_serve(const std::string& host_path);
 // The first mod's copy of a game path (host form, from a mod's root), "" if none.
 std::string find_in_mods(const std::string& host_path);
 void set_write_dir(const std::string& dir);
+// FIX (A): the original's names meet Windows, where case does not matter; an
+// install on a case-sensitive disk may be in any case (a tool's lower case, a
+// disc's upper). `rel` ('/' between its parts) under `root`, a file or folder,
+// each part's own name if there is one, else one differing only by case; the
+// host path, "" if none. docs/assets-layer.md.
+std::string any_case(const std::string& root, const std::string& rel);
 
 // '\\' -> '/'; FIX (A): a game path's characters are the game's code page
 // (Windows-1252: what the edit bars type, a pilot named Müller), the host's
