@@ -4828,3 +4828,20 @@ TEST(sdl_program_movies_keep_their_shape_on_a_wide_screen) {
 }
 #endif
 #endif
+
+TEST(sdl_render3d_core_critical_defaults_stay_opt_in) {
+  const sdlfe::RendererBackend backend = sdlfe::RendererBackend::sdl;
+  const sdlfe::CoreCriticalQuality quality{};
+  const sdlfe::CoreCriticalAssets assets{};
+  const sdlfe::HudOptions hud{};
+  EXPECT(backend == sdlfe::RendererBackend::sdl);
+  EXPECT(quality.antialiasing == "off" && quality.anisotropy == "1");
+  EXPECT(!assets.render_thread && assets.geometry == "legacy" &&
+         !assets.geometry_debug_normals);
+  EXPECT(assets.textures.empty() && assets.models.empty() &&
+         assets.normals.empty());
+  EXPECT(assets.lighting == "off" && assets.sun_azimuth == "45" &&
+         assets.sun_elevation == "35");
+  EXPECT(assets.empty());
+  EXPECT(hud.mode == "original" && hud.artwork.empty() && hud.text);
+}
