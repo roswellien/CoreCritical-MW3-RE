@@ -34,12 +34,14 @@ inline void run_platform_checks() {
         "Platform check failed: null window cannot be foreground root");
   }
 
-  PlatformExclusiveFullscreenChain chain;
-  chain.setup(nullptr);
-  if (chain.pNext() == nullptr) {
+#if defined(_WIN32)
+  ExclusiveFullscreenHandler handler;
+  handler.setup_swapchain_chain(nullptr);
+  if (handler.swapchain_pnext() == nullptr) {
     throw std::runtime_error("Platform check failed: exclusive fullscreen "
                              "chain returned null pNext");
   }
+#endif
 
   // 4. Platform surface extension query contract
 #if defined(_WIN32)
@@ -49,6 +51,37 @@ inline void run_platform_checks() {
         "Platform check failed: expected VK_KHR_win32_surface on Windows");
   }
 #endif
+
+  // 5. Portable SDL native window handle contract (must preserve SDL window
+  // identity without obtaining HWND)
+  SDL_Window *test_win = SDL_CreateWindow(
+      "ContractCheck", 320, 240, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN);
+  if (test_win) {
+    NativeWindowHandle handle = get_window_native_handle(test_win);
+    if (handle != static_cast<NativeWindowHandle>(test_win)) {
+      SDL_DestroyWindow(test_win);
+      throw std::runtime_error(
+          "Platform check failed: get_window_native_handle must preserve SDL "
+          "window identity");
+    }
+#if defined(_WIN32)
+    HWND hwnd = get_window_hwnd(test_win);
+    if (handle == static_cast<NativeWindowHandle>(hwnd) && hwnd != nullptr) {
+      SDL_DestroyWindow(test_win);
+      throw std::runtime_error(
+          "Platform check failed: get_window_native_handle must not return "
+          "Win32 HWND");
+    }
+#endif
+    int px_w = 0, px_h = 0;
+    SDL_GetWindowSizeInPixels(test_win, &px_w, &px_h);
+    if (px_w <= 0 || px_h <= 0) {
+      SDL_DestroyWindow(test_win);
+      throw std::runtime_error(
+          "Platform check failed: invalid SDL drawable pixel extent");
+    }
+    SDL_DestroyWindow(test_win);
+  }
 }
 
 } // namespace cc_mw3_re::platform

@@ -22,7 +22,7 @@ void present() override {
     // Window/surface creation stays on the SDL window owner. Readback
     // above is a queue barrier; the worker cannot race this cold path.
     const auto before = renderer_->presents;
-    if (!renderer_->present(hwnd_,
+    if (!renderer_->present(native_window_,
                             reinterpret_cast<const uint8_t *>(rgba.data()),
                             width, height, width * 4, false, true)) {
       throw std::runtime_error(
@@ -43,7 +43,7 @@ void present() override {
         window_height != present_window_height_) {
       if (worker_)
         worker_->drain();
-      renderer_->resize_present_window(hwnd_);
+      renderer_->resize_present_window(native_window_);
       present_window_width_ = window_width;
       present_window_height_ = window_height;
     }
@@ -52,7 +52,7 @@ void present() override {
       CpuInterval interval(worker_ && cpu_profile_ ? &worker_present_ticks_
                                                    : nullptr);
       const auto before = renderer_->presents;
-      if (!renderer_->present_resident(hwnd_, width, height, false))
+      if (!renderer_->present_resident(native_window_, width, height, false))
         throw std::runtime_error("Core Critical resident present failed");
       presented_frames_ += renderer_->presents - before;
       if (renderer_->resident_presents)

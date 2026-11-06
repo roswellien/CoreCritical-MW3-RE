@@ -19,7 +19,7 @@
 
 namespace cc_mw3_re::platform {
 
-using NativeWindowHandle = HWND;
+using NativeWindowHandle = void *;
 
 inline HWND get_window_hwnd(SDL_Window *window) {
   if (!window)
@@ -30,7 +30,7 @@ inline HWND get_window_hwnd(SDL_Window *window) {
 }
 
 inline NativeWindowHandle get_window_native_handle(SDL_Window *window) {
-  return get_window_hwnd(window);
+  return static_cast<NativeWindowHandle>(window);
 }
 
 inline const char *get_platform_surface_extension_name() {
@@ -38,21 +38,23 @@ inline const char *get_platform_surface_extension_name() {
 }
 
 inline VkSurfaceKHR
-create_win32_surface(VkInstance instance, HWND hwnd,
+create_win32_surface(VkInstance instance, NativeWindowHandle hwnd,
                      PFN_vkCreateWin32SurfaceKHR create_fn) {
-  if (!create_fn || !hwnd || !instance)
+  HWND h = static_cast<HWND>(hwnd);
+  if (!create_fn || !h || !instance)
     return VK_NULL_HANDLE;
   VkWin32SurfaceCreateInfoKHR ci{};
   ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
   ci.hinstance = ::GetModuleHandleW(nullptr);
-  ci.hwnd = hwnd;
+  ci.hwnd = h;
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   if (create_fn(instance, &ci, nullptr, &surface) != VK_SUCCESS)
     return VK_NULL_HANDLE;
   return surface;
 }
 
-inline HWND make_present_child(HWND parent) {
+inline HWND make_present_child(NativeWindowHandle parent) {
+  HWND parent_hwnd = static_cast<HWND>(parent);
   static const ATOM cls = [] {
     WNDCLASSW wc{};
     wc.lpfnWndProc = [](HWND h, UINT m, WPARAM w, LPARAM l) -> LRESULT {
@@ -66,41 +68,48 @@ inline HWND make_present_child(HWND parent) {
     wc.lpszClassName = L"MW34VulkanPresent";
     return ::RegisterClassW(&wc);
   }();
-  if (!cls || !parent)
+  if (!cls || !parent_hwnd)
     return nullptr;
   RECT rc{};
-  ::GetClientRect(parent, &rc);
+  ::GetClientRect(parent_hwnd, &rc);
   return ::CreateWindowExW(
       WS_EX_NOPARENTNOTIFY, L"MW34VulkanPresent", L"",
       WS_CHILD | WS_VISIBLE | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0, rc.right,
-      rc.bottom, parent, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+      rc.bottom, parent_hwnd, nullptr, ::GetModuleHandleW(nullptr), nullptr);
 }
 
-inline void destroy_present_child(HWND child) {
-  if (child)
-    ::DestroyWindow(child);
+inline void destroy_present_child(NativeWindowHandle child) {
+  if (child) {
+    HWND h = static_cast<HWND>(child);
+    ::DestroyWindow(h);
+  }
 }
 
-inline void sync_present_child_size(HWND parent, HWND child) {
+inline void sync_present_child_size(NativeWindowHandle parent,
+                                    NativeWindowHandle child) {
   if (!parent || !child)
     return;
+  HWND parent_hwnd = static_cast<HWND>(parent);
+  HWND child_hwnd = static_cast<HWND>(child);
   RECT rc{}, cc{};
-  ::GetClientRect(parent, &rc);
-  ::GetClientRect(child, &cc);
+  ::GetClientRect(parent_hwnd, &rc);
+  ::GetClientRect(child_hwnd, &cc);
   if (rc.right != cc.right || rc.bottom != cc.bottom) {
-    ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
+    ::SetWindowPos(child_hwnd, nullptr, 0, 0, rc.right, rc.bottom,
                    SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE);
   }
 }
 
-inline void get_window_client_rect(HWND hwnd, long *w, long *h) {
-  if (!hwnd) {
+inline void get_window_client_rect(NativeWindowHandle window, long *w,
+                                   long *h) {
+  if (!window) {
     if (w)
       *w = 0;
     if (h)
       *h = 0;
     return;
   }
+  HWND hwnd = static_cast<HWND>(window);
   RECT rc{};
   ::GetClientRect(hwnd, &rc);
   if (w)
@@ -109,24 +118,39 @@ inline void get_window_client_rect(HWND hwnd, long *w, long *h) {
     *h = rc.bottom;
 }
 
-inline bool is_window_iconic(HWND hwnd) {
-  return hwnd ? (::IsIconic(hwnd) != FALSE) : false;
+inline bool is_window_iconic(NativeWindowHandle window) {
+  if (!window)
+    return false;
+  HWND hwnd = static_cast<HWND>(window);
+  return ::IsIconic(hwnd) != FALSE;
 }
 
-inline bool is_window_valid(HWND hwnd) {
-  return hwnd ? (::IsWindow(hwnd) != FALSE) : true;
+inline bool is_window_valid(NativeWindowHandle window) {
+  if (!window)
+    return true;
+  HWND hwnd = static_cast<HWND>(window);
+  return ::IsWindow(hwnd) != FALSE;
 }
 
-inline bool is_window_visible(HWND hwnd) {
-  return hwnd ? (::IsWindowVisible(hwnd) != FALSE) : true;
+inline bool is_window_visible(NativeWindowHandle window) {
+  if (!window)
+    return true;
+  HWND hwnd = static_cast<HWND>(window);
+  return ::IsWindowVisible(hwnd) != FALSE;
 }
 
-inline long get_window_style(HWND hwnd) {
-  return hwnd ? ::GetWindowLongW(hwnd, GWL_STYLE) : 0;
+inline long get_window_style(NativeWindowHandle window) {
+  if (!window)
+    return 0;
+  HWND hwnd = static_cast<HWND>(window);
+  return ::GetWindowLongW(hwnd, GWL_STYLE);
 }
 
-inline long get_window_exstyle(HWND hwnd) {
-  return hwnd ? ::GetWindowLongW(hwnd, GWL_EXSTYLE) : 0;
+inline long get_window_exstyle(NativeWindowHandle window) {
+  if (!window)
+    return 0;
+  HWND hwnd = static_cast<HWND>(window);
+  return ::GetWindowLongW(hwnd, GWL_EXSTYLE);
 }
 
 inline void pump_presentation_messages() {
@@ -134,35 +158,163 @@ inline void pump_presentation_messages() {
   ::PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
 }
 
-inline bool is_window_foreground_root(HWND window) {
+inline bool is_window_foreground_root(NativeWindowHandle window) {
   if (!window)
+    return false;
+  HWND hwnd = static_cast<HWND>(window);
+  if (!::IsWindow(hwnd))
     return false;
   HWND foreground = ::GetForegroundWindow();
   if (!foreground)
     return false;
-  return ::GetAncestor(foreground, GA_ROOT) == ::GetAncestor(window, GA_ROOT);
+  return ::GetAncestor(foreground, GA_ROOT) == ::GetAncestor(hwnd, GA_ROOT);
 }
 
-struct PlatformExclusiveFullscreenChain {
-  VkSurfaceFullScreenExclusiveWin32InfoEXT win32_info{};
-  VkSurfaceFullScreenExclusiveInfoEXT exclusive_info{};
+class ExclusiveFullscreenHandler {
+public:
+  bool is_extension(const char *name) const {
+    return name &&
+           !std::strcmp(name, VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
+  }
 
-  void setup(HWND window) {
-    win32_info.sType =
+  const char *extension_name() const {
+    return VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME;
+  }
+
+  void setup_device(bool requested, bool supported) {
+    requested_ = requested;
+    supported_ = supported;
+  }
+
+  void set_device_exclusive(bool supported) { supported_ = supported; }
+
+  bool is_device_exclusive() const { return supported_; }
+
+  template <typename F1, typename F2>
+  void init_device(VkInstance instance, VkDevice device, F1 get_inst,
+                   F2 get_dev) {
+    load_device(instance, device, get_inst, get_dev);
+  }
+
+  void load_device(VkInstance instance, VkDevice device,
+                   PFN_vkGetInstanceProcAddr get_instance_proc_addr,
+                   PFN_vkGetDeviceProcAddr get_device_proc_addr) {
+    if (!supported_)
+      return;
+    surfaceCaps2 =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR>(
+            get_instance_proc_addr(
+                instance, "vkGetPhysicalDeviceSurfaceCapabilities2KHR"));
+    acquireExclusive =
+        reinterpret_cast<PFN_vkAcquireFullScreenExclusiveModeEXT>(
+            get_device_proc_addr(device,
+                                 "vkAcquireFullScreenExclusiveModeEXT"));
+    releaseExclusive =
+        reinterpret_cast<PFN_vkReleaseFullScreenExclusiveModeEXT>(
+            get_device_proc_addr(device,
+                                 "vkReleaseFullScreenExclusiveModeEXT"));
+    if (!surfaceCaps2 || !acquireExclusive || !releaseExclusive) {
+      throw std::runtime_error(
+          "Vulkan exclusive fullscreen entry points are missing");
+    }
+  }
+
+  void setup_swapchain_chain(NativeWindowHandle window) {
+    HWND hwnd = static_cast<HWND>(window);
+    win32_info_ = {};
+    win32_info_.sType =
         VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
-    win32_info.pNext = nullptr;
-    win32_info.hmonitor =
-        window ? ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST)
-               : nullptr;
+    win32_info_.pNext = nullptr;
+    win32_info_.hmonitor =
+        hwnd ? ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) : nullptr;
 
-    exclusive_info.sType =
+    exclusive_info_ = {};
+    exclusive_info_.sType =
         VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
-    exclusive_info.pNext = &win32_info;
-    exclusive_info.fullScreenExclusive =
+    exclusive_info_.pNext = &win32_info_;
+    exclusive_info_.fullScreenExclusive =
         VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
   }
 
-  void *pNext() { return &exclusive_info; }
+  void *swapchain_pnext() { return &exclusive_info_; }
+
+  bool validate_swapchain_support(VkPhysicalDevice gpu, VkSurfaceKHR surface) {
+    if (!supported_)
+      return true;
+    if (!surfaceCaps2)
+      return false;
+    VkPhysicalDeviceSurfaceInfo2KHR info{};
+    info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
+    info.surface = surface;
+    info.pNext = &exclusive_info_;
+
+    VkSurfaceCapabilitiesFullScreenExclusiveEXT caps_ext{};
+    caps_ext.sType =
+        VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_FULL_SCREEN_EXCLUSIVE_EXT;
+
+    VkSurfaceCapabilities2KHR caps2{};
+    caps2.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
+    caps2.pNext = &caps_ext;
+
+    if (surfaceCaps2(gpu, &info, &caps2) != VK_SUCCESS)
+      return false;
+    return caps_ext.fullScreenExclusiveSupported != VK_FALSE;
+  }
+
+  bool sync(VkDevice device, VkSwapchainKHR swapchain,
+            NativeWindowHandle parent_window) {
+    if (!supported_)
+      return true;
+    const bool foreground = is_window_foreground_root(parent_window);
+    if (!foreground) {
+      if (held_) {
+        if (releaseExclusive && device && swapchain) {
+          releaseExclusive(device, swapchain);
+        }
+        held_ = false;
+      }
+      return true;
+    }
+    if (!held_) {
+      if (!acquireExclusive || !device || !swapchain)
+        return false;
+      const auto r = acquireExclusive(device, swapchain);
+      if (r == VK_SUCCESS) {
+        held_ = true;
+      } else if (r == VK_ERROR_INITIALIZATION_FAILED) {
+        return false;
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void release(VkDevice device, VkSwapchainKHR swapchain) {
+    if (held_ && releaseExclusive && device && swapchain) {
+      releaseExclusive(device, swapchain);
+      held_ = false;
+    }
+  }
+
+  void reset() {
+    held_ = false;
+    supported_ = false;
+    requested_ = false;
+    surfaceCaps2 = nullptr;
+    acquireExclusive = nullptr;
+    releaseExclusive = nullptr;
+  }
+
+private:
+  bool requested_{false};
+  bool supported_{false};
+  bool held_{false};
+  PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR surfaceCaps2{nullptr};
+  PFN_vkAcquireFullScreenExclusiveModeEXT acquireExclusive{nullptr};
+  PFN_vkReleaseFullScreenExclusiveModeEXT releaseExclusive{nullptr};
+  VkSurfaceFullScreenExclusiveWin32InfoEXT win32_info_{};
+  VkSurfaceFullScreenExclusiveInfoEXT exclusive_info_{};
 };
 
 } // namespace cc_mw3_re::platform
@@ -296,49 +448,63 @@ inline NativeWindowHandle get_window_native_handle(SDL_Window *w) {
 
 inline const char *get_platform_surface_extension_name() { return nullptr; }
 
-inline VkSurfaceKHR create_win32_surface(VkInstance, HWND, void *) {
+inline VkSurfaceKHR create_win32_surface(VkInstance, NativeWindowHandle,
+                                         void *) {
   return VK_NULL_HANDLE;
 }
 
-inline HWND make_present_child(HWND) { return nullptr; }
+inline HWND make_present_child(NativeWindowHandle) { return nullptr; }
 
-inline void destroy_present_child(HWND) {}
+inline void destroy_present_child(NativeWindowHandle) {}
 
-inline void sync_present_child_size(HWND, HWND) {}
+inline void sync_present_child_size(NativeWindowHandle, NativeWindowHandle) {}
 
-inline void get_window_client_rect(HWND, long *w, long *h) {
+inline void get_window_client_rect(NativeWindowHandle, long *w, long *h) {
   if (w)
     *w = 0;
   if (h)
     *h = 0;
 }
 
-inline bool is_window_iconic(HWND) { return false; }
+inline bool is_window_iconic(NativeWindowHandle) { return false; }
 
-inline bool is_window_valid(HWND) { return true; }
+inline bool is_window_valid(NativeWindowHandle) { return true; }
 
-inline bool is_window_visible(HWND) { return true; }
+inline bool is_window_visible(NativeWindowHandle window) {
+  return window != nullptr;
+}
 
-inline long get_window_style(HWND) { return 0; }
+inline long get_window_style(NativeWindowHandle) { return 0; }
 
-inline long get_window_exstyle(HWND) { return 0; }
+inline long get_window_exstyle(NativeWindowHandle) { return 0; }
 
 inline void pump_presentation_messages() {}
 
-inline bool is_window_foreground_root(HWND) { return true; }
+inline bool is_window_foreground_root(NativeWindowHandle window) {
+  if (!window)
+    return false;
+  return true;
+}
 
-struct PlatformExclusiveFullscreenChain {
-  VkSurfaceFullScreenExclusiveInfoEXT exclusive_info{};
-
-  void setup(NativeWindowHandle) {
-    exclusive_info.sType =
-        VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
-    exclusive_info.pNext = nullptr;
-    exclusive_info.fullScreenExclusive =
-        VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
+class ExclusiveFullscreenHandler {
+public:
+  bool is_extension(const char *) const { return false; }
+  const char *extension_name() const { return nullptr; }
+  void setup_device(bool, bool) {}
+  void set_device_exclusive(bool) {}
+  bool is_device_exclusive() const { return false; }
+  template <typename F1, typename F2>
+  void init_device(VkInstance, VkDevice, F1, F2) {}
+  template <typename F1, typename F2>
+  void load_device(VkInstance, VkDevice, F1, F2) {}
+  void setup_swapchain_chain(NativeWindowHandle) {}
+  void *swapchain_pnext() { return nullptr; }
+  bool validate_swapchain_support(VkPhysicalDevice, VkSurfaceKHR) {
+    return true;
   }
-
-  void *pNext() { return &exclusive_info; }
+  bool sync(VkDevice, VkSwapchainKHR, NativeWindowHandle) { return true; }
+  void release(VkDevice, VkSwapchainKHR) {}
+  void reset() {}
 };
 
 } // namespace cc_mw3_re::platform

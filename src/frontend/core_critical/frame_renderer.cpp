@@ -113,6 +113,30 @@ vk::Renderer::WindowSurface sdl_surface(SDL_Window *window) {
   source.destroy = [](VkInstance instance, VkSurfaceKHR surface) {
     cc_mw3_re::platform::destroy_surface(instance, surface);
   };
+  source.is_visible = [](cc_mw3_re::platform::NativeWindowHandle w) {
+    if (!w)
+      return false;
+    auto *sdl_win = static_cast<SDL_Window *>(w);
+    return (SDL_GetWindowFlags(sdl_win) &
+            (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0;
+  };
+  source.get_drawable_size = [](cc_mw3_re::platform::NativeWindowHandle w,
+                                long *width, long *height) {
+    if (!w) {
+      if (width)
+        *width = 0;
+      if (height)
+        *height = 0;
+      return;
+    }
+    auto *sdl_win = static_cast<SDL_Window *>(w);
+    int px_w = 0, px_h = 0;
+    SDL_GetWindowSizeInPixels(sdl_win, &px_w, &px_h);
+    if (width)
+      *width = px_w;
+    if (height)
+      *height = px_h;
+  };
   return source;
 }
 
@@ -174,7 +198,13 @@ public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
                          const sdlfe::CoreCriticalQuality &quality,
                          const sdlfe::CoreCriticalAssets &assets)
-      : window_(window), hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
+      : window_(window),
+        native_window_(
+            backend == sdlfe::RendererBackend::core_critical_wsi
+                ? cc_mw3_re::platform::get_window_native_handle(window)
+                : static_cast<cc_mw3_re::platform::NativeWindowHandle>(
+                      cc_mw3_re::platform::get_window_hwnd(window))),
+        hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         prepared_(assets), geometry_mode_(parse_geometry(assets.geometry)),
@@ -809,7 +839,7 @@ private:
         !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy,
         lighting_, geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
-    texture_limit_ = renderer_->max_texture_dimension(hwnd_);
+    texture_limit_ = renderer_->max_texture_dimension(native_window_);
     if (!native_wsi_ && !renderer_->dxgi_presenting()) {
       throw std::runtime_error("Core Critical DXGI transport is unavailable");
     }
@@ -922,6 +952,7 @@ private:
   }
 
   SDL_Window *window_;
+  cc_mw3_re::platform::NativeWindowHandle native_window_;
   HWND hwnd_;
   const bool native_wsi_;
   const vk::Renderer::Quality quality_;
