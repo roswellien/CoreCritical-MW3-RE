@@ -354,9 +354,8 @@ void Mech::mech_response() {
 bool Mech::touch_response() {
   const CollisionHit& e = collider.touches.back();
   const Vec3 from = e.from;
-  // 20 a frame (0x41a00000). FIX (B): 20 per 1/30 s, 600 a second.
-  const float dmg = 20.0f * zfix::frame_steps(frame_dt);
-  const float r = g_calls.touch ? g_calls.touch(e.hit.node, &from, e, dmg) : 0.0f;
+  // 20 a hit (0x41a00000): contact is a one-frame bounce whatever the frame rate.
+  const float r = g_calls.touch ? g_calls.touch(e.hit.node, &from, e, 20.0f) : 0.0f;
   if (!(r > 0.0f)) return false;
   wall_response(e);
   return true;

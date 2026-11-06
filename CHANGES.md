@@ -60,14 +60,16 @@ it is clear what the designers meant.
   frame rate, and exactly as before at 30 fps. A turret aimed straight up
   or down also keeps its shape. Vehicles keep the original's damping.
 - **Mech movement plays the same at any frame rate.** Falls, the shoves from
-  slopes and ledges, the blend into a walk, jump-jet thrust and the damage
-  done to buildings you push into all went by frames; they now play as they
-  did at 30 fps.
+  slopes and ledges, the blend into a walk and jump-jet thrust all went by
+  frames; they now play as they did at 30 fps.
 - **The throttle keys open the throttle at the same speed at any frame
   rate.** Each frame a key was held added a fixed step, so on a fast computer
   the throttle ran up several times faster. It now moves as it did at
   30 fps: from stop to full in about 1.3 seconds (with the lance command
   panel open too, which has its own copy of the keys).
+  The mech's speed then follows at the same pace too: above about 83 fps an
+  earlier version of this fix let it skip its slow build-up and pull away
+  nearly 2 seconds sooner.
 - **Lasers and TAG recharge at the same speed at any frame rate.** The
   original dropped the fraction of each frame's recharge, so the faster the
   game ran the slower beams came back: TAG took 67 seconds at 30 fps, 83 at

@@ -178,7 +178,8 @@ T.16000M lever reading low at its top is an assumption, never checked on a stick
 and with no public source, so the default stays.
 
 FIX (B): the throttle keys' 0.025 is per 1/30 s (`zfix::frame_steps`;
-fixes.md).
+fixes.md), and so is the 0.009 at which the throttle takes its target
+(0x00426960), at most 0.009.
 
 The singleton `[0x6056ec]` is made by 0x427280(mode) (ported, mech-build.md section 7), called from 0x491150 (mission.cpp),
 with mode 3 or 6. A second call only reapplies the mode (0x426650). The fields

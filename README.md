@@ -23,6 +23,14 @@ original.
 
 ### Coming in the next release
 
+- **The same acceleration above 83 fps.** Holding a throttle key above about
+  83 fps skipped the mech's slow build-up of speed, so it pulled away nearly
+  2 seconds sooner than at 30 or 60 fps. It now builds up the same at any
+  frame rate.
+- **Walking into a building does its full damage at any frame rate.** An
+  earlier fix scaled the 20 damage of each touch by the frame time, so the
+  higher your frame rate the less a building took (about a fifth at 144 fps).
+  Each touch does 20 again, as in the original.
 - **Where a foot reads the ground.** The original never filled in the setting
   that decides when a foot uses the ground under its middle. Our fix guessed
   at it; it now uses the value the original team's own Pirate's Moon sets. This

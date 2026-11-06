@@ -1,5 +1,6 @@
 #include "mech3/mech_control.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -41,7 +42,9 @@ int MechControls::update(float dt) {
     return 1;
   }
   if (throttle_target - throttle != 0.0f) {
-    if (std::fabs(throttle_target - throttle) < 0.009) {
+    // FIX (B): the snap's gap goes with the frame, as the keys' step does; else
+    // below 12 ms that step is inside it and the easing never runs (fixes.md).
+    if (std::fabs(throttle_target - throttle) < 0.009 * std::min(zfix::frame_steps(dt), 1.0f)) {
       throttle = throttle_target;
     } else {
       const float rate = std::fabs(throttle) <= std::fabs(throttle_target) ? owner->throttle_up
