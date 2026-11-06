@@ -442,6 +442,7 @@ public:
           "Prepared materials: %llu per-pixel draws, %llu normal-map draws\n",
           static_cast<unsigned long long>(assets.lit_draws),
           static_cast<unsigned long long>(assets.normal_draws));
+    cc_mw3_re::platform::unregister_window_handle(native_window_);
   }
 
   void capture_next(const char *path) override { capture_path_ = path; }

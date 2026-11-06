@@ -915,7 +915,11 @@ int main(int argc, char **argv) {
     result = 1;
   }
   if (window) {
+    require(cc_mw3_re::platform::lookup_cached_window_hwnd(window) != nullptr,
+            "Active window must have registered cached handle");
     SDL_DestroyWindow(window);
+    require(cc_mw3_re::platform::lookup_cached_window_hwnd(window) == nullptr,
+            "Destroyed window must not retain handle cache entry");
   }
   SDL_Quit();
   return result;

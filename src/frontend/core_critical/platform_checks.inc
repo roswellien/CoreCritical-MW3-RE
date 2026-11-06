@@ -140,6 +140,33 @@ inline void run_platform_checks() {
     }
 #endif
     SDL_DestroyWindow(test_win);
+
+    // 9. Window recreation and cache lifetime contract (R5-01)
+    std::unordered_map<const void *, HWND> destroyed_map;
+    unsigned stale_count = 0;
+    bool lifetime_mismatch = false;
+    for (unsigned i = 0; i < 64; ++i) {
+      auto *w = SDL_CreateWindow("Platform check cache lifetime", 320, 240,
+                                 SDL_WINDOW_HIDDEN);
+      if (!w)
+        break;
+      const HWND actual = get_window_hwnd(w);
+      const HWND cached = lookup_cached_window_hwnd(w);
+      if (cached != actual) {
+        lifetime_mismatch = true;
+        SDL_DestroyWindow(w);
+        break;
+      }
+      destroyed_map[w] = actual;
+      const void *key = w;
+      SDL_DestroyWindow(w);
+      if (lookup_cached_window_hwnd(key))
+        ++stale_count;
+    }
+    if (lifetime_mismatch || stale_count > 0) {
+      throw std::runtime_error(
+          "Platform check failed: window cache lifetime defect detected");
+    }
   }
 }
 

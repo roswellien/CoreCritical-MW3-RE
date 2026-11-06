@@ -60,21 +60,27 @@ inline HWND lookup_cached_window_hwnd(const void *handle) {
   return nullptr;
 }
 
+static inline void SDLCALL on_window_destroyed_cleanup(void * /*userdata*/,
+                                                       void *value) {
+  unregister_window_handle(value);
+}
+
 inline HWND get_window_hwnd(SDL_Window *window) {
   if (!window)
     return nullptr;
-  HWND cached = lookup_cached_window_hwnd(window);
-  if (cached)
-    return cached;
   if (SDL_IsMainThread()) {
-    HWND hwnd = static_cast<HWND>(
-        SDL_GetPointerProperty(SDL_GetWindowProperties(window),
-                               SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
-    if (hwnd)
+    auto props = SDL_GetWindowProperties(window);
+    HWND hwnd = static_cast<HWND>(SDL_GetPointerProperty(
+        props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    if (hwnd) {
       register_window_hwnd(window, hwnd);
+      SDL_SetPointerPropertyWithCleanup(props, "cc_mw3_re.window_cleanup",
+                                        window, on_window_destroyed_cleanup,
+                                        nullptr);
+    }
     return hwnd;
   }
-  return nullptr;
+  return lookup_cached_window_hwnd(window);
 }
 
 inline NativeWindowHandle get_window_native_handle(SDL_Window *window) {
@@ -516,6 +522,8 @@ using NativeWindowHandle = void *;
 inline void *get_window_hwnd(SDL_Window *) { return nullptr; }
 
 inline HWND resolve_window_hwnd(NativeWindowHandle) { return nullptr; }
+
+inline void unregister_window_handle(const void *) {}
 
 inline NativeWindowHandle get_window_native_handle(SDL_Window *w) {
   return static_cast<NativeWindowHandle>(w);
