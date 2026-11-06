@@ -242,8 +242,12 @@ void set_vmode(int32_t mode);               // 0x0040d810
 // A mode's size: the original's 3 (drawn 320x240) and 5..10, and with
 // zfix's any_resolution 11..15 (1280x720 .. 3840x2160) and 16 the player's
 // own; false for a mode that keeps the sizes it had (resolution.md).
-constexpr int32_t kLastVMode = 16, kCustomVMode = 16;
-constexpr int32_t kMaxScreen[2] = {3840, 2160};  // lower to 1920x1080 if larger sizes are trouble
+// Append presets after the existing custom ID so saved modes 3..16 keep
+// their meaning. The graphics menu can select ultrawide on existing profiles.
+constexpr int32_t kLastVMode = 20, kCustomVMode = 16;
+// Full-width 32:9 at 2160p. Desktop shapes fit uniformly when possible;
+// impossible/extreme shapes still honor the historical 640x480 minimum.
+constexpr int32_t kMaxScreen[2] = {7680, 2160};
 bool vmode_size(int32_t mode, int32_t* w, int32_t* h);
 // FIX (B), any_resolution: the 2D canvas past mode 10 (480 high, the frame
 // over art_scale), and its rects onto the frame (resolution.md step 4).

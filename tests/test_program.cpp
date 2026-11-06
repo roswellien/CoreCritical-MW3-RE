@@ -8671,9 +8671,9 @@ TEST(settings_first_start_plays_at_the_desktop_size) {
   o = load("", 5120, 2880, true);  // a 5K desktop: the mode's size inside the cap
   mech3::options() = o;
   EXPECT(o.in_game_vmode == 16 && mech3::vmode_size(16, &w, &h) && w == 3840 && h == 2160);
-  o = load("", 3440, 1440, true);  // a 21:9 desktop: 16:9 at its height, pillarboxed
+  o = load("", 3440, 1440, true);  // a 21:9 desktop: its full native frame
   mech3::options() = o;
-  EXPECT(o.in_game_vmode == 16 && mech3::vmode_size(16, &w, &h) && w == 2560 && h == 1440);
+  EXPECT(o.in_game_vmode == 16 && mech3::vmode_size(16, &w, &h) && w == 3440 && h == 1440);
   o = load("\"InGameVMode\"=dword:0000000d\r\n", 2560, 1440, true);  // a saved choice wins
   EXPECT(o.in_game_vmode == 13);
   o = load("\"InGameVMode\"=dword:00000010\r\n\"ScreenWidth\"=dword:00000500\r\n\"ScreenHeight\"=dword:000002d0\r\n",
@@ -21353,7 +21353,7 @@ struct WideMenus {
   std::vector<std::pair<int32_t, int32_t>> mp_ripples;  // the multiplayer screens' ripple buttons: the ripple less the button's place
   int32_t tm_ok = -1, tm_backdrop = -1;  // the new team's dialog
 };
-WideMenus wide_menus_run(bool wide) {
+WideMenus wide_menus_run(bool wide, int32_t frame_width = 0, int32_t frame_height = 0) {
   WideMenus out;
   SavedMounts keep;
   zutl::mounts() = zutl::Mounts{};
@@ -21361,14 +21361,17 @@ WideMenus wide_menus_run(bool wide) {
   zutl::mount(std::string(MW3_GAME_DIR) + "/zbd");
   const std::string dir = temp_dir("wide_menus_write");
   zutl::set_write_dir(dir);
-  {  // a saved InGameVMode of 13 (853x480), as regedit writes it
-    const char text[] =
+  const int32_t mode = frame_width > 0 ? mech3::kCustomVMode : 13;
+  {
+    const std::string text =
         "Windows Registry Editor Version 5.00\r\n\r\n"
-        "[HKEY_CURRENT_USER\\Software\\MicroProse\\MechWarrior 3\\1.0]\r\n"
-        "\"InGameVMode\"=dword:0000000d\r\n";
+        "[HKEY_CURRENT_USER\\Software\\MicroProse\\MechWarrior 3\\1.0]\r\n";
     std::FILE* f = std::fopen((dir + "/settings.reg").c_str(), "wb");
-    std::fputc(0xff, f), std::fputc(0xfe, f);
-    for (const char* c = text; *c; ++c) std::fputc(*c, f), std::fputc(0, f);
+    std::fputs(text.c_str(), f);
+    std::fprintf(f, "\"InGameVMode\"=dword:%08x\r\n", unsigned(mode));
+    if (frame_width > 0)
+      std::fprintf(f, "\"ScreenWidth\"=dword:%08x\r\n\"ScreenHeight\"=dword:%08x\r\n",
+                   unsigned(frame_width), unsigned(frame_height));
     std::fclose(f);
   }
   platform::RegFile settings(dir + "/settings.reg");
@@ -21411,7 +21414,7 @@ WideMenus wide_menus_run(bool wide) {
     mech3::Mech3App app(&engine);
     mech3::set_app(&app);
     EXPECT(app.init_instance());
-    EXPECT(mech3::options().in_game_vmode == 13);
+    EXPECT(mech3::options().in_game_vmode == mode);
     mech3::States& st = mech3::states();
     int stage = 0, wait = 0;
     engine.on_present = [&](int) {
@@ -21640,7 +21643,7 @@ WideMenus wide_menus_run(bool wide) {
 // menus take a wide in-mission mode (13: 853x480), and stay 640x480 (mode 5)
 // when that mode is 4:3 (5, or 10: 1600x1200); widemenus=0 or
 // --no-wide-menus turn it off.
-TEST(menus_wide_by_default_at_16_9_only) {
+TEST(menus_wide_follow_the_selected_aspect) {
   const zfix::Options keep = zfix::options();
   zfix::options() = zfix::Options{};
   EXPECT(zfix::options().wide_menus);
@@ -21655,6 +21658,12 @@ TEST(menus_wide_by_default_at_16_9_only) {
   };
   zfix::options().any_resolution = true;
   const int32_t wide = menus_at(13), plain = menus_at(5), tall = menus_at(10);
+  const auto saved_options = mech3::options();
+  for (const auto& shape : {std::array<int32_t, 2>{3440, 1440}, {5120, 1440}}) {
+    mech3::options().screen_w = shape[0], mech3::options().screen_h = shape[1];
+    EXPECT(menus_at(mech3::kCustomVMode) == mech3::kCustomVMode);
+  }
+  mech3::options() = saved_options;
   zfix::options().wide_menus = false;
   const int32_t off = menus_at(13);
   std::printf("menus' mode with the in-mission 13: %d (off: %d); with 5: %d; with 10: %d\n", wide, off, plain, tall);
@@ -21798,6 +21807,29 @@ TEST(menus_wide_spread_by_their_groups_headless) {
 // the angle only at the mission's load (0x0040d590, its only modes 4:3);
 // with any_resolution each mode change sets it again: 96.4 at 16:9, 80
 // back at 640x480, the vertical 60 kept.
+TEST(menus_ultrawide_keep_native_controls_and_lab_aligned_headless) {
+  if (!have_game()) return;
+  const auto plain = wide_menus_run(false);
+  for (const auto& size : {std::array<int32_t, 2>{3440, 1440}, {5120, 1440}}) {
+    const auto wide = wide_menus_run(true, size[0], size[1]);
+    const int32_t width = (size[0] * 480 + size[1] / 2) / size[1];
+    const int32_t extra = width - 640;
+    EXPECT(wide.width == width && wide.width_after == width);
+    EXPECT(wide.campaign == plain.campaign && wide.credits == plain.credits + extra);
+    EXPECT(wide.accept == plain.accept + extra && wide.gfx == plain.gfx + extra);
+    EXPECT(wide.gfx_resolution == plain.gfx_resolution &&
+           wide.shadows_value == plain.shadows_value);
+    EXPECT(wide.ctl_keys == plain.ctl_keys + extra / 2 &&
+           wide.ctl_accept == plain.ctl_accept + extra);
+    EXPECT(wide.popup_bar == plain.popup_bar + extra / 2 &&
+           wide.popup_label_dx == plain.popup_label_dx);
+    EXPECT(wide.lab_canvas_w == width && wide.lab_render_w == size[0]);
+    EXPECT(wide.lab_view_w > 0 && wide.lab_view_x >= 0 &&
+           wide.lab_view_x + wide.lab_view_w <= wide.lab_render_w);
+    EXPECT(wide.pil_accept == plain.pil_accept + extra && wide.games_up == plain.games_up + extra);
+  }
+}
+
 TEST(mission_c1m1_mode_change_keeps_the_camera_shape_headless) {
   if (!have_game()) return;
   SavedMounts keep;
@@ -21828,9 +21860,11 @@ TEST(mission_c1m1_mode_change_keeps_the_camera_shape_headless) {
   mech3::Platform p;
   p.window = &window, p.alert = &alert, p.clock = &clock, p.movie_clock = &fast_movie_clock(), p.screen = &screen, p.sound = &sound, p.files = &files;
   p.input = &input;
-  float fov[3][2] = {};
-  int32_t reticle[3] = {-1, -1, -1};  // the HUD's reticle x
-  int32_t setups[3] = {};             // Hud::setup's runs: each mode change refits the player's HUD (0x004ab6b0's 0x0041cdc0)
+  constexpr int modes[] = {5, 13, 18, 20, 16, 5};
+  float fov[6][2] = {};
+  int32_t reticle[6] = {-1, -1, -1, -1, -1, -1};  // the HUD's reticle x
+  int32_t setups[6] =
+      {};  // Hud::setup's runs: each mode change refits the player's HUD (0x004ab6b0's 0x0041cdc0)
   int got = 0;
   {
     mech3::GameEngine engine(p, "mech3.exe -nofmv");
@@ -21839,6 +21873,7 @@ TEST(mission_c1m1_mode_change_keeps_the_camera_shape_headless) {
     mech3::set_app(&app);
     EXPECT(app.init_instance());
     mech3::options().in_game_vmode = 5;
+    mech3::options().screen_w = 3440, mech3::options().screen_h = 1440;
     mech3::GameEngine::Launch l;
     engine.set_launch(l);
     app.post_intro_ = &mech3::states().load;
@@ -21854,13 +21889,16 @@ TEST(mission_c1m1_mode_change_keeps_the_camera_shape_headless) {
     engine.on_present = [&](int) {
       if (app.current() != &mech3::states().core) return;
       ++core;
-      if (core == 5) read(0), setups[0] = mech3::Hud::setups(), engine.set_screen_mode(13);
-      if (core == 7) read(1), setups[1] = mech3::Hud::setups(), engine.set_screen_mode(5);
-      if (core == 9) read(2), setups[2] = mech3::Hud::setups();
+      if (core >= 5 && core <= 15 && core % 2 == 1) {
+        const int sample = (core - 5) / 2;
+        read(sample);
+        setups[sample] = mech3::Hud::setups();
+        if (sample < 5) engine.set_screen_mode(modes[sample + 1]);
+      }
     };
     CountingPump pump;
     pump.limit = 900;
-    pump.stop = [&] { return core >= 9; };
+    pump.stop = [&] { return core >= 15; };
     app.run(pump);
     mech3::missions().cleanup(false);
     app.stop_game();
@@ -21868,15 +21906,17 @@ TEST(mission_c1m1_mode_change_keeps_the_camera_shape_headless) {
     mech3::set_app(nullptr);
   }
   const double deg = 57.29577951308232;
-  for (int i = 0; i < 3; ++i)
-    std::printf("  camera %s: %.2f across, %.2f high\n", i == 1 ? "at 1920x1080" : "at 640x480", fov[i][0] * deg, fov[i][1] * deg);
-  std::printf("  the HUD's reticle at x %d, %d, %d; its setups %d, %d, %d\n", reticle[0], reticle[1], reticle[2], setups[0],
-              setups[1], setups[2]);
-  EXPECT(setups[1] == setups[0] + 1 && setups[2] == setups[1] + 1);
-  EXPECT(got == 3);
-  EXPECT(std::fabs(fov[0][0] * deg - 80.0) < 0.05 && std::fabs(fov[0][1] * deg - 60.0) < 0.05);
-  EXPECT(std::fabs(fov[1][0] * deg - 96.4) < 0.1 && std::fabs(fov[1][1] * deg - 60.0) < 0.05);
-  EXPECT(std::fabs(fov[2][0] * deg - 80.0) < 0.05 && std::fabs(fov[2][1] * deg - 60.0) < 0.05);
+  const double horizontal[] = {80, 96.4183, 112.7391, 131.8395, 112.7391, 80};
+  const int expected_reticle[] = {320, 426, 573, 853, 573, 320};
+  for (int i = 0; i < 6; ++i) {
+    std::printf("  camera mode%d: %.2f across, %.2f high; reticle x%d; HUD setups%d\n", modes[i],
+                fov[i][0] * deg, fov[i][1] * deg, reticle[i], setups[i]);
+    EXPECT(std::fabs(fov[i][0] * deg - horizontal[i]) < .1);
+    EXPECT(std::fabs(fov[i][1] * deg - 60.0) < .05);
+    EXPECT(reticle[i] == expected_reticle[i]);
+    if (i) EXPECT(setups[i] == setups[i - 1] + 1);
+  }
+  EXPECT(got == 6);
   zrdr::close_archives(true);
   mech3::reset_states();
   reset_process_state();

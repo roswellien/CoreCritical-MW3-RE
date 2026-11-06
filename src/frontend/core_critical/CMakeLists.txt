@@ -83,3 +83,7 @@ add_test(NAME mw3ccvulkan_thread_dxgi COMMAND mw3ccvulkan_checks --render-thread
 add_test(NAME mw3ccvulkan_thread_wsi COMMAND mw3ccvulkan_checks --render-thread --wsi)
 add_test(NAME mw3ccvulkan_thread_geometry COMMAND mw3ccvulkan_checks --render-thread --wsi --geometry)
 add_test(NAME mw3ccvulkan_thread_material COMMAND mw3ccvulkan_checks --render-thread --wsi --materials --quality fxaa)
+add_test(NAME mw3ccvulkan_ultrawide_dxgi COMMAND mw3ccvulkan_checks --ultrawide)
+add_test(NAME mw3ccvulkan_ultrawide_wsi COMMAND mw3ccvulkan_checks --ultrawide --wsi)
+add_test(NAME mw3ccvulkan_ultrawide_thread_dxgi COMMAND mw3ccvulkan_checks --ultrawide --render-thread)
+add_test(NAME mw3ccvulkan_ultrawide_thread_wsi COMMAND mw3ccvulkan_checks --ultrawide --render-thread --wsi)

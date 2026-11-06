@@ -638,9 +638,10 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 
 #include "geometry_checks.inc"
 #include "prepared_gpu_checks.inc"
+#include "ultrawide_checks.inc"
 
 int main(int argc, char **argv) {
-    bool geometry_check = false;
+    bool geometry_check = false, ultrawide_check = false;
     bool native_wsi = false, quality_check = false, prepared_check = false, material_check = false;
     sdlfe::CoreCriticalQuality quality;
     for (int i = 1; i < argc; ++i) {
@@ -653,6 +654,8 @@ int main(int argc, char **argv) {
             prepared_check = true;
         else if (option == "--geometry")
             geometry_check = true;
+        else if (option == "--ultrawide")
+            ultrawide_check = true;
         else if (option == "--materials")
             prepared_check = material_check = true;
         else if (option == "--quality" && i + 1 < argc) {
@@ -690,7 +693,9 @@ int main(int argc, char **argv) {
         }
         const auto backend = native_wsi ? sdlfe::RendererBackend::core_critical_wsi
                                         : sdlfe::RendererBackend::core_critical_dxgi;
-        if (geometry_check) {
+        if (ultrawide_check)
+            check_ultrawide(window, backend);
+        else if (geometry_check) {
             check_strict_geometry(window,backend);
             const auto gpu = check_native_geometry(window,backend);
             const auto reference = check_native_geometry(window,backend,true);
@@ -704,8 +709,7 @@ int main(int argc, char **argv) {
                                 "GPU/reference transform, fog, clipping or normal debug mismatch");
             }
             check_gpu_prepared(window, backend);
-        }
-        else if (prepared_check)
+        } else if (prepared_check)
             check_prepared(window, backend, quality, material_check);
         else if (quality_check)
             check_quality(window, backend, quality);
