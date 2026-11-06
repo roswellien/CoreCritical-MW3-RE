@@ -38,7 +38,7 @@ mw3_cc_shader(world_scene_vert world_scene.vert)
 
 add_executable(mw3ccvulkan_checks adapter_checks.cpp)
 target_link_libraries(mw3ccvulkan_checks PRIVATE mw3sdl)
-target_include_directories(mw3ccvulkan_checks PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}")
+target_include_directories(mw3ccvulkan_checks PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" renderer "${CMAKE_CURRENT_BINARY_DIR}")
 if(MSVC)
   target_compile_options(mw3ccvulkan_checks PRIVATE /EHsc)
 endif()
