@@ -12,6 +12,8 @@
 #endif
 
 #include "dxgi_present.hpp"
+#include <mutex>
+#include <unordered_map>
 #include <vulkan/vulkan_win32.h>
 #include <windows.h>
 
@@ -21,15 +23,64 @@ namespace cc_mw3_re::platform {
 
 using NativeWindowHandle = void *;
 
+struct WindowHandleCache {
+  std::mutex mutex;
+  std::unordered_map<const void *, HWND> map;
+};
+
+inline WindowHandleCache &get_window_handle_cache() {
+  static WindowHandleCache cache;
+  return cache;
+}
+
+inline void register_window_hwnd(const void *handle, HWND hwnd) {
+  if (!handle || !hwnd)
+    return;
+  auto &cache = get_window_handle_cache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  cache.map[handle] = hwnd;
+}
+
+inline void unregister_window_handle(const void *handle) {
+  if (!handle)
+    return;
+  auto &cache = get_window_handle_cache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  cache.map.erase(handle);
+}
+
+inline HWND lookup_cached_window_hwnd(const void *handle) {
+  if (!handle)
+    return nullptr;
+  auto &cache = get_window_handle_cache();
+  std::lock_guard<std::mutex> lock(cache.mutex);
+  auto it = cache.map.find(handle);
+  if (it != cache.map.end())
+    return it->second;
+  return nullptr;
+}
+
 inline HWND get_window_hwnd(SDL_Window *window) {
   if (!window)
     return nullptr;
-  return static_cast<HWND>(
-      SDL_GetPointerProperty(SDL_GetWindowProperties(window),
-                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+  HWND cached = lookup_cached_window_hwnd(window);
+  if (cached)
+    return cached;
+  if (SDL_IsMainThread()) {
+    HWND hwnd = static_cast<HWND>(
+        SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                               SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    if (hwnd)
+      register_window_hwnd(window, hwnd);
+    return hwnd;
+  }
+  return nullptr;
 }
 
 inline NativeWindowHandle get_window_native_handle(SDL_Window *window) {
+  if (window) {
+    get_window_hwnd(window);
+  }
   return static_cast<NativeWindowHandle>(window);
 }
 
@@ -38,7 +89,12 @@ inline HWND resolve_window_hwnd(NativeWindowHandle handle) {
     return nullptr;
   if (::IsWindow(static_cast<HWND>(handle)))
     return static_cast<HWND>(handle);
-  return get_window_hwnd(static_cast<SDL_Window *>(handle));
+  HWND cached = lookup_cached_window_hwnd(handle);
+  if (cached)
+    return cached;
+  if (SDL_IsMainThread())
+    return get_window_hwnd(static_cast<SDL_Window *>(handle));
+  return nullptr;
 }
 
 inline const char *get_platform_surface_extension_name() {
@@ -149,7 +205,10 @@ inline bool is_window_valid(NativeWindowHandle window) {
 }
 
 inline bool is_window_visible(NativeWindowHandle window) {
-  return window != nullptr;
+  if (!window)
+    return false;
+  HWND hwnd = resolve_window_hwnd(window);
+  return hwnd ? (::IsWindowVisible(hwnd) != FALSE) : false;
 }
 
 inline long get_window_style(NativeWindowHandle window) {
@@ -455,6 +514,8 @@ namespace cc_mw3_re::platform {
 using NativeWindowHandle = void *;
 
 inline void *get_window_hwnd(SDL_Window *) { return nullptr; }
+
+inline HWND resolve_window_hwnd(NativeWindowHandle) { return nullptr; }
 
 inline NativeWindowHandle get_window_native_handle(SDL_Window *w) {
   return static_cast<NativeWindowHandle>(w);

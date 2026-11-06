@@ -99,6 +99,46 @@ inline void run_platform_checks() {
           "Platform check failed: foreign thread must not query SDL window "
           "state");
     }
+
+    // 7. Concurrent snapshot contract (no hybrid extents)
+    tracker.set_worker_state({true, 320, 240});
+    std::atomic<bool> stop_snap{false}, snap_mismatch{false};
+    std::thread snap_consumer([&] {
+      while (!stop_snap.load(std::memory_order_relaxed)) {
+        const int w = tracker.worker_drawable_width();
+        const int h = tracker.worker_drawable_height();
+        if (!((w == 320 && h == 240) || (w == 1024 && h == 768))) {
+          snap_mismatch.store(true, std::memory_order_relaxed);
+          break;
+        }
+      }
+    });
+    for (unsigned i = 0; i < 50000 && !snap_mismatch.load(); ++i) {
+      tracker.set_worker_state({true, 1024, 768});
+      tracker.set_worker_state({true, 320, 240});
+    }
+    stop_snap.store(true, std::memory_order_relaxed);
+    snap_consumer.join();
+    if (snap_mismatch.load()) {
+      SDL_DestroyWindow(test_win);
+      throw std::runtime_error("Platform check failed: observed hybrid window "
+                               "extent in worker snapshot");
+    }
+
+    // 8. Truthful window visibility
+    if (is_window_visible(test_win)) {
+      SDL_DestroyWindow(test_win);
+      throw std::runtime_error(
+          "Platform check failed: hidden SDL window reported visible");
+    }
+#ifdef _WIN32
+    HWND test_hwnd = get_window_hwnd(test_win);
+    if (is_window_visible(test_hwnd)) {
+      SDL_DestroyWindow(test_win);
+      throw std::runtime_error(
+          "Platform check failed: hidden HWND reported visible");
+    }
+#endif
     SDL_DestroyWindow(test_win);
   }
 }

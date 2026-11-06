@@ -62,8 +62,8 @@ void present() override {
                           height = resident_height_, window_state] {
       CpuInterval interval(worker_ && cpu_profile_ ? &worker_present_ticks_
                                                    : nullptr);
-      if (window_state_tracker_)
-        window_state_tracker_->set_worker_state(window_state);
+      cc_mw3_re::platform::SdlWindowStateScope job_scope(
+          window_state_tracker_.get(), window_state);
       const auto before = renderer_->presents;
       if (!renderer_->present_resident(native_window_, width, height, false))
         throw std::runtime_error("Core Critical resident present failed");

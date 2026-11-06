@@ -5,6 +5,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -19,11 +20,27 @@ struct SdlWindowState {
   int drawable_height{0};
 };
 
+static inline uint64_t pack_state(const SdlWindowState &s) noexcept {
+  const uint64_t w = static_cast<uint32_t>(s.drawable_width) & 0x7FFFFFFFULL;
+  const uint64_t v = s.visible ? 1ULL : 0ULL;
+  const uint64_t h = static_cast<uint32_t>(s.drawable_height);
+  return w | (v << 31) | (h << 32);
+}
+
+static inline SdlWindowState unpack_state(uint64_t raw) noexcept {
+  SdlWindowState s;
+  s.drawable_width = static_cast<int>(raw & 0x7FFFFFFFULL);
+  s.visible = ((raw >> 31) & 1ULL) != 0;
+  s.drawable_height = static_cast<int>(raw >> 32);
+  return s;
+}
+
 class SdlWindowStateTracker {
 public:
   explicit SdlWindowStateTracker(SDL_Window *window)
       : window_(window), owner_thread_id_(std::this_thread::get_id()) {
     sample_owner();
+    set_worker_state(current_state_);
   }
 
   void sample_owner() {
@@ -38,7 +55,6 @@ public:
     SDL_GetWindowSizeInPixels(window_, &w, &h);
     current_state_.drawable_width = w;
     current_state_.drawable_height = h;
-    set_worker_state(current_state_);
   }
 
   SdlWindowState sample_and_get() {
@@ -51,23 +67,50 @@ public:
   }
 
   void set_worker_state(const SdlWindowState &state) {
-    worker_visible_.store(state.visible, std::memory_order_release);
-    worker_drawable_width_.store(state.drawable_width,
-                                 std::memory_order_release);
-    worker_drawable_height_.store(state.drawable_height,
-                                  std::memory_order_release);
+    worker_packed_state_.store(pack_state(state), std::memory_order_release);
+  }
+
+  void enter_job_scope(const SdlWindowState &state) {
+    active_job_state_ = state;
+    in_active_job_scope_ = true;
+  }
+
+  void leave_job_scope() { in_active_job_scope_ = false; }
+
+  SdlWindowState worker_state() const {
+    if (in_active_job_scope_) {
+      return active_job_state_;
+    }
+    return unpack_state(worker_packed_state_.load(std::memory_order_acquire));
   }
 
   bool worker_visible() const {
-    return worker_visible_.load(std::memory_order_acquire);
+    if (in_active_job_scope_) {
+      return active_job_state_.visible;
+    }
+    return worker_state().visible;
   }
 
   int worker_drawable_width() const {
-    return worker_drawable_width_.load(std::memory_order_acquire);
+    if (in_active_job_scope_) {
+      return active_job_state_.drawable_width;
+    }
+    tl_paired_state_ =
+        unpack_state(worker_packed_state_.load(std::memory_order_acquire));
+    tl_has_paired_height_ = true;
+    return tl_paired_state_.drawable_width;
   }
 
   int worker_drawable_height() const {
-    return worker_drawable_height_.load(std::memory_order_acquire);
+    if (in_active_job_scope_) {
+      return active_job_state_.drawable_height;
+    }
+    if (tl_has_paired_height_) {
+      tl_has_paired_height_ = false;
+      return tl_paired_state_.drawable_height;
+    }
+    return unpack_state(worker_packed_state_.load(std::memory_order_acquire))
+        .drawable_height;
   }
 
   const SdlWindowState &current_state() const { return current_state_; }
@@ -78,9 +121,31 @@ private:
   SDL_Window *window_{};
   std::thread::id owner_thread_id_{};
   SdlWindowState current_state_{};
-  std::atomic<bool> worker_visible_{false};
-  std::atomic<int> worker_drawable_width_{0};
-  std::atomic<int> worker_drawable_height_{0};
+  std::atomic<uint64_t> worker_packed_state_{0};
+
+  static inline thread_local SdlWindowState active_job_state_{};
+  static inline thread_local bool in_active_job_scope_{false};
+  static inline thread_local SdlWindowState tl_paired_state_{};
+  static inline thread_local bool tl_has_paired_height_{false};
+};
+
+class SdlWindowStateScope {
+public:
+  SdlWindowStateScope(SdlWindowStateTracker *tracker,
+                      const SdlWindowState &state)
+      : tracker_(tracker) {
+    if (tracker_)
+      tracker_->enter_job_scope(state);
+  }
+  ~SdlWindowStateScope() {
+    if (tracker_)
+      tracker_->leave_job_scope();
+  }
+  SdlWindowStateScope(const SdlWindowStateScope &) = delete;
+  SdlWindowStateScope &operator=(const SdlWindowStateScope &) = delete;
+
+private:
+  SdlWindowStateTracker *tracker_{};
 };
 
 inline VkSurfaceKHR create_surface(SDL_Window *window, VkInstance instance) {

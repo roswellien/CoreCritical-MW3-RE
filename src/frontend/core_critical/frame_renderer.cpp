@@ -141,15 +141,17 @@ sdl_surface(SDL_Window *window,
         if (tracker) {
           if (tracker->is_owner_thread()) {
             tracker->sample_owner();
+            const auto &state = tracker->current_state();
             if (width)
-              *width = tracker->current_state().drawable_width;
+              *width = state.drawable_width;
             if (height)
-              *height = tracker->current_state().drawable_height;
+              *height = state.drawable_height;
           } else {
+            const auto state = tracker->worker_state();
             if (width)
-              *width = tracker->worker_drawable_width();
+              *width = state.drawable_width;
             if (height)
-              *height = tracker->worker_drawable_height();
+              *height = state.drawable_height;
           }
           return;
         }

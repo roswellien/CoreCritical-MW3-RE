@@ -843,6 +843,43 @@ int main(int argc, char **argv) {
       foreign.join();
       require(foreign_sample_rejected,
               "Foreign thread must not query SDL window state");
+
+      // Verify worker resident/resize handle resolution and coherent scope
+      const auto native = cc_mw3_re::platform::get_window_native_handle(window);
+      const auto hwnd = cc_mw3_re::platform::get_window_hwnd(window);
+      bool worker_setup_ok = false;
+      std::thread worker([&] {
+        try {
+          cc_mw3_re::platform::ExclusiveFullscreenHandler handler;
+          handler.setup_swapchain_chain(native);
+          const auto resolved =
+              cc_mw3_re::platform::resolve_window_hwnd(native);
+          if (resolved == hwnd) {
+            worker_setup_ok = true;
+          }
+        } catch (...) {
+          worker_setup_ok = false;
+        }
+      });
+      worker.join();
+      require(worker_setup_ok, "Worker thread must resolve cached native "
+                               "window handle during swapchain setup");
+
+      // Verify coherent snapshot and scope across queued job and owner update
+      std::atomic<bool> worker_scope_ok{false};
+      std::thread worker_job([&] {
+        cc_mw3_re::platform::SdlWindowStateScope scope(tracker.get(),
+                                                       {true, 1920, 1080});
+        if (tracker->worker_drawable_width() == 1920 &&
+            tracker->worker_drawable_height() == 1080 &&
+            tracker->worker_visible()) {
+          worker_scope_ok.store(true);
+        }
+      });
+      tracker->sample_owner();
+      worker_job.join();
+      require(worker_scope_ok.load(), "Worker job must retain immutable "
+                                      "captured state during owner sampling");
     }
     const auto backend = native_wsi
                              ? sdlfe::RendererBackend::core_critical_wsi
