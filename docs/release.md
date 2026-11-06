@@ -58,6 +58,7 @@ every box here is ticked:
 Owen, 2026-11-05. Work starts when Pirate's Moon is finished. Today one switch,
 bug fixes, covers every play change. After this:
 
+- **The bug fixes switch goes away.**
 - **Game-breaking bug fixes are always on,** with no switch.
 - **Every other fix is an upgrade,** on a new settings page, each with its own
   switch, all on by default, so a player can turn them off for the original
