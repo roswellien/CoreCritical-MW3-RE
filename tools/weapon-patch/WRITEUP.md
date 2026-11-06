@@ -192,6 +192,10 @@ goes to 0. A new row is reset like the others. A definition with no row is left 
 - 37 breaks, each a change to the source, rebuilt: all sites, the protection restores, the read-only table, every parser check, and the log.
 - With 127 weapons the store fill 0x470e30 holds 394 items. The lab's lists past that aren't reached here, so that stays open.
 
+`test_new_weapon.py` adds a definition in memory, made at run time from the player's own PPC entry, and runs the exe's zReader 0x557180 and zWeapon 0x583880 on it, with the row added by each route. Our node writer gives the file back byte for byte first.
+Checked: 50 definitions, WeaponType +0 is the row's index, the key, the HUD text with no DESC, damage, the lab's tons and slots, the ammo flag and message id. The other 49 definitions' numbers don't change. Rows must match `MASS`: over all 37 game rows, a row's ammo flag is 1 exactly when `MASS` has `ammo` (measured); `AMMO_LIMIT` doesn't track it.
+mech3ax's own `test.py` round-trips reader archives and compares bytes (read); `rezbd` itself hasn't been run here.
+
 `test_weapon_patch.py`, against the unpatched exe. All pass, in about ten seconds, on each of the three exes:
 
 - With no new rows, the plain PPC and two rows: every original row, in either case by name, reads as on the unpatched exe; new rows read as listed;

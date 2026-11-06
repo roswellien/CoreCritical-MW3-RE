@@ -75,7 +75,8 @@ One line for each weapon:
 Always add at the end of your list and keep the order: saved loadouts hold a weapon's position.
 
 A row needs a definition in `weapons.zrd`. The game has 12 without a row, most not meant to be mounted (`LANDMINE`, `NUKE`,
-`lb2xburst`); only the PPC has been tried.
+`lb2xburst`); only the PPC has been tried. `ammo` has to match the definition: in every row the game has, `yes` means its `MASS` has an `ammo` entry, so the tools refuse
+a mismatch, and each tech in the row needs its own `MASS` entry.
 
 ### Adding a definition
 
@@ -83,10 +84,11 @@ Use [mech3ax](https://github.com/TerranMechworks/mech3ax)'s `unzbd` and `rezbd`,
 original `zbd/reader.zbd`:
 
     unzbd mw reader "zbd/reader.zbd" reader.zip
-    (add your definition to weapons.zrd's file in reader.zip)
+    (in reader.zip, edit weapons.json: add your weapon's name and list at the end of BALLISTICS)
     rezbd mw reader reader.zip "zbd/reader.zbd"
 
-Copy an existing weapon's definition and change it. We haven't run this yet.
+Copy a similar weapon's list and change what you want: `DAMAGE`, `MASS` (tons and slots, for `clan` and `sphere`), and so on. It reuses that weapon's model and sounds. Keep whole numbers and decimals as the
+original has them, as the game tells them apart. Leave out `DESC` and the HUD shows your weapon's name as you spelled it; or give a `DESC` your DLL knows. Then add its row, and try it with `proxy_install.py check`.
 
 ### Picking a message id
 
@@ -158,7 +160,9 @@ As of 2026-11-05:
   once (0xc0000005 at `Mech3.exe+0x89d19`, on the Instant Action screen's enemy list). That code uses the screen's wave numbers, not the weapon table, and reading finds no limit on row count, so the cause is not known. The original
   also crashes easily on Windows 11. Until that is settled, treat large lists as a risk.
 - **On a real game, through a launcher that checks the exe's hash:** the stand-in works, with the PPC fitted, saved, restarted, fired and damaging a target. A patched copy is refused there.
-- **Not tested on a real game:** rows beyond the plain PPC, and whether its line clamps went in (they can't be seen directly).
+- **A new definition, in the emulator:** one added to `weapons.zrd`, copied from the PPC with its own weight and damage, is read by the game's own code on both routes. Its name, HUD text, weight, slots, ammo, damage and place in the store all line up, and no other
+  definition changes. 5 deliberate breaks were caught. On an exe without its row, it's only one more definition.
+- **Not tested:** `unzbd` and `rezbd` here, as we haven't run them on this. On a real game, rows beyond the plain PPC, and whether its line clamps went in (they can't be seen directly).
 - **Not known:** whether a per-weapon array hides inside some object (the search only sees plain global arrays), and what caused the crash above.
 
 ## Running the checks
@@ -166,6 +170,7 @@ As of 2026-11-05:
     pip install unicorn
     python tools/weapon-patch/test_weapon_patch.py
     python tools/weapon-patch/test_proxy.py
+    python tools/weapon-patch/test_new_weapon.py
 
 Run from the top of this repository, with the official 1.2 install at `game/mw3-1.2/` (`Mech3.exe`, `Mech3Msg.dll`, `IFORCE2.dll`,
 `zbd/reader.zbd`). They use `tests/differential/original.py`, the repository's emulator harness; `test_proxy.py` also needs mingw and takes about

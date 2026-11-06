@@ -212,6 +212,19 @@ def message_ids(dll):
     return ids
 
 
+def check_mass(row, fields):
+    """The lab's weight and slots come from MASS, by tech; every game row with ammo has MASS `ammo`, and none other."""
+    mass = fields[fields.index('MASS') + 1] if 'MASS' in fields else None
+    if not isinstance(mass, list):
+        raise Refused(f'{row["name"]}: its definition has no MASS')
+    for bit, key in ((1, 'clan'), (2, 'sphere')):
+        if row['tech'] & bit and key not in mass:
+            raise Refused(f'{row["name"]}: its tech needs MASS `{key}`, which its definition lacks')
+    if row['ammo'] != ('ammo' in mass):
+        raise Refused(f'{row["name"]}: ammo says {"yes" if row["ammo"] else "no"}, '
+                      f'but its MASS {"lacks" if row["ammo"] else "has"} `ammo`')
+
+
 def check_data(rows, reader, dll):
     """Each row has a definition. With the DLL (None: not seen), each DESC and MILITARY_NAME is one it knows (else
     strdup(NULL) at load, 0x583ae8) and each label is in its table (else a null name: README.md)."""
@@ -221,6 +234,7 @@ def check_data(rows, reader, dll):
         fields = defs.get(row['name'])
         if fields is None:
             raise Refused(f'{row["name"]}: weapons.zrd has no such definition (exact case)')
+        check_mass(row, fields)
         if ids is None:
             continue
         for key in ('DESC', 'MILITARY_NAME'):
