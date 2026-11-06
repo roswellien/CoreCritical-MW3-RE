@@ -2096,8 +2096,8 @@ TEST(sdl_window_shape_maps_the_mouse_through_the_frame) {
   const sdlfe::FrameShape v640{640, 480, true};
   const sdlfe::FitRect r43 = sdlfe::fit_rect(1280, 960, v640);
   EXPECT(r43.x == 0 && r43.y == 0 && r43.w == 1280 && r43.h == 960);
-  // 21:9 and 32:9 screens: mode 16 is 16:9 at their height (vmode_size),
-  // pillarboxed and centred (resolution.md section 10).
+  // Fixed 16:9 modes still pillarbox on wider screens. Native custom modes
+  // instead use their full shape (resolution_ultrawide_hud_and_pointer_share_the_frame).
   const sdlfe::FitRect r219 = sdlfe::fit_rect(3440, 1440, sdlfe::FrameShape{2560, 1440, true, 853, 480});
   EXPECT(r219.x == 440 && r219.y == 0 && r219.w == 2560 && r219.h == 1440);
   const sdlfe::FitRect r329 = sdlfe::fit_rect(3840, 1080, sdlfe::FrameShape{1920, 1080, true, 853, 480});

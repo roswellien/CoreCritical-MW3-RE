@@ -1,4 +1,9 @@
-# Screen size and aspect (any size, 16:9)
+# Screen size and aspect
+
+The current ultrawide behavior supersedes the historical 16:9 cap below.
+These notes preserve earlier design and validation receipts. See
+[ultrawide support](ultrawide.md) for current custom bounds, presets,
+camera/HUD/input mapping and menu defaults.
 
 Mech3.exe 1.2, mapped 2026-10-21 (mac 2) for Owen's decision (fixes.md,
 Candidates and Decided): any size up to 4K, 16:9 included, 640x480 4:3
@@ -430,10 +435,13 @@ saved, `load_options` (0x0040c420) makes the mission's mode 16 at the
 desktop's size (`OptionsHooks::first_start_screen`, the program's
 `platform::Window::first_start_size`: SDL's desktop mode, in points as the
 frame is on a Retina Mac, pixels on Windows), which `vmode_size` keeps
-inside 640x480 .. 3840x2160. The size goes to ScreenWidth / ScreenHeight,
-so RESOLUTION lists it ("2560x1440") and the next start reads it back. A
+inside 640x480 .. 7680x2160, preserving ordinary desktop aspects when reduced.
+The size goes to ScreenWidth / ScreenHeight,
+so RESOLUTION lists it ("2560x1440") beside the fixed presets and the next start reads it back. A
 saved InGameVMode (or a saved size) wins: the store reads the saved values
-over the defaults. The menus stay 640x480, pillarboxed (section 9).
+over the defaults. With `--no-wide-menus`, menus stay 640x480 and pillarboxed.
+Wide menus default to the selected startup canvas; changing the gameplay mode
+keeps that menu layout until restart. See [current behavior](ultrawide.md).
 
 Only a play run asks: checks, shots, `--frames` and the chains keep the
 original's 5 (`set_first_start_desktop`), so the tests stay at their sizes.
@@ -445,8 +453,9 @@ gives 16 at the desktop's 2560x1440; a 5K desktop plays at 3840x2160; a
 saved 13, or a saved 16 at 1280x720, wins; no desktop (a check) or the fix
 off gives 5. Break: the mode not set fails it twice.
 
-**16:9 at most** (Owen, 2026-10-30, instead of extra cockpit geometry for
-wide screens). Mode 16's size (`vmode_size`) is at most 16:9: a 21:9 or 32:9
+**Historical 16:9 cap, superseded by ultrawide support.** The previous policy
+(Owen, 2026-10-30, instead of extra cockpit geometry for wide screens) made
+mode 16's size (`vmode_size`) at most 16:9: a 21:9 or 32:9
 screen gets a 16:9 frame at its height, which the window's fit (section 6)
 pillarboxes, centred. 3440x1440 plays at 2560x1440 at x 440, 2560x1080 and
 3840x1080 at 1920x1080. The first start's desktop size and RESOLUTION's own

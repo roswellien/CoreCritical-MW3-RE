@@ -195,6 +195,9 @@ installed copy does not have. Two ways to get it back:
 
 - The game runs fullscreen at your desktop's resolution, widescreen
   included. **Alt+Enter** switches between fullscreen and a window.
+- **Options > Graphics & Audio > Resolution** includes 21:9 and 32:9 presets.
+  The view widens without stretching the world or HUD; see
+  [ultrawide support](docs/ultrawide.md) for custom sizes and menu layout.
 - In a window, press and release **Ctrl+Alt** to free the mouse; click in
   the window to take it back. Switching away frees it too, and coming back
   to a mission (Cmd+Tab, Alt+Tab or a click) takes it again at once; that
