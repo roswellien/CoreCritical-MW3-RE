@@ -141,6 +141,7 @@ inline void run_platform_checks() {
 #endif
     SDL_DestroyWindow(test_win);
 
+#if defined(_WIN32)
     // 9. Window recreation and cache lifetime contract (R5-01)
     std::unordered_map<const void *, HWND> destroyed_map;
     unsigned stale_count = 0;
@@ -167,6 +168,7 @@ inline void run_platform_checks() {
       throw std::runtime_error(
           "Platform check failed: window cache lifetime defect detected");
     }
+#endif
   }
 }
 

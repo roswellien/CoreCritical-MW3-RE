@@ -9,6 +9,7 @@
 #include "platform/vk_loader.hpp"
 #include "platform/wsi_surface.hpp"
 #include "platform/wsi_win32_dxgi.hpp"
+#include "platform_checks.inc"
 #include "renderer/launcher_display.hpp"
 #include "renderer/vk_scene.hpp"
 
@@ -26,6 +27,7 @@ inline void verify_nonwin_boundary_types() {
   (void)handler.extension_name();
   (void)handler.is_device_exclusive();
   (void)handler.swapchain_pnext();
+  (void)&run_platform_checks;
 }
 
 } // namespace cc_mw3_re::platform::nonwin_check
