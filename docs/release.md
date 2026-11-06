@@ -56,17 +56,20 @@ every box here is ticked:
 ## After Pirate's Moon: Rebuild Upgrades (planned for 1.1.0)
 
 Owen, 2026-11-05. Work starts when Pirate's Moon is finished. Today one switch,
-bug fixes, covers every play change. The bigger departures from the original move
-to a new settings page, each with its own switch, all on by default, so a player
-can turn them off for the original experience:
+bug fixes, covers every play change. After this:
 
-- The mobile field bases regrouping as soon as a repair is done.
-- The improved AI (lancemates finding a way round walls, and so on).
-- The water movement.
+- **Game-breaking bug fixes are always on,** with no switch.
+- **Every other fix is an upgrade,** on a new settings page, each with its own
+  switch, all on by default, so a player can turn them off for the original
+  experience. These include:
+  - The mobile field bases regrouping as soon as a repair is done.
+  - The improved AI (lancemates finding a way round walls, and so on).
+  - The water movement.
+  - Artemis FCS tracking.
+- **In multiplayer the host's settings apply to everyone in the game.**
 
-Still to decide when the work starts: exactly which fixes move to the page, and
-what stays under bug fixes; how the switches and bug fixes combine; and how
-multiplayer keeps every player on the same settings.
+When the work starts: go through `fixes.md` and sort each fix into game-breaking
+or upgrade, for Owen to approve.
 
 ## 1. Before
 
