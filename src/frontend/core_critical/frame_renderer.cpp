@@ -457,10 +457,20 @@ public:
         base_lighting_, resolved, campaign_enabled_, sun_explicit_);
     if (renderer_)
       renderer_->update_lighting_settings(lighting_);
-    if (id != current_mission_id_) {
+    const bool identity_changed =
+        identity.world_index != current_mission_identity_.world_index ||
+        identity.number != current_mission_identity_.number;
+    current_mission_identity_ = identity;
+    if (id != current_mission_id_ || identity_changed) {
       current_mission_id_ = id;
       current_mission_lighting_ = resolved;
-      if (lighting_.enabled)
+      if (lighting_.enabled && identity.world_index >= 0 &&
+          identity.number > 0 && !resolved.has_profile)
+        std::fprintf(stderr,
+                     "[MISSION_CHANGED] warning=unknown-mission world_index=%d "
+                     "number=%d; configured stock lighting restored\n",
+                     identity.world_index, identity.number);
+      else if (lighting_.enabled)
         std::fprintf(
             stderr,
             "[MISSION_CHANGED] id=%s world_index=%d number=%d has_profile=%d\n",
@@ -1280,6 +1290,7 @@ private:
   // Owned current-mission state: canonical mission ID plus resolved campaign
   // lighting/policy. The profile pointer refers only to the static campaign
   // profile database (no borrowed native pointers).
+  ::platform::MissionIdentity current_mission_identity_{};
   std::string current_mission_id_;
   mw34::campaign::ResolvedMissionLighting current_mission_lighting_{};
   PreparedModels prepared_;

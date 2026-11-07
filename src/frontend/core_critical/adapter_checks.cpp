@@ -1100,33 +1100,39 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   context.fx_near = context.fy_near = 320;
   context.cx = context.cy = 32;
   context.ordinary = true;
-  auto frame = [&]() {
-    renderer->clear(true, 0, 0, 0);
+  auto frame = [&](cc_mw3_re::VulkanFrameRenderer *target = nullptr,
+                   bool read = true) {
+    auto *active = target ? target : renderer.get();
+    RenderBinding active_binding;
+    zvid::set_render3d(active);
+    active->clear(true, 0, 0, 0);
     std::fenv_t saved;
     require(std::fegetenv(&saved) == 0,
             "Cannot save authored floating-point environment");
     std::feclearexcept(FE_ALL_EXCEPT);
     std::feraiseexcept(FE_DIVBYZERO);
     const auto rounding = std::fegetround();
-    renderer->begin_model_draw(context);
+    active->begin_model_draw(context);
     const auto flags = std::fetestexcept(FE_ALL_EXCEPT);
     const auto next_rounding = std::fegetround();
     std::fesetenv(&saved);
     require(flags == FE_DIVBYZERO && rounding == next_rounding,
             "Visual rendering changed the native floating-point environment");
-    require(renderer->replaces_model_geometry(),
+    require(active->replaces_model_geometry(),
             "Prepared model did not admit its authored source");
     const auto queued = zvid::transparent_queue().count;
     require(zvid::queue_transparent(6, 3, nullptr) == nullptr &&
                 zvid::transparent_queue().count == queued,
             "Deferred source geometry escaped its replacement scope");
-    quad(*renderer, 0, 64, .9f, 0xffff00ff);
-    renderer->end_model_draw();
-    require(!renderer->replaces_model_geometry(),
+    quad(*active, 0, 64, .9f, 0xffff00ff);
+    active->end_model_draw();
+    require(!active->replaces_model_geometry(),
             "Prepared model scope did not end");
+    if (!read)
+      return std::vector<uint32_t>{};
     std::vector<uint32_t> pixels;
     int width = 0, height = 0;
-    require(renderer->read_back(&pixels, &width, &height) && width == 64 &&
+    require(active->read_back(&pixels, &width, &height) && width == 64 &&
                 height == 64,
             "Prepared model did not render at the output extent");
     return pixels;
@@ -1139,6 +1145,76 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   const auto initial = renderer->asset_statistics();
   require(initial.gpu_model_draws > 0 && initial.geometry_uploads == 1,
           "Prepared rigid geometry did not use an immutable Vulkan upload");
+  if (materials && threaded_checks) {
+    // Compare an evolving worker-backed renderer against fresh-renderer GPU
+    // baselines. Read the previous pending frame immediately after
+    // notification: removing the drain or moving the settings update before it
+    // changes that image, even if a later full-frame clear would conceal the
+    // ordering bug.
+    const platform::MissionIdentity missions[] = {
+        {5, 1}, {0, 1}, {1, 2}, {9, 1}};
+    std::vector<std::vector<uint32_t>> automatic_profiles;
+    for (unsigned variant = 0; variant < 3; ++variant) {
+      auto configured = options;
+      configured.sun_explicit = variant == 1;
+      configured.sun_azimuth = "45";
+      configured.sun_elevation = "35";
+      if (variant == 2)
+        configured.lighting = "off";
+      auto evolving = make_check_renderer(window, backend, quality, configured);
+      evolving->set_viewport(0, 0, 64, 64);
+      auto baseline = [&](platform::MissionIdentity mission) {
+        auto fresh = make_check_renderer(window, backend, quality, configured);
+        fresh->set_viewport(0, 0, 64, 64);
+        fresh->mission_changed(mission);
+        return frame(fresh.get());
+      };
+      const auto configured_pixels = baseline({});
+      auto previous_pixels = frame(evolving.get());
+      require(previous_pixels == configured_pixels,
+              "Initial live lighting differs from fresh configuration");
+      bool profile_changed = false, explicit_angle_changed = false;
+      std::size_t mission_index = 0;
+      for (const auto mission : missions) {
+        const auto expected = baseline(mission);
+        frame(evolving.get(), false);
+        evolving->mission_changed(mission);
+        std::vector<uint32_t> pending;
+        int pending_width = 0, pending_height = 0;
+        require(
+            evolving->read_back(&pending, &pending_width, &pending_height) &&
+                pending == previous_pixels,
+            "Mission transition relit a pending frame or failed to drain the "
+            "render worker");
+        const auto actual = frame(evolving.get());
+        require(actual == expected, "Live backend lighting update differs from "
+                                    "a fresh-renderer baseline");
+        profile_changed = profile_changed || actual != configured_pixels;
+        if (variant == 2)
+          require(actual == configured_pixels,
+                  "Off-mode live renderer inherited a mission profile");
+        if (variant == 0)
+          automatic_profiles.push_back(actual);
+        if (variant == 1)
+          explicit_angle_changed =
+              explicit_angle_changed ||
+              actual != automatic_profiles.at(mission_index);
+        ++mission_index;
+        previous_pixels = actual;
+      }
+      if (variant == 1)
+        require(explicit_angle_changed,
+                "Explicit sun angles did not affect live profile lighting");
+      if (variant != 2)
+        require(
+            profile_changed,
+            "Live mission profile fixture produced no visible lighting change");
+      frame(evolving.get(), false);
+      evolving->reset_scene_resources();
+      require(frame(evolving.get()) == configured_pixels,
+              "Scene reset retained previous mission lighting");
+    }
+  }
   matrix[9] = .5f;
   require(zcls::object3d_set_matrix(control, matrix) == 0,
           "Authored control pose could not change");
