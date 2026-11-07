@@ -357,7 +357,7 @@ int32_t crater_make(const zwep::CraterOrder* order) {
 void craters_reset() {
   for (zcls::Node* node : g_craters.touched) {
     if (!node) continue;
-    zcls::reread(node, 1);  // 0x004ff730
+    if (!g_hooks.restore_node || !g_hooks.restore_node(node)) zcls::reread(node, 1);  // 0x004ff730
     const int32_t x = node->get<int32_t>(0x4c), z = node->get<int32_t>(0x50);
     if (x < 0 || z < 0) continue;
     zcls::Node* world = node->parents[0];

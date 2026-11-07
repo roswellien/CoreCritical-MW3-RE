@@ -151,7 +151,7 @@ int init(Handle world, const char* path, int32_t arg, TypeCallback callback) {
     // The pool size below reads RANGE's value from a local that only RANGE
     // sets, so a def without RANGE would use the one before it.
     // FIX (bug): it uses the def's own range (docs/fixes.md).
-    int16_t index = 0;
+    int32_t index = 0;  // catalogue additions retain the owned definition's full native index
     WeaponDef* d = s.defs.data();
     for (uint32_t k = 1; k < static_cast<uint32_t>(count(bal)); k += 2, ++d) {
       d->flags |= kDetonateOnWater;

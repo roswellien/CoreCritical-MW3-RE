@@ -5,6 +5,7 @@
 #include "crt/msvc_math.h"
 #include "crt/msvc_rand.h"
 #include "gamez/zrender/zrndr_blit.h"
+#include "gamez/ztwod/presentation.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -13,6 +14,7 @@ namespace zrndr {
 namespace {
 // FIX (bug): off the target, skipped (the original wrote there).
 void put(int32_t x, int32_t y, uint16_t pixel) {
+  if (!ztwod::presentation_output_enabled()) return;
   const Target2D& t = target2d();
   if (!t.base || x < 0 || y < 0 || x >= static_cast<int32_t>(t.width) || y >= static_cast<int32_t>(t.height)) return;
   uint16_t* d = reinterpret_cast<uint16_t*>(t.base) + y * static_cast<int32_t>(t.pitch >> 1) + x;

@@ -1,4 +1,5 @@
 #include "mech3/pilot_menu.h"
+#include "mech3/content_campaign.h"
 
 #include <cstring>
 #include <string>
@@ -336,6 +337,7 @@ void PilotScreen::fill_games() {
   };
   switch (mode) {
     case kCampaign: {
+      append_content_campaign_choices(*chosen);
       label(0x27c);
       for (int32_t i = 0; i < chosen->campaign_count(); ++i)
         games.add_item(static_cast<CampaignGame*>(chosen->campaigns[static_cast<size_t>(i)])->name(), i);

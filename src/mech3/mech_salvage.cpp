@@ -1,9 +1,11 @@
 #include "mech3/mech_salvage.h"
 
 #include <cstdio>
+#include <algorithm>
 
 #include "mech3/mech_config.h"
 #include "mech3/mech_names.h"
+#include "mech3/content_registry.h"
 #include "mech3/pilot.h"
 #include "mech3/cheats.h"
 
@@ -44,17 +46,28 @@ bool add_salvage(Store& s, SalvageMech& m, const SalvageCalls& c) {
   if (mech && (m.leg_gone[0] || m.leg_gone[1])) mech = cheats().max_salvage || (c.rand() & 1) != 0;
   if (mech) s.add_mech(m.type);
   add_weapons(s, m, m.tech, c);
+  int32_t remaining_sinks = std::max(0, m.sinks - 10);
   if (m.config) {
     for (const ConfigItem* it : m.config->items) {
       if (it->kind() != 3) continue;
       const int32_t part = it->location(-1);
-      const int32_t kind = static_cast<const EquipmentItem*>(it)->equipment;
-      if (kind == kSingleSink || kind == kDoubleSink) continue;  // the sinks below
+      const int32_t kind = equipment_family(static_cast<const EquipmentItem*>(it)->equipment);
       const int8_t st = part >= 0 && part < 16 ? m.parts[part] : 0;
+      if (kind == kSingleSink || kind == kDoubleSink) {
+        // Stock saves aggregate sinks. Added definitions must retain their
+        // identity through salvage rather than becoming a stock sink row.
+        if (active_content() && it->id() >= 15 && it->group != 1 && (part == -1 || st != 2)) {
+          const int32_t take = std::min(remaining_sinks, it->count);
+          if (take > 0) s.add_copy(it, take);
+          remaining_sinks -= take;
+        }
+        continue;
+      }
+      if (active_content() && it->id() >= 15 && it->group == 1) continue;
       if (part == -1 || st != 2) s.add_copy(it, it->count);
     }
   }
-  const int32_t extra = m.sinks - 10;  // the engine's ten stay with it
+  const int32_t extra = remaining_sinks;  // the engine's ten stay with it
   if (extra > 0) s.add_equipment(kSingleSink + (m.doubles ? 1 : 0), m.sink_tech, extra);
   return true;
 }
@@ -92,16 +105,24 @@ std::string printf_s(const char* fmt, const std::string& a, int32_t n) {
 // Clan tech), 0x004739c0 (ammo: its weapon's), 0x00473960 (equipment).
 std::string item_name(const ConfigItem& it, const MessageText& msg) {
   switch (it.kind()) {
-    case 0: return text_of(msg, mech_name_message(it.id()), "notmech");
+    case 0: {
+      if (const char* label = content_label("chassis", it.id())) return label;
+      return text_of(msg, mech_name_message(it.id()), "notmech");
+    }
     case 1: {
-      std::string s = text_of(msg, weapon_name_message(it.id()), "noweapon");
+      const char* label = content_label("weapon", it.id());
+      std::string s = label ? label : text_of(msg, weapon_name_message(it.id()), "noweapon");
       if (static_cast<const WeaponItem&>(it).tech == 1) s += " (CLAN)";
       return s;
     }
-    case 2: return text_of(msg, weapon_name_message(it.id()), "noweapon");
+    case 2: {
+      if (const char* label = content_label("weapon", it.id())) return label;
+      return text_of(msg, weapon_name_message(it.id()), "noweapon");
+    }
     case 3: {
       auto& e = static_cast<const EquipmentItem&>(it);
-      std::string s = text_of(msg, equip_name_message(e.equipment), "none");
+      const char* label = content_label("equipment", e.equipment);
+      std::string s = label ? label : text_of(msg, equip_name_message(e.equipment), "none");
       if (e.tech == 1) s += " (CLAN)";
       return s;
     }
@@ -154,7 +175,7 @@ std::string item_label(const ConfigItem& it, const MessageText& msg) {
     }
     case 3: {
       if (it.b10) return item_name(it, msg);
-      const int32_t kind = static_cast<const EquipmentItem&>(it).equipment;
+      const int32_t kind = equipment_family(static_cast<const EquipmentItem&>(it).equipment);
       if (kind == 1 || kind == 2) {
         char tons[16], b[512];
         std::snprintf(tons, sizeof tons, "%.1f", static_cast<double>(static_cast<float>(it.count) * 0.5f));

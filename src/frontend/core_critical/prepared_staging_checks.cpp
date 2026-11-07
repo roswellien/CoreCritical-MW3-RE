@@ -1,7 +1,10 @@
 #include "../../../tests/prepared_visual_fixture.h"
+#include "frontend/sdl/content_visuals.h"
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zmodel/gmod_draw.h"
+#include "mech3/content_registry.h"
+#include "platform/content_visuals.h"
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "renderer/normal_codec.hpp"
@@ -14,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #if defined(_WIN32)
 #include <process.h>
 #else
@@ -380,6 +384,117 @@ void check_prepared_models_surface_materials() {
                           const std::filesystem::path &p) {
         return std::vector<cc_mw3_re::PreparedMaterialBinding>{{c, l, p.string()}};
     };
+
+    // Modular appearances bind an instance, never every chassis borrowing its
+    // donor. Unused descriptors are not decoded; selected invalid bytes fail.
+    {
+        sdlfe::CoreCriticalAssets modular;
+        modular.models.push_back(
+            {"authored", "0", mesh_path.string(), tex_path.string(), "demo:first"});
+        modular.models.push_back({"authored", "0", (temp_dir / "missing.bin").string(),
+                                  tex_path.string(), "demo:other"});
+        cc_mw3_re::PreparedModels models(modular);
+        require(!models.has_binding(context) && !models.draw(context).replace,
+                "Modular appearance replaced the untagged stock donor");
+        root->content_chassis_id = "demo:sibling";
+        require(!models.has_binding(context),
+                "Modular appearance replaced a different donor variant");
+        root->content_chassis_id = "demo:first";
+        require(models.has_binding(context) && models.draw(context).batches.size() == 1,
+                "Selected modular appearance did not reach the native producer");
+        root->content_chassis_id = "demo:other";
+        bool refused = false;
+        try {
+            (void)models.draw(context);
+        } catch (const std::runtime_error &) {
+            refused = true;
+        }
+        require(refused, "A selected missing modular payload did not fail visibly");
+        root->content_chassis_id.clear();
+    }
+
+    // Package ownership must survive frontend selection and renderer setup.
+    // All mutations below remain valid payloads with exactly the same length;
+    // only the frozen session integrity table can reject them before drawing.
+    {
+        namespace content = ::cc::content;
+        using content::Json;
+        struct RestoreContent {
+            std::shared_ptr<const content::ResolvedContentSet> previous = mech3::active_content();
+            ~RestoreContent() { mech3::activate_content(previous); }
+        } restore_content;
+        const std::map<std::string, std::string> original = {
+            {"mesh.bin", prepared_fixture::mesh(2)},
+            {"textures.bin", prepared_fixture::textures()},
+            {"normals.bin", prepared_fixture::normals()},
+            {"materials.bin", build_single_batch_bwsfm1(
+                                  mesh_uv_hash, "authored:close", "authored", -4.0f, 4.0f, 0.5f)}};
+        auto changed_textures = prepared_fixture::textures();
+        changed_textures.back() ^= 1;
+        const std::map<std::string, std::string> changed = {
+            {"mesh.bin", prepared_fixture::mesh(2, 0xffe0e0e0)},
+            {"textures.bin", changed_textures},
+            {"normals.bin", prepared_fixture::normals(0xffff8180)},
+            {"materials.bin", build_single_batch_bwsfm1(
+                                  mesh_uv_hash, "authored:close", "authored", -3.0f, 4.0f, 0.5f)}};
+        Json manifest = {{"schema_version", 3}, {"game_id", "mw3"}, {"id", "demo"},
+                         {"version", "1.0.0"}, {"files", Json::object()},
+                         {"definitions", Json::array({
+                             {{"kind", "appearance"}, {"id", "demo:appearance"},
+                              {"behavior", "prepared-mech-v1"},
+                              {"data", {{"chassis", "stock:authored"}, {"lod", "0"},
+                                        {"mesh", "mesh.bin"}, {"textures", "textures.bin"},
+                                        {"normals", "normals.bin"},
+                                        {"materials", "materials.bin"}}}}})}};
+        for (const auto &[name, bytes] : original) {
+            std::ofstream(temp_dir / name, std::ios::binary) << bytes;
+            manifest["files"][name] = {{"bytes", bytes.size()}, {"sha256", content::sha256(bytes)}};
+        }
+        content::write_json_atomic(temp_dir / "pack.json", manifest);
+        const Json profile = {
+            {"schema_version", 1},
+            {"packages", Json::array({{{"id", "demo"}, {"version", "1.0.0"}, {"path", "."}}})},
+            {"selections", {{"appearances", Json::array({"demo:appearance"})}}}};
+        const std::vector<content::Definition> stock = {
+            {"chassis", "stock:authored", "stock", "mw3:biped@1",
+             {{"name", "authored"}, {"model_name", "authored"}, {"tech", 1},
+              {"mass", 55}, {"weight_class", 1}}, 0}};
+        auto resolve_session = [&] {
+            auto selected = std::make_shared<content::ResolvedContentSet>(content::resolve(
+                profile, temp_dir, temp_dir / "store", stock, {}));
+            platform::content::validate(*selected);
+            mech3::activate_content(selected);
+            sdlfe::CoreCriticalAssets assets;
+            sdlfe::apply_content_visuals(assets);
+            return assets;
+        };
+        root->content_chassis_id = "stock:authored";
+        for (const auto &[name, bytes] : changed) {
+            auto selected = resolve_session();
+            cc_mw3_re::PreparedModels models(selected);
+            require(models.has_binding(context), "Owned appearance selection lost its native binding");
+            require(bytes.size() == original.at(name).size(), "Mutation changed payload length");
+            std::ofstream(temp_dir / name, std::ios::binary) << bytes;
+            // The consumer retains its own resolved session, independent of
+            // whichever content registry happens to be current at first use.
+            mech3::activate_content(nullptr);
+            bool rejected = false, emitted = false;
+            try {
+                emitted = models.draw(context).replace;
+            } catch (const content::Error &error) {
+                rejected = error.diagnostic.code == "resource-changed";
+            }
+            require(rejected && !emitted,
+                    "Changed package appearance reached native prepared draw output");
+            std::ofstream(temp_dir / name, std::ios::binary) << original.at(name);
+            cc_mw3_re::PreparedModels recovered(resolve_session());
+            const auto draw = recovered.draw(context);
+            require(draw.replace && draw.batches.size() == 1 && draw.batches[0].normal &&
+                        draw.batches[0].surface_material,
+                    "Pristine appearance did not recover after fresh profile resolution");
+        }
+        root->content_chassis_id.clear();
+    }
 
     // 1. Positive test: PreparedModels loads valid BWSFM1 and exposes it on
     // PreparedBatchDraw

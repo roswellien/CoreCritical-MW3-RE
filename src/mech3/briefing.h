@@ -206,7 +206,7 @@ void store_reallocate(Store& lab, Store& game, Store& salvage, Store* realloc, i
 // and the salvage together; otherwise the game's own store is the lab's.
 Store* lab_store_build(Store& lab, Store* game, Store* salvage);
 // 0x00408c30's work on one slot: its mech the first from it on (round the
-// 19) the store holds, its loadout (the definition's first when none) cut
+// session catalogue) the store holds, its loadout (the definition's first when none) cut
 // to the store and taken out of it, the mech too; `keep` (a lancemate at Op
 // 4 Mission 6) leaves the slot as it is, the store untouched.
 void lance_slot(GameSlot& s, Store& store, bool keep);

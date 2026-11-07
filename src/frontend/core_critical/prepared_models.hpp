@@ -25,6 +25,7 @@ struct PreparedModelDraw {
 
 struct PreparedMaterialBinding {
     std::string chassis, lod, path;
+    std::string content_id;
 };
 
 class PreparedModels {
@@ -43,14 +44,18 @@ class PreparedModels {
 
   private:
     struct Model {
-        std::string source_asset;
+        std::string source_asset, content_id, chassis, lod;
+        std::string mesh_path, texture_path, normal_path, material_path;
+        std::function<void(const std::string &)> validate_resource;
+        bool loaded = false;
         ::platform::prepared::Mesh mesh;
         ::platform::prepared::Textures textures;
         ::platform::prepared::Normals normals;
         std::shared_ptr<::mw34::materials::SurfaceMaterialPack> surface_materials;
     };
     ::platform::prepared::Textures named_;
-    std::vector<Model> models_;
+    void load_model(Model &model) const;
+    mutable std::vector<Model> models_;
     const bool cpu_profile_ = sdlfe::cpu_profile_requested();
     mutable CpuStatistics cpu_statistics_;
 };

@@ -94,6 +94,12 @@
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/app.h"
 #include "mech3/mods.h"
+#include "mech3/content_registry.h"
+#include "mech3/content_legacy.h"
+#include "mech3/content_campaign.h"
+#include "mech3/content_checkpoint.h"
+#include "mech3/content_playtest.h"
+#include "frontend/sdl/content_visuals.h"
 #include "mech3/app_engine.h"
 #include "mech3/app_hud.h"
 #include "mech3/app_keys.h"
@@ -154,6 +160,8 @@ struct Args {
   std::vector<std::string> mods, cfg_mods;
   bool mods_given = false, no_mods = false, list_mods = false;
   std::string check_mod;  // --check-mod DIR
+  std::string content_profile, content_store, content_mission, content_campaign, content_save;
+  bool inspect_content = false;
 
   std::string original;  // -nofmv -seasick -cdN, passed on as the command line
   // The bug fixes (zfix bugs; fixes.md, The bug fixes switch): mw3.cfg's
@@ -234,6 +242,8 @@ void usage() {
   std::printf(
       "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] "
       "[--assets DIR]... [--write-dir DIR] [--version]\n"
+      "    [--content-profile FILE [--content-store DIR] [--inspect-content]]\n"
+      "    [--content-mission ID | --content-campaign ID | --content-save FILE]\n"
       "    [--mission NAME | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] "
       "[--vehicle-ahead M [--vehicle-hold]] [--turret-ahead M] [--mech-ahead M] [--dialog FILE "
       "NAME]\n"
@@ -275,6 +285,12 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--no-mods") a.no_mods = true;
     else if (s == "--mods") a.list_mods = true;
     else if (s == "--check-mod" && next(1)) a.check_mod = argv[++i];
+    else if (s == "--content-profile" && next(1)) a.content_profile = argv[++i];
+    else if (s == "--content-store" && next(1)) a.content_store = argv[++i];
+    else if (s == "--content-mission" && next(1)) a.content_mission = argv[++i];
+    else if (s == "--content-campaign" && next(1)) a.content_campaign = argv[++i];
+    else if (s == "--content-save" && next(1)) a.content_save = argv[++i];
+    else if (s == "--inspect-content") a.inspect_content = true;
     else if (s == "--mission" && next(1)) a.mission = argv[++i];
     else if (s == "--fly" && next(1)) a.mission = argv[++i], a.fly = true;
     else if (s == "--variant" && next(1)) a.variant = argv[++i];
@@ -446,6 +462,16 @@ bool parse(int argc, char** argv, Args& a) {
       return usage(), false;
     }
   }
+  if ((int(!a.content_mission.empty()) + int(!a.content_campaign.empty()) + int(!a.content_save.empty()) > 1) ||
+      ((!a.content_mission.empty() || !a.content_campaign.empty() || !a.content_save.empty()) &&
+       (!a.mission.empty() || !a.briefing.empty() || !a.dialog_file.empty() || !a.movie.empty()))) {
+    std::fprintf(stderr, "mw3: choose one mission, campaign, briefing, dialog or movie launch target\n");
+    return false;
+  }
+  if(!a.content_save.empty() && (a.net_host || !a.net_join.empty())) {
+    std::fprintf(stderr,"mw3: campaign checkpoints cannot launch as network sessions\n");
+    return false;
+  }
   // --lab-mech alone (ours): the lab is reached from c1m2's briefing (MECHLAB,
   // which Op 1 Mission 1 greys), so it takes that route and clicks MECHLAB.
   if (a.lab_mech >= 0 && a.briefing.empty() && a.mission.empty()) {
@@ -469,6 +495,8 @@ void read_config(const std::string& dir, Args& a) {
     else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
     else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
     else if (line.rfind("mod=", 0) == 0) a.cfg_mods.push_back(line.substr(4));
+    else if (line.rfind("content_profile=", 0) == 0 && a.content_profile.empty()) a.content_profile = line.substr(16);
+    else if (line.rfind("content_store=", 0) == 0 && a.content_store.empty()) a.content_store = line.substr(14);
     else if (line.rfind("joystick=", 0) == 0) a.cfg_joystick = line.substr(9);
     else if (line.rfind("joystick_axes=", 0) == 0) a.cfg_joystick_axes = line.substr(14);
     else if (line == "windowed=1") a.windowed = true;
@@ -662,6 +690,19 @@ std::string codec_path(const std::string& install) {
 
 }  // namespace
 
+namespace {
+std::shared_ptr<const cc::content::ResolvedContentSet> resolve_content_profile(const Args& a) {
+  if (a.content_profile.empty()) cc::content::fail("content-profile", "A content profile is required");
+  const auto profile_path = std::filesystem::absolute(a.content_profile);
+  const auto store = a.content_store.empty() ? profile_path.parent_path() / "store" : std::filesystem::absolute(a.content_store);
+  const auto profile = cc::content::read_json(profile_path);
+  auto resolved = std::make_shared<cc::content::ResolvedContentSet>(cc::content::resolve(
+      profile, profile_path.parent_path(), store, mech3::stock_content(), mech3::content_capabilities()));
+  mech3::validate_native_content(*resolved);
+  return resolved;
+}
+}  // namespace
+
 int main(int argc, char** argv) {
   if (sdlfe::crash_box_main(argc, argv)) return 0;
   // In order with the log on stderr. Windows' CRT has no line buffering (and takes size 0 as
@@ -673,6 +714,19 @@ int main(int argc, char** argv) {
 #endif
   Args a;
   if (!parse(argc, argv, a)) return 2;
+  if (a.inspect_content) {
+    try {
+      const auto resolved = resolve_content_profile(a);
+      std::printf("%s\n", cc::content::inspect(*resolved).dump(2).c_str());
+      return 0;
+    } catch (const cc::content::Error& e) {
+      std::fprintf(stderr, "%s\n", e.diagnostic.json().dump().c_str());
+      return 2;
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "%s\n", cc::content::Diagnostic{"invalid-content", error.what(), {}, {}, {}, {}}.json().dump().c_str());
+      return 2;
+    }
+  }
   if (!a.shot.empty()) a.hidden = true;
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK)) {
     sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
@@ -726,6 +780,33 @@ int main(int argc, char** argv) {
   // Every play-changing bug fix off with --original or bugfixes=0 (ours; the
   // platform fixes that let it run stay on: fixes.md, The bug fixes switch).
   zfix::options().bugs = !a.play_original && a.cfg_bugfixes != 0;
+  if (!a.content_profile.empty()) {
+    try {
+      if (!a.mods.empty()) cc::content::fail("legacy-overlay-conflict", "A managed content profile cannot be combined with legacy --mod overlays");
+      if (!a.assets.empty()) cc::content::fail("untracked-resource-conflict", "A managed content profile cannot be combined with untracked --assets directories");
+      mech3::activate_content(resolve_content_profile(a));
+      sdlfe::apply_content_visuals(a.cc_assets);
+      if (!a.cc_assets.hud_artwork.empty()) {
+        if (!a.hud.artwork.empty())
+          cc::content::fail("hud-artwork-conflict", "Package-selected HUD artwork cannot be combined with an untracked artwork directory");
+        a.hud.mode = "core-critical";
+        a.hud.package_artwork = a.cc_assets.hud_artwork;
+      }
+      std::printf("mw3: content profile active: %s\n", mech3::active_content()->gameplay_digest.c_str());
+    } catch (const cc::content::Error& e) {
+      std::fprintf(stderr, "%s\n", e.diagnostic.json().dump().c_str());
+      SDL_Quit();
+      return 2;
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "%s\n", cc::content::Diagnostic{"invalid-content", error.what(), {}, {}, {}, {}}.json().dump().c_str());
+      SDL_Quit();
+      return 2;
+    }
+  } else if (!a.content_mission.empty() || !a.content_campaign.empty() || !a.content_save.empty()) {
+    std::fprintf(stderr, "mw3: content mission, campaign and checkpoint launches require --content-profile\n");
+    SDL_Quit();
+    return 2;
+  }
   // The menus' 16:9 (a display choice, kept by --original): the command
   // line's, else mw3.cfg's widemenus=, else on.
   zfix::options().wide_menus = a.wide_menus >= 0 ? a.wide_menus != 0 : a.cfg_wide_menus != 0;
@@ -803,6 +884,15 @@ int main(int argc, char** argv) {
   if (!a.mods.empty())
     for (const std::string& line : mech3::mods_mount(a.write_dir, a.mods, {patch_dir, a.install}))
       std::printf("mw3: %s\n", line.c_str());
+  if (const auto content = mech3::active_content()) {
+    try {
+      mech3::mount_content_legacy(*content);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "%s\n", cc::content::Diagnostic{"invalid-content", error.what(), {}, {}, {}, {}}.json().dump().c_str());
+      SDL_Quit();
+      return 2;
+    }
+  }
   if (!a.patch.empty()) {
     const mech3::setup::Result r = mech3::setup::apply_patch(a.patch, a.write_dir, nullptr);
     if (a.verbose) std::printf("%s", r.detail.c_str());
@@ -817,7 +907,37 @@ int main(int argc, char** argv) {
   std::error_code patch_ec;
   if (!patch_dir.empty() && std::filesystem::is_directory(patch_dir, patch_ec)) zutl::mount(patch_dir);
   zutl::mount(a.install);
+  if (const auto content = mech3::active_content()) {
+    // Original numeric pilot files and settings must never share a directory
+    // with a different resolved content session. Patch and store roots above
+    // were resolved against the player's original data directory.
+    const auto profile_write = std::filesystem::path(a.write_dir) / "profiles" / cc::content::sha256(content->lock.dump());
+    std::error_code error;
+    std::filesystem::create_directories(profile_write, error);
+    if (error) {
+      std::fprintf(stderr, "mw3: cannot create content profile data: %s\n", error.message().c_str());
+      SDL_Quit();
+      return 2;
+    }
+    // Profiles isolate writable gameplay state, while these three existing UI
+    // fonts remain usable from the baseline installation. Do not mount the
+    // entire shared write directory as an untracked gameplay overlay.
+    for(const char* font:{"arial.ttf","impact.ttf","lucon.ttf"}) {
+      auto source=zutl::any_case(a.write_dir,font);
+      if(source.empty())source=zutl::find(font);
+      const auto target=profile_write/font;
+      if(source.empty()||std::filesystem::exists(target))continue;
+      std::filesystem::copy_file(std::filesystem::u8path(source),target,error);
+      if(error) {
+        std::fprintf(stderr,"mw3: cannot prepare profile UI font %s: %s\n",font,error.message().c_str());
+        SDL_Quit();
+        return 2;
+      }
+    }
+    a.write_dir = profile_write.string();
+  }
   zutl::set_write_dir(a.write_dir);
+  zutl::mounts().strict_reads = static_cast<bool>(mech3::active_content());
   zutl::mounts().confined = true;  // ours: names from data and the network stay inside these folders
   std::error_code ec;
   if (zutl::any_case(a.install, "zbd/reader.zbd").empty()) {
@@ -1044,6 +1164,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     sdlfe::SdlTwodHost host(&engine, &input, &window);
     host.enable_hud_text(a.hud.mode == "core-critical" && a.hud.text);
     ztwod::set_host(&host);
+    // Screen members outlive this local host during exception unwinding.
+    // Clear the installed pointer before its maps/fonts are destroyed.
+    struct ClearTwodHost {
+      ~ClearTwodHost() { ztwod::set_host(nullptr); }
+    } clear_twod_host;
     mech3::reset_states();
     mech3::Mech3App app(&engine);
     mech3::set_app(&app);
@@ -1079,11 +1204,13 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       frame_last = now;
     };
     bool launch = false, launch_done = false;
-    if (!a.mission.empty() && !a.fly) {
+    const bool content_launch=!a.content_mission.empty() || !a.content_campaign.empty() || !a.content_save.empty();
+    if (content_launch || (!a.mission.empty() && !a.fly)) {
       // Through the original's states: the Load state loads the mission
       // (mech3/mission), then the Core state runs it (docs/mission-load.md).
       std::string dir, variant;
       mech3::GameEngine::Launch l;
+      if(!content_launch) {
       // --mission ia<N>[w<W>] (ours, for measuring): Instant Action map N in
       // wave mode from wave W (1), four allies (Champions) with the player,
       // as the Action screen would set it (the AI survey's start).
@@ -1139,8 +1266,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       for (int i = 0; i < 3; ++i) l.eye[i] = a.pos[i];
       l.yaw = a.look[0] * 0.0174533f, l.pitch = a.look[1] * 0.0174533f;
       engine.set_launch(l);
+      }
       launch = true;
-      const bool l_type3 = l.type == 3;
+      const bool l_type3 = l.type == 3 ||
+          (content_launch && mech3::content_mission_is_multiplayer(a.content_mission));
       int shots = 0;
       // --fire N (ours, for checking the weapons' effects): from the N-th frame
       // shown, the fire command reads as held.
@@ -1160,9 +1289,10 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           return zin::command(cmd) | mech3::program_net_drive(cmd, SDL_GetTicks() / 1000.0 - s_drive_from, s_drive_seed);
         };
       }
-      bool net_core = false, net_over = false;
-      uint64_t net_line_at = 0;
-      engine.on_present = [&, shots](int) mutable {
+      // This callback runs after the launch-setup block has returned. Its
+      // counters and selected game type must live in the callback itself.
+      engine.on_present = [&, shots, l_type3, net_core=false, net_over=false,
+                           net_line_at=uint64_t(0)](int) mutable {
         // The soak test's (ours): the clock and the drive from the first Core
         // frame, the lines each half second, the scores at the end, the quit
         // at the menu after it.
@@ -1635,6 +1765,52 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       };
 
     if (app.init_instance()) {
+      try {
+        if (content_launch) mech3::prepare_content_weapon_labs();
+        if (a.content_campaign.empty() && mech3::content_mission_is_multiplayer(a.content_mission)) {
+          if ((!a.net_host && a.net_join.empty()) || !znet::active())
+            cc::content::fail("multiplayer-network", "An arena playtest requires --host or --join");
+          mech3::publish_content_playtest_identity(a.content_mission);
+          const size_t peers = static_cast<size_t>(std::max(2, a.net_wait));
+          if (peers > 8)
+            cc::content::fail("multiplayer-players", "Arena playtests support two to eight peers");
+          const uint64_t until = SDL_GetTicks() + 120000;
+          for (;;) {
+            znet::poll(-1);
+            std::string reason;
+            const auto checked = mech3::content_playtest_peers(a.content_mission, peers, &reason);
+            if (checked == mech3::ContentPeerCheck::incompatible)
+              cc::content::fail("multiplayer-content", reason);
+            if (checked == mech3::ContentPeerCheck::compatible) break;
+            SDL_PumpEvents();
+            SDL_Event quit;
+            if (SDL_PeepEvents(&quit, 1, SDL_GETEVENT, SDL_EVENT_QUIT, SDL_EVENT_QUIT) > 0)
+              cc::content::fail("multiplayer-cancelled", "Arena peer preflight was cancelled");
+            if (SDL_PeepEvents(&quit, 1, SDL_GETEVENT, SDL_EVENT_WINDOW_CLOSE_REQUESTED,
+                              SDL_EVENT_WINDOW_CLOSE_REQUESTED) > 0)
+              cc::content::fail("multiplayer-cancelled", "Arena peer preflight window was closed");
+            if (SDL_GetTicks() >= until)
+              cc::content::fail("multiplayer-timeout", "Arena peers did not publish compatible identities within 120 seconds");
+            SDL_Delay(10);
+          }
+          std::printf("mw3: arena content preflight accepted %zu peers for %s\n",
+                      znet::lists().players.size(), a.content_mission.c_str());
+        }
+        if (!a.content_save.empty()) {
+          if(!mech3::configure_content_checkpoint(engine,a.content_save))
+            cc::content::fail("invalid-content","The selected content checkpoint cannot be launched");
+        } else if ((!a.content_mission.empty() || !a.content_campaign.empty()) &&
+            !mech3::configure_content_launch(engine, a.content_mission, a.content_campaign))
+          cc::content::fail("invalid-content", "The selected content mission or campaign cannot be launched");
+      } catch (const cc::content::Error& error) {
+        std::fprintf(stderr, "%s\n", error.diagnostic.json().dump().c_str());
+        app.destroy();
+        return 2;
+      } catch (const std::exception& error) {
+        std::fprintf(stderr, "%s\n", cc::content::Diagnostic{"invalid-content", error.what(), {}, {}, {}, {}}.json().dump().c_str());
+        app.destroy();
+        return 2;
+      }
       // The state after the intro (the app's +0x1dc): the debug start takes
       // the place the lobby launch gives the Load state.
       if (debug) app.post_intro_ = debug.get();
@@ -1709,7 +1885,15 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // A quit outside the Exit state returns through ExitInstance, as the exe's WM_QUIT does,
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
-      result = app.run(pump);
+      try {
+        result = app.run(pump);
+      } catch (const cc::content::Error& error) {
+        std::fprintf(stderr,"%s\n",error.diagnostic.json().dump().c_str());
+        result=2;
+      } catch (const std::exception& error) {
+        std::fprintf(stderr,"%s\n",cc::content::Diagnostic{"native-session",error.what(),{},{},{},{}}.json().dump().c_str());
+        result=2;
+      }
       window.render()->drain();
       if (!frame_ms.empty()) {  // --frame-times: the frames' wall times
         std::vector<double> s = frame_ms;

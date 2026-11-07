@@ -31,6 +31,7 @@ void wire_mech_build(const MechWiring* w);  // null: the hooks' defaults again
 void net_start();  // 0x0046ceb0 (mech_net.cpp): the mission's network start
 void net_end();    // 0x0046d100: its end
 void net_set_game_clear(void (*fn)());  // the start's clear of the network game's +0x7c..+0x84
+void net_set_lobby_left(void (*fn)(uint32_t));
 // The network game's part in the launch (0x0046da80): its slot 0's loadout
 // and skin, its unlimited ammo (+0x8d) and outside view (+0x8e).
 struct Config;

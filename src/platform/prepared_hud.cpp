@@ -24,7 +24,46 @@ float real(const uint8_t* bytes) {
   std::memcpy(&result, &bits, sizeof result);
   return result;
 }
+HudImage read_header(std::istream& input, uint64_t file_bytes) {
+  uint8_t header[28]{};
+  if (!input.read(reinterpret_cast<char*>(header), sizeof header) ||
+      std::string(reinterpret_cast<char*>(header), 4) != "MW3H")
+    throw std::runtime_error("HUD artwork requires MW3H-v1");
+  HudImage image;
+  image.width = word(header + 4);
+  image.height = word(header + 8);
+  image.u0 = real(header + 12);
+  image.v0 = real(header + 16);
+  image.u1 = real(header + 20);
+  image.v1 = real(header + 24);
+  const uint64_t bytes = uint64_t(image.width) * image.height * 4;
+  if (!image.width || !image.height || image.width > 8192 || image.height > 8192 ||
+      file_bytes != bytes + 28 || !std::isfinite(image.u0) || !std::isfinite(image.v0) ||
+      !std::isfinite(image.u1) || !std::isfinite(image.v1) || image.u0 < 0 || image.v0 < 0 ||
+      image.u0 >= image.u1 || image.v0 >= image.v1 || image.u1 > 1 || image.v1 > 1)
+    throw std::runtime_error("Invalid HUD artwork dimensions, bytes or UVs");
+  return image;
+}
 }  // namespace
+HudImage inspect_hud_sprite(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  return read_header(input, std::filesystem::file_size(path));
+}
+std::shared_ptr<const HudImage> load_hud_sprite(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  auto image = std::make_shared<HudImage>(read_header(input, std::filesystem::file_size(path)));
+  image->pixels.resize(size_t(image->width) * image->height);
+  for (auto& pixel : image->pixels) {
+    uint8_t rgba[4];
+    if (!input.read(reinterpret_cast<char*>(rgba), 4))
+      throw std::runtime_error("Truncated HUD artwork");
+    const unsigned alpha = rgba[3];
+    pixel = (unsigned(rgba[0]) * alpha + 127) / 255 |
+            ((unsigned(rgba[1]) * alpha + 127) / 255) << 8 |
+            ((unsigned(rgba[2]) * alpha + 127) / 255) << 16 | alpha << 24;
+  }
+  return image;
+}
 uint64_t hud_identity(unsigned width, unsigned height, const uint16_t* pixels, size_t count) {
   if (count != uint64_t(width) * height || (!pixels && count))
     throw std::runtime_error("HUD identity size mismatch");
@@ -47,36 +86,10 @@ HudArtwork load_hud_artwork(const std::filesystem::path& requested) {
     if (name.size() != 16 || name.find_first_not_of("0123456789abcdef") != std::string::npos ||
         !file.is_regular_file() || images.size() >= 256)
       throw std::runtime_error("Invalid or excessive HUD artwork identity");
-    std::ifstream input(file.path(), std::ios::binary);
-    uint8_t header[28]{};
-    if (!input.read(reinterpret_cast<char*>(header), sizeof header) ||
-        std::string(reinterpret_cast<char*>(header), 4) != "MW3H")
-      throw std::runtime_error("HUD artwork requires MW3H-v1");
-    auto image = std::make_shared<HudImage>();
-    image->width = word(header + 4);
-    image->height = word(header + 8);
-    image->u0 = real(header + 12);
-    image->v0 = real(header + 16);
-    image->u1 = real(header + 20);
-    image->v1 = real(header + 24);
-    const uint64_t bytes = uint64_t(image->width) * image->height * 4;
-    total += bytes;
-    if (!image->width || !image->height || image->width > 8192 || image->height > 8192 ||
-        total > 512 * 1024 * 1024 || file.file_size() != bytes + 28 || !std::isfinite(image->u0) ||
-        !std::isfinite(image->v0) || !std::isfinite(image->u1) || !std::isfinite(image->v1) ||
-        image->u0 < 0 || image->v0 < 0 || image->u0 >= image->u1 || image->v0 >= image->v1 ||
-        image->u1 > 1 || image->v1 > 1)
-      throw std::runtime_error("Invalid HUD artwork dimensions, bytes or UVs");
-    image->pixels.resize(size_t(bytes / 4));
-    for (auto& pixel : image->pixels) {
-      uint8_t rgba[4];
-      if (!input.read(reinterpret_cast<char*>(rgba), 4))
-        throw std::runtime_error("Truncated HUD artwork");
-      const unsigned alpha = rgba[3];
-      pixel = (unsigned(rgba[0]) * alpha + 127) / 255 |
-              ((unsigned(rgba[1]) * alpha + 127) / 255) << 8 |
-              ((unsigned(rgba[2]) * alpha + 127) / 255) << 16 | alpha << 24;
-    }
+    const auto metadata = inspect_hud_sprite(file.path());
+    total += uint64_t(metadata.width) * metadata.height * 4;
+    if (total > 512 * 1024 * 1024) throw std::runtime_error("HUD artwork exceeds decoded size limit");
+    auto image = load_hud_sprite(file.path());
     if (!images.emplace(std::stoull(name, nullptr, 16), std::move(image)).second)
       throw std::runtime_error("Duplicate HUD artwork identity");
   }

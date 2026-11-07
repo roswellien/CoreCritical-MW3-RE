@@ -1917,6 +1917,7 @@ struct WiredMissionHooks : MissionHooks {
     }
     s_added.clear();
     const std::string dir = mission_dir(e->launch().index);
+    zutl::set_managed_search({"zbd/" + dir, "zbd"});
     const std::vector<std::string> roots = read;
     for (const std::string& r : roots) s_added.push_back(r + "/zbd/" + dir);
     for (const std::string& r : roots) s_added.push_back(r + "/zbd");

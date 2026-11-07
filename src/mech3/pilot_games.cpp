@@ -11,9 +11,15 @@
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/mech_config.h"
 #include "mech3/mech_names.h"
+#include "mech3/content_registry.h"
+#include "mech3/content_state.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mech_reader.h"
 #include "mech3/pilot.h"
+#include "mech3/content_campaign.h"
+#include "mech3/content_stock_campaign.h"
+#include "mech3/content_world.h"
+#include "content/persistence.h"
 
 namespace mech3 {
 
@@ -39,6 +45,7 @@ ActionSetup& action_setup() { return g_action_setup; }
 
 Config* PilotHooks::config_load(const char* name, std::FILE* f) { return Config::from_file(name, f); }
 void PilotHooks::save_world(const char* path, int32_t kind) { zsave::save(path, kind); }
+bool PilotHooks::save_world_checked(const char* path, int32_t kind) { return zsave::save(path, kind); }
 bool PilotHooks::load_world(const char* path, int32_t kind) { return zsave::load(path, kind); }
 void PilotHooks::config_save(Config* c, std::FILE* f) {
   if (c) c->save(f);
@@ -103,7 +110,7 @@ void Store::fill_all() {
     it->b10 = 1;
     items.push_back(it);
   };
-  for (int32_t m = 0; m < 0x13; ++m) {
+  for (int32_t m = 0; m < chassis_count(); ++m) {
     if (m == 7) continue;  // 0x00426080
     auto* b = new BaseItem;
     b->value = m;
@@ -124,7 +131,7 @@ void Store::fill_all() {
       put(a);
     }
   }
-  for (int32_t k = 0; k < 0xf; ++k) {
+  for (int32_t k = 0; k < equipment_count(); ++k) {
     if (equipment_restricted(-1, k, 3)) continue;
     for (int32_t tech : k == 1 ? std::initializer_list<int32_t>{3} : std::initializer_list<int32_t>{2, 1}) {
       if (tech != 3 && !equip_has_tech(k, tech)) continue;
@@ -218,7 +225,7 @@ AmmoItem* Store::add_ammo(int32_t weapon, int32_t n) {
 
 // Mech3.exe 1.2 @ 0x00471a20. Kind 1's tech is always 3 (any).
 EquipmentItem* Store::add_equipment(int32_t kind, int32_t tech, int32_t n) {
-  if (kind == 1) tech = 3;
+  if (equipment_family(kind) == 1) tech = 3;
   EquipmentItem probe;
   probe.count = 1, probe.equipment = kind, probe.tech = tech;
   if (auto* found = static_cast<EquipmentItem*>(find_like(&probe))) {
@@ -295,7 +302,7 @@ void Store::assign(const Store& from) {
 // Mech3.exe 1.2 @ 0x00471c10. Merged with one like it (its place kept, unlike
 // add_copy's); none for -1 or 0x13.
 BaseItem* Store::add_mech(int32_t mech) {
-  if (mech == -1 || mech == 0x13) return nullptr;
+  if (mech < 0 || mech >= chassis_count()) return nullptr;
   BaseItem probe;
   probe.count = 1, probe.value = mech;
   if (auto* found = static_cast<BaseItem*>(find_like(&probe))) {
@@ -423,10 +430,15 @@ bool Store::add_config(const Config* c) {
 }
 
 // Mech3.exe 1.2 @ 0x00471790 -> 0x004717a0
-uint32_t Store::save(std::FILE* f) const { return save_item_list(items, full, f); }
+uint32_t Store::save(std::FILE* f) const {
+  return active_content()?save_managed_store(f,*this):save_item_list(items,full,f);
+}
 
 // Mech3.exe 1.2 @ 0x00471530 -> 0x00471540
-void Store::load(std::FILE* f) { load_item_list(items, f); }
+void Store::load(std::FILE* f) {
+  if(active_content())load_managed_store(f,*this);
+  else load_item_list(items,f);
+}
 
 // ---- the slot ----
 
@@ -478,6 +490,7 @@ bool GameSlot::set_config(const Config* c) {
 
 // Mech3.exe 1.2 @ 0x00433ef0
 void GameSlot::save(Pilot& p) {
+  if(active_content()) {save_managed_slot(p.file,*this);return;}
   wr(p.file, &mech, 4);
   wr(p.file, &x14, 4);
   wr(p.file, &skin, 4);
@@ -489,6 +502,7 @@ void GameSlot::save(Pilot& p) {
 // Mech3.exe 1.2 @ 0x00433f80. A configuration read replaces the one held
 // without deleting it (a leak in the exe; deleted here).
 void GameSlot::load(Pilot& p) {
+  if(active_content()) {load_managed_slot(p.file,*this);return;}
   rd(p.file, &mech, 4);
   rd(p.file, &x14, 4);
   rd(p.file, &skin, 4);
@@ -555,6 +569,9 @@ CampaignGame::~CampaignGame() {
 
 // Mech3.exe 1.2 @ 0x00434990
 void CampaignGame::save() {
+  adopt_content_stock_campaign(*this);
+  if (active_content()) bind_content_campaign_run(*this);
+  refresh_content_campaign_semantics(*this);
   Game::save();
   std::FILE* f = pilot->file;
   wr(f, &campaign, 4);
@@ -572,6 +589,12 @@ void CampaignGame::save() {
   wr(f, &n, 4);
   if (n)
     for (GameSlot* s : lancemates) s->save(*pilot);  // 0x00434010
+  if (active_content()) {
+    if (!f || !cc::content::valid_campaign_run_id(content_run) ||
+        std::fwrite("CCRUN01\n", 1, 8, f) != 8 ||
+        std::fwrite(content_run.data(), 1, 64, f) != 64)
+      cc::content::fail("pilot-run", "Cannot write the managed campaign run trailer");
+  }
 }
 
 // Mech3.exe 1.2 @ 0x00434ae0. FIX (bug): a damaged count reads on past the
@@ -596,13 +619,22 @@ void CampaignGame::load() {
   if (n) {
     if (lancemates.capacity() < n && n < 0x10000) lancemates.reserve(n);
     for (; n; --n) {  // 0x00434040
-      auto* s = new GameSlot(-1, nullptr, 0);
+      auto s = std::make_unique<GameSlot>(-1, nullptr, 0);
       s->load(*pilot);
-      lancemates.push_back(s);
+      lancemates.push_back(s.release());
       if (f && std::feof(f)) break;
     }
   }
-  merge_salvage();
+  if (active_content()) {
+    char magic[8]{}, run[64]{};
+    if (!f || std::fread(magic, 1, 8, f) != 8 || std::memcmp(magic, "CCRUN01\n", 8) != 0 ||
+        std::fread(run, 1, 64, f) != 64 ||
+        !cc::content::valid_campaign_run_id(std::string(run, 64)))
+      cc::content::fail("pilot-run", "Managed campaign run trailer is missing or malformed");
+    content_run.assign(run, 64);
+  }
+  read_content_campaign(*this);
+  if (content_mission.empty() || content_stock_campaign(*this)) merge_salvage();
 }
 
 // Mech3.exe 1.2 @ 0x00434cb0. What the last mission left in two stores is
@@ -622,11 +654,16 @@ void CampaignGame::merge_salvage() {
 // world saved into its file; this one's salvage then merged. Without, this one
 // settled in place: the slots' mechs and loadouts listed in +0x50 (docs/campaign.md 4).
 CampaignGame* CampaignGame::next_mission(bool next_one, bool save) {
+  const bool managed_stock = adopt_content_stock_campaign(*this);
+  if (!content_mission.empty() && !managed_stock) return advance_content_campaign(*this, next_one, save);
   PilotHooks& h = pilot_hooks();
   int32_t m = mission_number(), op = operation();
   const bool over = campaign_advance(op, m);
   if (next_one) {
-    if (over) return nullptr;
+    if (over) {
+      if (managed_stock) finish_content_stock_campaign(*this);
+      return nullptr;
+    }
     auto* g = new CampaignGame(pilot, op, m);
     g->store.assign(store);
     g->store.add_all(store64);
@@ -637,7 +674,8 @@ CampaignGame* CampaignGame::next_mission(bool next_one, bool save) {
     g->a8 = (m == 1 || (op == 4 && m == 4)) ? 3 : a8;
     g->c4 = c4;
     g->copy_lancemates(*this);
-    if (save) h.save_world(g->path(), 2);
+    if (managed_stock) carry_content_stock_campaign(*this, *g);
+    else if (save) h.save_world(g->path(), 2);
     b0 = 0;
     g->b0 = 1;
     merge_salvage();
@@ -708,7 +746,14 @@ void CampaignGame::copy_lancemates(const CampaignGame& from) {
 // Mech3.exe 1.2 @ 0x00434950
 const char* CampaignGame::path_for(const char* pilot_name) {
   char buf[0x200];
-  std::snprintf(buf, sizeof buf, "pilots//games//%s%02d%02d.mw3", pilot_name, operation(), mission_number());
+  if (active_content() && (!content_run.empty() || !content_mission.empty())) {
+    if (!cc::content::valid_campaign_run_id(content_run))
+      cc::content::fail("pilot-run", "Managed campaign path requires its expected run identity");
+    std::snprintf(buf, sizeof buf, "pilots//games//%s%02d%02d-%s.mw3", pilot_name,
+                  operation(), mission_number(), content_run.c_str());
+  } else {
+    std::snprintf(buf, sizeof buf, "pilots//games//%s%02d%02d.mw3", pilot_name, operation(), mission_number());
+  }
   text = buf;
   return text.c_str();
 }
@@ -717,18 +762,39 @@ const char* CampaignGame::path_for(const char* pilot_name) {
 const char* CampaignGame::path() { return path_for(pilot->name); }
 
 // Mech3.exe 1.2 @ 0x00435330 (0x00576080: _access)
-bool CampaignGame::readable() { return zutl::exists(path()); }
+bool CampaignGame::readable() {
+  if (!content_mission.empty()) return zutl::exists((std::string(path()) + ".ccsave").c_str());
+  return zutl::exists(path());
+}
 
 // Mech3.exe 1.2 @ 0x004352d0: a game read from the pilot's file (not the one
 // the last mission's end made, +0xb0), past Op 1 Mission 1 and not Op 4
 // Mission 4, whose file is there: zSave reads it (kind 2) into the world.
 bool CampaignGame::restore() {
+  if (!content_mission.empty()) return restore_content_campaign(*this);
   if (b0 || mission == 1 || (campaign == 4 && mission == 4) || !readable()) return false;
   return pilot_hooks().load_world(path(), 2);
 }
 
 // Mech3.exe 1.2 @ 0x00434900: message 0x21d, "Op %1!d!, Mission %2!d!".
+const char* CampaignGame::game_text(int32_t slot) {
+  if(content_mission.empty() || content_stock_campaign(*this))return slot==0x0c?name():nullptr;
+  const auto content=active_content();const auto* mission=content?content->find("mission",content_mission):nullptr;
+  if(!mission)return nullptr;
+  if(slot==0x0c)text=mission->data.value("name",mission->id);
+  else if(slot==0x10)text=mission->data.value("description",std::string{});
+  else if(slot==0x08) {
+    const auto* world=content->find("world",mission->data.at("world").get<std::string>());
+    text=world->data.value("name",world->id);
+  } else if(slot==0x04)text="Authored mission";
+  else return nullptr;
+  return text.c_str();
+}
 const char* CampaignGame::name() {
+  if (!content_mission.empty() && !content_stock_campaign(*this)) {
+    text = content_campaign_label(*this);
+    return text.c_str();
+  }
   text = pilot_hooks().format_ints(0x21d, {operation(), mission_number()});
   return text.c_str();
 }
@@ -907,6 +973,25 @@ const char* MultiplayerGame::game_text(int32_t slot) {
 void MultiplayerGame::set_roster(const std::vector<std::string>& lines) {
   roster.clear();
   for (const std::string& l : lines) roster += l + "\n";
+}
+
+void MultiplayerGame::set_world(int32_t value) {
+  if(select_content_multiplayer(value,x90,x94)) {
+    const auto content=active_content();
+    const auto* mission=content->by_handle("mission",value&0x3fffffff);
+    content_multiplayer_mission=mission->id;
+  } else {
+    content_multiplayer_mission.clear();x90=value&255;x94=(value>>8)&255;
+  }
+}
+
+int32_t MultiplayerGame::world() const {
+  if(!content_multiplayer_mission.empty()) {
+    const auto content=active_content();const auto* mission=content?content->find("mission",content_multiplayer_mission):nullptr;
+    if(!mission)cc::content::fail("multiplayer-mission", "Selected multiplayer mission is unavailable");
+    return 0x40000000|mission->handle;
+  }
+  return x94<<8|x90;
 }
 
 // ---- the lobby's records (multiplayer-port.md, piece 11) ----

@@ -1,4 +1,6 @@
 #include "mech3/app_states.h"
+#include "mech3/content_campaign.h"
+#include "mech3/content_stock_campaign.h"
 #include "gamez/zutil/zfix.h"
 #include "mech3/app_shadows.h"
 
@@ -1188,12 +1190,24 @@ bool WinState::enter() {
   if (!lost && clean && type == 1) {
     en.mission_results(0, (campaign == 4 && mission == 4) ? 0 : 1);
     const int32_t n = static_cast<int32_t>(en.vcall(en.field32(en.pilot(), 0x6c), 0x38, {}));
+    Pilot* selected = current_pilot();
+    CampaignGame* managed = selected ? selected->campaign() : nullptr;
+    const bool managed_campaign = managed && !managed->content_mission.empty();
+    if (managed_campaign) en.win_keep_scores(screen_, n);
     en.pilot_record_mission(en.pilot(), 1);
-    en.win_keep_scores(screen_, n);
-    if (a().no_voices() == 0) {
+    if (!managed_campaign) en.win_keep_scores(screen_, n);
+    if (a().no_voices() == 0 && (!managed_campaign || content_stock_campaign(*managed))) {
       en.format("c%dm%dwin", {campaign, mission}, voice_, sizeof voice_);
       en.voice_start(voice_);
       en.debrief_voice_play(addr());
+    }
+  }
+  if (type == 1) {
+    Pilot* selected = current_pilot();
+    CampaignGame* managed = selected ? selected->campaign() : nullptr;
+    if (managed && !managed->content_mission.empty()) {
+      if (lost || !clean) en.pilot_record_mission(en.pilot(), 0);
+      if (!content_stock_campaign(*managed)) campaign_won_ = content_campaign_terminal() ? 1 : 0;
     }
   }
   ShellState::enter();

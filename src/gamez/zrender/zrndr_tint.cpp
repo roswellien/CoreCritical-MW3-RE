@@ -6,6 +6,7 @@
 #include "crt/msvc_math.h"
 #include "crt/msvc_rand.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "gamez/ztwod/presentation.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -211,6 +212,7 @@ void static_fill(const int32_t* rect, double level, uint16_t lo, uint16_t mid, u
     uint16_t* p = f.base + (y * f.pitch_px + left);
     for (int32_t i = 0; i < w; ++i, ++p, ++n) {
       if (n[1] >= under) continue;
+      if (!ztwod::presentation_output_enabled()) continue;
       observe_framebuffer_write(f.base, "damage static");
       *p = n[0] < 0x55 ? lo : n[0] < 0xab ? mid : hi;
     }

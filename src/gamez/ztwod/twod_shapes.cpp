@@ -36,6 +36,7 @@ Pixel2D::Pixel2D(int32_t px, int32_t py, uint32_t c) : Object2D(px, py), color(c
 
 // Mech3.exe 1.2 @ 0x005a6bb0
 void Pixel2D::draw() {
+  if (!can_present()) return;
   erase();
   host().pixel(x, y, color);
 }
@@ -187,12 +188,15 @@ bool clip_line(float* a, float* b) { return clip_axis(a, b, 0) && clip_axis(a, b
 
 // Mech3.exe 1.2 @ 0x005a3b00
 void Frame::draw() {
+  if (!can_present()) return;
   erase();
   host().circle(x, y, radius, color, clipped ? &clip : nullptr);
 }
 
 // Mech3.exe 1.2 @ 0x005a3bc0
 void FilledBox::draw() {
+  PresentationScope presentation(presentation_visible);
+  if (!can_present() && noise == 0.0f) return;
   erase();
   if (noise == 0.0f)  // 0x005d016c
     host().circle(x, y, radius, color, clipped ? &clip : nullptr);
@@ -206,6 +210,7 @@ void FilledBox::draw() {
 // FIX (bug): the exe saves only with a rect but always puts back, from its
 // stack when there is none; here it saves either way (docs/fixes.md).
 void Line2D::draw() {
+  if (!can_present()) return;
   erase();
   if (!clipped) {
     if (dash > 1) host().line_dashed(x, y, end_x, end_y, color, dash);
@@ -232,6 +237,8 @@ void Line2D::draw() {
 
 // Mech3.exe 1.2 @ 0x005a6b30
 void ClipLine2D::draw() {
+  PresentationScope presentation(presentation_visible);
+  if (!can_present() && noise == 0.0f) return;
   if (noise == 0.0f) return Line2D::draw();  // 0x005d07dc
   erase();
   host().line_noisy(x, y, end_x, end_y, color, noise, clipped ? clip : nullptr);
@@ -318,6 +325,7 @@ void FlashImage::update(float dt) {
 
 // Mech3.exe 1.2 @ 0x005a6ca0: the winding from the first three points.
 void Polygon::draw() {
+  if (!can_present()) return;
   erase();
   if (count == 0) return;
   const float a = (pts[2][1] - pts[1][1]) * (pts[1][0] - pts[0][0]);

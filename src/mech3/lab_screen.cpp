@@ -1,6 +1,7 @@
 // The mech lab's screen (docs/mechlab.md section 2), step 2: the screen,
 // its own controls, the page and slot switches. Original file unknown
 // (0x00448830..0x004561ff, between mech_data.cpp and mech_map.cpp).
+#include "mech3/content_registry.h"
 #include "mech3/lab_screen.h"
 
 #include <algorithm>
@@ -41,7 +42,8 @@ int32_t g_none = -1;  // the tabs' and mech buttons' id until bound
 // Mech3.exe 1.2 @ 0x00484670: a mech's name from Mech3Msg.dll, "notmech"
 // out of range; CString::Format's "%s" gives "(null)" for none.
 std::string display_name(Engine& e, int32_t mech) {
-  if (mech < 0 || mech >= 19) return "notmech";
+  if (mech < 0 || mech >= chassis_count()) return "notmech";
+  if (const char* label = content_label("chassis", mech)) return label;
   const char* s = e.message(mech_name_message(mech));
   return s ? s : "(null)";
 }
@@ -208,14 +210,14 @@ void LabLoadoutList::refresh(Handle cfg) {
   const char* kind = en.message(en.lab_config_double_sinks(cfg) ? 0x1d0 : 0x1cf);
   std::snprintf(line, sizeof line, "%s", en.message_format_is(0xf4b, en.lab_config_sinks(cfg), kind ? kind : "").c_str());
   add_item(line, 0);
-  for (int32_t k = 0; k < 0xf; ++k)
+  for (int32_t k = 0; k < equipment_count(); ++k)
     for (int32_t tech = 1; tech < 3; ++tech) {
       EquipmentItem probe;
       probe.count = 1, probe.part = -1, probe.equipment = k, probe.tech = tech;
       int32_t n = 0;
       const Handle it = find(probe, &n);
       if (!it) continue;
-      const int32_t q = en.lab_item_equipment(it);
+      const int32_t q = equipment_family(en.lab_item_equipment(it));
       if (q == 1 || q == 2 || q == 9 || q == 10) continue;  // armour and sinks: their own lines
       std::snprintf(line, sizeof line, "%2d %s", n, en.lab_item_label(it).c_str());
       add_item(line, 0);
@@ -535,7 +537,7 @@ bool tab_item(Engine& e, Handle h, bool armour) {
   bool is_armour = false;
   if (e.lab_item_kind(h) == 3 && h) {
     e.lab_item_kind(h);
-    const int32_t k = e.lab_item_equipment(h);
+    const int32_t k = equipment_family(e.lab_item_equipment(h));
     is_armour = k == 1 || k == 2;
   }
   return kind == want && is_armour == armour;
@@ -613,7 +615,7 @@ bool LabUnassignedList::can_xa8(int32_t index) {
   const Handle dfn = en.mech_dfn_handle(slot ? en.lab_slot_mech(slot) : -1);
   if (!item) return false;
   const int32_t k = en.lab_item_kind(item);
-  const int32_t equip = en.lab_item_equipment(item);
+  const int32_t equip = equipment_family(en.lab_item_equipment(item));
   const bool armour = k == 3 && (equip == 1 || equip == 2);
   const int32_t mech = en.config_mech(cfg);
   if (!armor_tab) {
@@ -831,7 +833,7 @@ void LabAssignedList::add_part_items(bool spread, int32_t* ferro, int32_t* endo)
     if (!it || en.lab_item_location(it, mech) != listing) continue;
     int32_t n = en.lab_item_slots(it);
     if (en.lab_item_kind(it) == 3) {
-      const int32_t k = en.lab_item_equipment(it);
+      const int32_t k = equipment_family(en.lab_item_equipment(it));
       if ((k == 9 || k == 10) && en.lab_item_group(it) == -1) n = 0;
     }
     add_object(it, n);
@@ -998,7 +1000,8 @@ void lab_put_on(Engine& en, LabUnassignedList& list, int32_t index) {
   int32_t n = 1;
   bool put = true;
   const int k = item->kind();
-  const int32_t equip = k == 3 ? static_cast<EquipmentItem*>(item)->equipment : -1;
+  const int32_t equipment_id = k == 3 ? static_cast<EquipmentItem*>(item)->equipment : -1;
+  const int32_t equip = equipment_family(equipment_id);
   const int32_t tech = k == 3 ? static_cast<EquipmentItem*>(item)->tech : 0;
   if (k == 2) {
     n = lab_rounds(static_cast<AmmoItem*>(item)->weapon, store->full ? 100000 : item->count);  // 0x004b4900
@@ -1010,7 +1013,7 @@ void lab_put_on(Engine& en, LabUnassignedList& list, int32_t index) {
   } else if (k == 3 && (equip == 1 || equip == 2)) {
     put = false;
     EquipmentItem probe;  // 0x0041ec00
-    probe.count = 1, probe.equipment = equip, probe.tech = tech;
+    probe.count = 1, probe.equipment = equipment_id, probe.tech = tech;
     if (ConfigItem* same = cfg->find_like(&probe)) {  // half a ton more
       if (++same->count < 0) same->count = 0;
       store->remove(item, 1);
@@ -1019,9 +1022,14 @@ void lab_put_on(Engine& en, LabUnassignedList& list, int32_t index) {
       cfg->modified = 1;
       cfg->recount();
     } else {
-      EquipmentItem old;  // 0x0044ec90(1), the mech's armour now
-      old.count = 1, old.equipment = cfg->ferro ? 2 : 1, old.tech = cfg->armor_tech;
-      if (ConfigItem* was = cfg->find_like(&old)) {
+      ConfigItem* was = nullptr;
+      for (ConfigItem* candidate : cfg->items) {
+        if (candidate->kind() == 3 && equipment_family(candidate->id()) == (cfg->ferro ? 2 : 1)) {
+          was = candidate;
+          break;
+        }
+      }
+      if (was) {
         const int32_t had = was->count;
         const int32_t take = item->b10 ? had : std::min(item->count, had);
         store->add_copy(was, had);
@@ -1041,8 +1049,10 @@ void lab_put_on(Engine& en, LabUnassignedList& list, int32_t index) {
     item = nullptr;
   } else if (k == 3 && (equip == 9 || equip == 10)) {
     EquipmentItem probe;  // 0x0044ec90(1): one kind of sink on a mech
-    probe.count = 1, probe.equipment = equip, probe.tech = tech;
+    probe.count = 1, probe.equipment = equipment_id, probe.tech = tech;
     put = cfg->find_like(&probe) != nullptr || cfg->sink_items() == 0;
+    if (active_content() && cfg->sink_items() != 0)
+      put = cfg->equipment_count(equip, tech) == cfg->sink_items();
     if (!put) en.lab_message(en.message(0xf02));  // "Incompatable Heat Sink Type"
   } else if (k == 3 && equip == 11) {
     put = cfg->jump_jets() < cfg->jump_jet_limit();
@@ -1067,7 +1077,7 @@ void lab_put_on(Engine& en, LabUnassignedList& list, int32_t index) {
       put = false;
     } else {
       const int32_t w = static_cast<WeaponItem*>(item)->weapon;
-      const bool missile = (w >= 0x11 && w <= 0x14) || (w >= 0x1a && w <= 0x1f);
+      const bool missile = weapon_is_missile(w);
       const auto ok = [&](int32_t i) { return !missile || fps[static_cast<size_t>(fit[static_cast<size_t>(i)])].radius > 0.0f; };
       int32_t chosen = -1;
       const int32_t count = static_cast<int32_t>(fit.size());
@@ -1244,7 +1254,7 @@ void LabUnassignedList::refill() {
       const Handle h = it->object;
       if (!h || en.lab_item_kind(h) != 3) continue;
       en.lab_item_kind(h);
-      const int32_t k = en.lab_item_equipment(h);
+      const int32_t k = equipment_family(en.lab_item_equipment(h));
       if (k == 9 || k == 10) it->count = 0;
     }
   }

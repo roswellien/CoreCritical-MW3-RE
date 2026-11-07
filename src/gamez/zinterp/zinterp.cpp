@@ -34,6 +34,7 @@
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zrender/zrndr_flare.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/content_base.h"
 #include "gamez/zvideo/zvid_format.h"
 
 namespace zint {
@@ -201,6 +202,7 @@ int file_getc(ScriptFile& sf) {
 }
 
 ScriptFile* open_loose(const char* name) {
+  mech3::validate_content_script_source(name);
   std::FILE* f = zutl::open(name, "rb");
   if (!f) return nullptr;
   auto* sf = new ScriptFile;
@@ -775,6 +777,9 @@ ScriptFile* archive_find(Interp& in, const char* name) {
       break;
     }
   if (idx == -1) return nullptr;
+  // An explicitly selected managed gameplay file is an override regardless of
+  // installation/copy timestamps. Unclaimed stock files keep recovered rules.
+  if (mech3::content_managed_script_source(name)) return nullptr;
   int32_t mtime;
   if (stat_mtime(name, &mtime) == 0 && static_cast<double>(mtime) - in.dir[idx].timestamp > 0) return nullptr;
   // Ours (docs/modding.md, M3): a script starts past the directory and runs

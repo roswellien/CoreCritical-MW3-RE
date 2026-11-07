@@ -1,4 +1,5 @@
 #include "gamez/zclass/cls_zbd.h"
+#include "mech3/content_base.h"
 
 #include <vector>
 
@@ -302,6 +303,7 @@ char* zbd_path() {
 // Mech3.exe 1.2 @ 0x004ff520. A path too long to remember is still read; the
 // old remembered path stays.
 int read_zbd(const char* path) {
+  mech3::validate_content_world_bank(path);
   const size_t len = std::strlen(path);
   if (len == 0) return -1;
   if (len < 0x2f) {
