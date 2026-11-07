@@ -4,11 +4,14 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <stdexcept>
+#include <utility>
 
 namespace zutl {
 
 namespace {
 Mounts g_mounts;
+std::shared_ptr<const BankOverrides> g_banks;
 
 bool is_file(const std::string& p) {
   std::error_code ec;
@@ -203,13 +206,54 @@ std::string host(const char* path) {
   return out;
 }
 
+std::shared_ptr<const BankOverrides>
+set_bank_overrides(std::shared_ptr<const BankOverrides> banks) {
+  auto previous = std::move(g_banks);
+  g_banks = std::move(banks);
+  return previous;
+}
+
 std::string find(const char* path) {
   const std::string h = host(path);
   if (h.empty() || outside(h)) return {};
+  if (g_banks) {
+    auto alias = h;
+    for (auto &c : alias)
+      if (c >= 'A' && c <= 'Z')
+        c += 'a' - 'A';
+    const auto bank = g_banks->find(alias);
+    if (bank != g_banks->end()) {
+      if (!is_file(bank->second))
+        throw std::runtime_error("Selected environment bank disappeared: " +
+                                 alias);
+      return bank->second;
+    }
+  }
+
   if (absolute(h) || (g_mounts.read.empty() && g_mounts.write.empty())) return is_file(h) ? h : std::string{};
   if (!g_mounts.write.empty() && is_file(join(g_mounts.write, h))) return join(g_mounts.write, h);  // what the game wrote
   for (const std::string& dir : g_mounts.read) {
     if (!g_mounts.mods.empty() && is_mod_dir(dir) && !mod_may_serve(h)) continue;
+    // Native texture libraries ask for bare names through mission mounts.
+    // Resolve that mount's exact logical bank path, rather than matching a
+    // basename (which would confuse different missions and common banks).
+    if (g_banks) {
+      const auto candidate = std::filesystem::u8path(join(dir, h))
+                                 .lexically_normal()
+                                 .generic_string();
+      for (const auto &root : g_mounts.read)
+        for (const auto &bank : *g_banks) {
+          const auto logical = std::filesystem::u8path(join(root, bank.first))
+                                   .lexically_normal()
+                                   .generic_string();
+          if (same_letters(candidate, logical)) {
+            if (!is_file(bank.second))
+              throw std::runtime_error(
+                  "Selected environment bank disappeared: " + bank.first);
+            return bank.second;
+          }
+        }
+    }
     const std::string p = in_mount(dir, h);
     if (!p.empty()) return p;
   }

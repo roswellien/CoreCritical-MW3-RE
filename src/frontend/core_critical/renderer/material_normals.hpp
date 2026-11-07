@@ -341,6 +341,7 @@ class WorldNormalCache {
     std::map<SurfaceKey, std::size_t> world_bindings;
     std::map<int, std::size_t> world_images;
     std::uint64_t world_bytes{0};
+    std::uint64_t world_package_bytes{0};
     std::uint64_t world_clock{0};
 
     bool normal_maps_enabled{true};
@@ -386,8 +387,12 @@ class WorldNormalCache {
 
             const auto size = std::filesystem::file_size(page.path);
             package_bytes += size;
-            if (size > world_normal_page_file_limit || package_bytes > world_normal_catalog_budget)
-                throw std::runtime_error("World-normal package exceeds byte budget");
+            if (size > world_normal_page_file_limit ||
+                package_bytes >
+                    world_normal_catalog_budget - world_package_bytes ||
+                pages.size() >= max_world_normal_pages)
+              throw std::runtime_error(
+                  "World-normal package exceeds byte budget");
 
             std::ifstream input(page.path, std::ios::binary);
             if (!input)
@@ -405,6 +410,7 @@ class WorldNormalCache {
         }
         if (!list.eof() || pages.empty())
             throw std::runtime_error("Incomplete world-normal manifest");
+        world_package_bytes += package_bytes;
     }
 
     void load_page(std::size_t page_index,

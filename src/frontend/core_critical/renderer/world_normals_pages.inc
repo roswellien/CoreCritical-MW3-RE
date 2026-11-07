@@ -2,10 +2,17 @@
 // Missing optional content stays neutral. Explicit paths never silently fall
 // back.
 void surface_normals_load_world(mw34::materials::WorldNormalCache &cache) {
+  bool selected = false;
   if (!bridge_config_.world_normal_manifest.empty()) {
     cache.load_world_manifest(bridge_config_.world_normal_manifest);
-    return;
+    selected = true;
   }
+  for (const auto &path : bridge_config_.environment_world_manifests) {
+    cache.load_world_manifest(path);
+    selected = true;
+  }
+  if (selected)
+    return;
   const std::string found = zutl::find("environment/world.txt");
   if (!found.empty()) {
     cache.load_world_manifest(found);
