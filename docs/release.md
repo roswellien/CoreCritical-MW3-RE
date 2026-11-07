@@ -7,9 +7,8 @@ packages are built from one commit, so every platform's version is the same.
 ## MW3 v1.0: "done"
 
 Owen, 2026-10-31: MechWarrior 3 is declared done with the tag `v1.0`
-before any Pirate's Moon work reaches `main`. Until then Pirate's Moon
-lives on its own branch (`mac5/pm`); after `v1.0` it merges in, and later
-releases carry both games through the launcher. `v1.0` is tagged when
+before any Pirate's Moon work reaches `main`. Pirate's Moon lives on its own
+branch, `pm`, which never merges to `main` (Owen, 2026-11-04). `v1.0` is tagged when
 every box here is ticked:
 
 - [ ] Multiplayer ported (`docs/multiplayer-port.md`, every piece), with
@@ -54,16 +53,40 @@ every box here is ticked:
   later playtest, not a gate (Owen, 2026-10-31).
 - [ ] Every check in sections 1-4 below passes on all three platforms.
 
+## After Pirate's Moon: Rebuild Upgrades (planned for 1.1.0)
+
+Owen, 2026-11-05. Work starts when Pirate's Moon is finished. Today one switch,
+bug fixes, covers every play change. After this:
+
+- **The bug fixes switch goes away.**
+- **Game-breaking bug fixes are always on,** with no switch.
+- **Every other fix is an upgrade,** on a new settings page, each with its own
+  switch, all on by default, so a player can turn them off for the original
+  experience. These include:
+  - The mobile field bases regrouping as soon as a repair is done.
+  - The improved AI (lancemates finding a way round walls, and so on).
+  - The water movement.
+  - Artemis FCS tracking.
+- **In multiplayer the host's settings apply to everyone in the game.**
+
+When the work starts: go through `fixes.md` and sort each fix into game-breaking
+or upgrade, for Owen to approve.
+
 ## 1. Before
 
 - [ ] `main` is the commit to release, with nothing uncommitted.
-- [ ] The tests pass on that commit: `mw3tests` and `mw3sdltests` on the Mac
-      and Windows, the differential tests on the Mac
-      (`tests/differential/run_all.sh`; under `run_capped.py` give it `--secs 2400`:
-      `test_anim_save` took 1729 s on a busy machine), and on Linux `mw3tests` and
-      `mw3sdltests` one test at a time under `run_capped.py` (WSL: docs/linux.md,
+- [ ] The tests of what changed since the last release pass on that commit, not
+      the whole suites (Owen, 2026-11-05): each change's own tests and those of
+      the code that uses it. A change to movement or collision runs the mission
+      tests (`MW3_TEST=mission_`), a change to loading or play the campaign runs,
+      a change to platform code its tests on that platform. The notes say which
+      ran. Full runs when wanted: `tests/differential/run_all.sh` under
+      `run_capped.py --secs 2400`; Linux one test at a time (docs/linux.md,
       Checking).
 - [ ] `CHANGES.md` has a line for every change since the last release.
+- [ ] The README's **What's new** has this release's section, its date, and an
+      emptied "Coming in the next release". Fixes add a line there as they reach
+      `main` (Owen, 2026-11-04).
 - [ ] The release notes are drafted (`docs/release-notes-<version>.md`) and
       Owen has read them.
 - [ ] The players' read-mes match the build: `tools/windows/dist/README.txt`,
@@ -76,10 +99,13 @@ every box here is ticked:
 
 ## 2. The version
 
-The version is git's: `git describe --tags --always --dirty` (CMake reads it
+The version is git's: `git describe --tags --match "v[0-9]*" --always --dirty`, so only game tags count (CMake reads it
 into `MW3_VERSION`, which `mw3 --version`, the Windows version resource, the
 Mac's Info.plist and every package's file name carry), and the commit count
 into `MW3_BUILD_NUMBER`.
+
+**Numbering (Owen, 2026-11-05):** each part is one digit. 1.0.9 is followed by
+1.1.0 and 1.1.9 by 1.2.0, whatever is in the release; there is never a 1.1.10.
 
 - [ ] Owen tags the commit (`git tag -a v0.1 -m ...`), or approves the tag.
       Until then the version is the commit's short hash.

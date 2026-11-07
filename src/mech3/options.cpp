@@ -463,9 +463,11 @@ void set_vmode(int32_t mode) {
 }
 
 bool vmode_size(int32_t mode, int32_t* w, int32_t* h) {
-  static const int32_t kSizes[][2] = {{640, 480},   {800, 600},   {1024, 768},  {1152, 864},
-                                      {1280, 1024}, {1600, 1200}, {1280, 720},  {1600, 900},
-                                      {1920, 1080}, {2560, 1440}, {3840, 2160}};
+  static const int32_t kSizes[][2] = {
+      {640, 480},   {800, 600},   {1024, 768},  {1152, 864},
+      {1280, 1024}, {1600, 1200}, {1280, 720},  {1600, 900},
+      {1920, 1080}, {2560, 1440}, {3840, 2160}, {0, 0},  // 16: custom, handled below
+      {2560, 1080}, {3440, 1440}, {3840, 1080}, {5120, 1440}};
   if (mode == 3) {
     *w = 640, *h = 480;
     return true;
@@ -473,11 +475,22 @@ bool vmode_size(int32_t mode, int32_t* w, int32_t* h) {
   const int32_t last = zfix::options().any_resolution ? kLastVMode : 10;
   if (mode < 5 || mode > last) return false;
   if (mode == kCustomVMode) {  // FIX (B): the player's own size, kept inside the cap
-    *w = std::clamp(g_options.screen_w, 640, kMaxScreen[0]);
-    *h = std::clamp(g_options.screen_h, 480, kMaxScreen[1]);
-    // FIX (B), Owen 2026-10-30: 16:9 is the widest; a 21:9 or 32:9 screen
-    // gets a 16:9 frame at its height, pillarboxed (resolution.md section 10).
-    *w = std::min(*w, *h * 16 / 9);
+    // The requested shape controls both camera FOV and HUD/input mapping.
+    // Clamping dimensions independently would distort an oversized desktop;
+    // use integer ratios to avoid leaking FP flags into native game code.
+    int64_t width = std::max(g_options.screen_w, 640);
+    int64_t height = std::max(g_options.screen_h, 480);
+    if (width > kMaxScreen[0] || height > kMaxScreen[1]) {
+      if (width * kMaxScreen[1] >= height * kMaxScreen[0]) {
+        height = std::max<int64_t>(480, (height * kMaxScreen[0] + width / 2) / width);
+        width = kMaxScreen[0];
+      } else {
+        width = std::max<int64_t>(640, (width * kMaxScreen[1] + height / 2) / height);
+        height = kMaxScreen[1];
+      }
+    }
+    *w = static_cast<int32_t>(width);
+    *h = static_cast<int32_t>(height);
     return true;
   }
   *w = std::min(kSizes[mode - 5][0], kMaxScreen[0]);

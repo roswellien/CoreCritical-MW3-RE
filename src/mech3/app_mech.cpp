@@ -283,7 +283,13 @@ class WiredBuild : public MechBuildHooks {
   MechData* mech_data(int32_t index, int32_t create) override { return mech3::mech_data(index, create); }
   Handle node_find(Handle root, const char* name) override { return zcls::node_find_in_tree(zn(root), name); }
   // Each mech its own tree: the models and their materials copied.
-  Handle node_clone(Handle node) override { return zcls::tree_copy(zn(node), 1, 1); }
+  Handle node_clone(Handle node) override {
+    zcls::Node* copy = zcls::tree_copy(zn(node), 1, 1);
+    // Gameplay clones the library's child (LOD 0) or grandchild (LOD 1).
+    // Mark that actual instance boundary without changing the native tree.
+    if (copy && copy->source_asset) copy->source_asset_root = true;
+    return copy;
+  }
   void node_remove_child(Handle parent, Handle child) override { zcls::node_remove_child(zn(parent), zn(child)); }
   void node_free(Handle node) override { zcls::tree_destroy(zn(node)); }
   void node_tree_update(Handle node) override { zcls::update_subtree(zn(node)); }

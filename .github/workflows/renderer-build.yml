@@ -1,0 +1,64 @@
+name: Asset-free renderer build
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-core:
+    name: Upstream core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build the upstream core and run portable fixtures
+        env:
+          MW3_TEST: msvc_rand,msvc_ftol,ztimer_step_follows_the_clock,resolution_,settings_first_start_plays,menus_wide_follow
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_DISABLE_FIND_PACKAGE_SDL3=ON
+          cmake --build build --target mw3tests mw3prepared_checks mw3geometry_checks mw3render_worker_checks --parallel 3
+          ctest --test-dir build -R '^(mw3tests|mw3prepared_checks|mw3geometry_checks|mw3render_worker_checks)$' --output-on-failure
+
+  windows-renderer:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare Windows build dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          function Install-DevZip($url, $sha256) {
+            $archive = Join-Path $env:RUNNER_TEMP (Split-Path -Leaf $url)
+            Invoke-WebRequest -Uri $url -OutFile $archive
+            if ((Get-FileHash -LiteralPath $archive).Hash -ne $sha256) {
+              throw "Dependency hash did not match for $archive"
+            }
+            Expand-Archive -LiteralPath $archive -DestinationPath deps
+          }
+          Install-DevZip 'https://github.com/libsdl-org/SDL/releases/download/release-3.4.12/SDL3-devel-3.4.12-VC.zip' '8793A153C7EBA93B1EB8022FD2356383EC446B2584E43724A72EF68D682813AB'
+          Install-DevZip 'https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.2/SDL3_ttf-devel-3.2.2-VC.zip' '67805C5BABFC49CA0C56882DC9B8CABBCDD1E6F9EDDE10DDAC91DDB38F3AFB8C'
+          vcpkg install vulkan-headers:x64-windows 'glslang[tools]:x64-windows'
+      - name: Build stock SDL, Vulkan and the renderer fixture
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS=%%i"
+          if not defined VS exit /b 1
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+          set "VCPKG_TOOLS=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows"
+          set "PATH=%VCPKG_TOOLS%\bin;%VCPKG_TOOLS%\tools\glslang;%PATH%"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DMW3_CORE_CRITICAL_VULKAN=ON "-DMW3_VULKAN_HEADERS=%VCPKG_TOOLS%/include" "-DSDL3_DIR=%CD%/deps/SDL3-3.4.12/cmake" "-DSDL3_ttf_DIR=%CD%/deps/SDL3_ttf-3.2.2/cmake" || exit /b 1
+          cmake --build build --target mw3 mw3tests mw3prepared_checks mw3geometry_checks mw3render_worker_checks mw3prepared_staging_checks mw3hud_checks mw3ccvulkan_checks --parallel 3 || exit /b 1
+          set "MW3_TEST=msvc_rand,msvc_ftol,ztimer_step_follows_the_clock,resolution_,settings_first_start_plays,menus_wide_follow"
+          ctest --test-dir build -R "^(mw3tests|mw3prepared_checks|mw3geometry_checks|mw3render_worker_checks|mw3prepared_staging_checks|mw3hud_checks)$" --output-on-failure

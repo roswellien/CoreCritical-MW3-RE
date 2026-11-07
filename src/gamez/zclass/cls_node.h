@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <map>
+#include <string>
 #include <vector>
 
 // The scene node and its pool (docs/zclass-world.md, docs/gamez.md). The
@@ -17,6 +19,11 @@ struct ListItem;
 struct Node;
 using NodeAction = void (*)(Node* node);  // +0x48, run by the action lists with ECX = node
 
+struct SourceAsset {
+  std::string name;
+  std::map<std::string, unsigned> nodes;
+};
+
 struct Node {                      // 0xd4-byte pool slot
   uint8_t raw[0xd0];               // as stored; the fields below replace its pointers
   uint32_t link;                   // +0xd0  bits 0-23 free link, bit 24 live
@@ -29,6 +36,11 @@ struct Node {                      // 0xd4-byte pool slot
   Node** parents = nullptr;        // +0x58
   Node** children = nullptr;       // +0x60
   ListItem* changed = nullptr;     // +0xcc  its item on list 7
+  // Host-only immutable resource identity. Copies keep the originating library
+  // entry so optional visuals can bind without changing game-facing raw fields.
+  std::shared_ptr<const SourceAsset> source_asset;
+  bool source_asset_root = false;
+  uint32_t source_model_vertices = 0;
 
   template <typename T> T get(int off) const {
     T v;

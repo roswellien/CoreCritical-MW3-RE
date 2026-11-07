@@ -341,6 +341,9 @@ struct HudZView {
 class HudZoomView : public ztwod::Object2D {
  public:
   HudZoomView(int32_t px, int32_t py, int32_t w, int32_t h);  // 0x0043f660
+  ~HudZoomView() override;           // 0x0043f9c0: its window freed
+  HudZoomView(const HudZoomView&) = delete;
+  HudZoomView& operator=(const HudZoomView&) = delete;
   void show_for(float seconds) override;  // +0x60  0x0043fc10: the camera on too
   void hide() override;              // +0x64  0x0043fc60: the camera off too
   HudZView view;                     // +0x34 (its vtable 0x005c0360)

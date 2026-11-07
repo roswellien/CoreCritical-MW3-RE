@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include <memory>
+
+namespace cc::geometry { struct Resource; }
 
 #include "gamez/zmodel/gmod_matl.h"
 
@@ -37,6 +40,14 @@ struct Model {                   // 0x60-byte slot
   float* normals = nullptr;      // +0x3c
   Light* lights = nullptr;       // +0x40
   float* morphs = nullptr;       // +0x44
+  // Owned rendering snapshot; invalidated by every source geometry mutator.
+  // These host fields are not part of the serialized 0x60-byte model slot.
+  std::shared_ptr<const cc::geometry::Resource> render_geometry;
+  std::vector<const Material*> render_materials;
+  void invalidate_render_geometry() noexcept {
+    render_geometry.reset();
+    render_materials.clear();
+  }
   uint32_t count(int off) const;
 };
 

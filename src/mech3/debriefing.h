@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "mech3/armor_display.h"
@@ -98,6 +99,7 @@ class DebriefScreen : public MenuScreen {
 
 // [0x00608bf8]: the lance's count the last results found (cards used).
 int32_t& debrief_lance_count();
+std::string debrief_rows(const DebriefScreen& d);  // (ours) the results' texts, " | " between
 // 0x0044a9b0 (the mech lab's): a mech's icon, "icon_<name>_" and red,
 // green, yellow or grey by `color` (0..3; else none added).
 zimg::Texture* mech_icon(Engine& e, int32_t mech, int32_t color);

@@ -1,4 +1,5 @@
 #include "gamez/zrender/zrndr_blur.h"
+#include "gamez/zrender/zrndr_blit.h"
 
 #include <cstddef>
 
@@ -41,6 +42,7 @@ uint16_t* scratch(const FinishTarget& t) {
 // target's pitch, not to the next row: on a target as wide as its pitch the
 // pass runs on as one line, two pixels short per row (docs/fmv.md).
 void blur_h(const int32_t* rect) {
+  observe_framebuffer_write(finish_target().base, "horizontal blur");
   const FinishTarget& t = finish_target();
   int32_t x0, y0, x1, y1;
   if (rect) {
@@ -71,6 +73,7 @@ void blur_h(const int32_t* rect) {
 // Mech3.exe 1.2 @ 0x0055a1b0. The rows above and below are a scratch width
 // away, not a pitch; the first and last rows stay.
 void blur_v(const int32_t* rect) {
+  observe_framebuffer_write(finish_target().base, "vertical blur");
   const FinishTarget& t = finish_target();
   int32_t x0, y0, x1, y1;
   if (rect) {
@@ -106,6 +109,7 @@ void blur_v(const int32_t* rect) {
 // copied first, the last row after), then along the rows back onto the
 // target, the ends of each row copied.
 void blur_both(const int32_t* rect) {
+  observe_framebuffer_write(finish_target().base, "combined blur");
   const FinishTarget& t = finish_target();
   int32_t x0, y0, x1, y1;
   if (rect) {

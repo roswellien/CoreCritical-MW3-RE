@@ -1,4 +1,5 @@
 #include "gamez/zrender/zrndr_span.h"
+#include "gamez/zrender/zrndr_blit.h"
 
 #include <cstring>
 
@@ -27,6 +28,8 @@ SpanState& span_state() { return g_span; }
 // FIX (A): the original fills spans by pointing ESP at them and pushing
 // (docs/blit-trick.md); same writes in the same order, through a pointer.
 void span_fill16(uint32_t color, uint32_t count) {
+  if (auto* observer = draw_observer())
+    observer->span(reinterpret_cast<const uint16_t*>(g_span.dest), count, static_cast<uint16_t>(color));
   uint8_t* p = g_span.dest + count * 2;    // ADD ESP, ECX twice
   const uint32_t pair = (color << 16) | color;
   uint32_t n = count;
@@ -42,6 +45,7 @@ void span_fill16(uint32_t color, uint32_t count) {
 }
 
 void span_textured16(uint32_t u, uint32_t v, int32_t count) {
+  observe_framebuffer_write(g_span.dest, "textured span");
   uint8_t* p = g_span.dest + static_cast<uint32_t>(count) * 2;
   uint32_t bytes = static_cast<uint32_t>(count) * 2;
   uint32_t mask = g_span.v_mask;

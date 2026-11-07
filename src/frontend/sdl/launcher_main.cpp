@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "frontend/sdl/crash_report.h"
+#include "frontend/sdl/data_folder_start.h"
 #include "frontend/sdl/launcher.h"
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
@@ -80,6 +82,7 @@ void read_config(const std::string& write_dir, sdlfe::LauncherOptions& o) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (sdlfe::crash_box_main(argc, argv)) return 0;
   sdlfe::LauncherOptions o;
   bool windowed = false, window_given = false, hidden_log = false;
   for (int i = 1; i < argc; ++i) {
@@ -109,8 +112,11 @@ int main(int argc, char** argv) {
     return 1;
   }
   const bool write_dir_given = !o.write_dir.empty();
-  if (o.write_dir.empty()) {
-    if (char* p = SDL_GetPrefPath("MicroProse", "MechWarrior 3")) o.write_dir = p, SDL_free(p);
+  o.write_dir_fixed = write_dir_given;
+  bool pointer = false;  // --write-dir wins; else the usual folder, or the one its pointer names
+  if (!write_dir_given && !sdlfe::data_folder_at_start(&o.write_dir, !hidden_log && !o.hidden, &pointer)) {
+    SDL_Quit();
+    return 1;
   }
   while (o.write_dir.size() > 1 && o.write_dir.back() == '/') o.write_dir.pop_back();
   std::error_code ec;
@@ -120,6 +126,7 @@ int main(int argc, char** argv) {
   if (!hidden_log && !sdlfe::log_to_file(o.write_dir, "mw3launcher") && !o.write_dir.empty())
     run_log.open(o.write_dir, "mw3launcher");
   std::printf("mw3launcher (MechWarrior 3 rebuild) %s, write dir %s\n", MW3_VERSION, o.write_dir.c_str());
+  if (!hidden_log && !o.write_dir.empty()) sdlfe::crash_report_install("mw3launcher", o.write_dir + "/mw3launcher.log", true);
   read_config(o.write_dir, o);
 #ifdef MW3_GAME_DIR
   if (!std::getenv("MW3_FIND_INSTALL")) o.more_installs.push_back(MW3_GAME_DIR);
@@ -128,7 +135,7 @@ int main(int argc, char** argv) {
   o.game_bin = game_bin();
   if (o.game_bin.empty()) std::printf("mw3launcher: no mw3 beside this program: MECHWARRIOR 3 cannot start\n");
   // The game gets this start's choices; a named write dir goes on too.
-  if (write_dir_given) o.game_args.push_back("--write-dir"), o.game_args.push_back(o.write_dir);
+  if (write_dir_given || pointer) o.game_args.push_back("--write-dir"), o.game_args.push_back(o.write_dir);
   if (windowed) o.game_args.push_back("--windowed");
   if (window_given) o.game_args.push_back("--window"), o.game_args.push_back(std::to_string(o.win_w) + "x" + std::to_string(o.win_h));
   if (!o.sound) o.game_args.push_back("--nosound");

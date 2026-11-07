@@ -32,7 +32,7 @@ if [ -z "$DEPS" ]; then
 fi
 NAME="MechWarrior 3"  # the app as installed (CFBundleName, the display name); the DMG keeps MW3-Rebuild-
 BUNDLE_ID="com.owenmorgan.mw3rebuild"
-VER="$(git describe --tags --always --dirty)"
+VER="$(git describe --tags --match 'v[0-9]*' --always --dirty)"
 OUT=build-mac/dist
 APP="$OUT/$NAME.app"
 

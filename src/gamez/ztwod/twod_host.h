@@ -1,10 +1,12 @@
 #pragma once
 #include <cstdarg>
 #include <cstdint>
+#include <memory>
 
 #include "gamez/zgame/unported.h"
 
 namespace zimg { struct Texture; }
+namespace platform { struct HudImage; }
 
 // What zTwoD (docs/twod.md) calls outside itself: zImage's image cache and the
 // named fonts of fonts.zrd, zVideo's 2D blit and screen grabs, zSound, the
@@ -52,6 +54,8 @@ struct TextMetrics {
 
 class Host : public zgame::Unported {
  public:
+  // Optional output-density text artwork. An empty result uses the native image.
+  virtual std::shared_ptr<const platform::HudImage> hud_text_image(const zimg::Texture*, float, uint16_t) { return {}; }
   // zImage.
   virtual zimg::Texture* image_get(const char* name);                 // 0x005179d0: cached, by name
   virtual zimg::Texture* image_release(zimg::Texture* image);         // 0x00517b10: returns 0

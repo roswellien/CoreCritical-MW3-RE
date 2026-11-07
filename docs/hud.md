@@ -1142,7 +1142,10 @@ HUD cases go through `CommandCalls::hud`, which the program answers in
 - **The target set** (0x0041d890, the mech's vt+0xc0): AiTarget's
   0x004d5e40, then on the view's mech TARGET's 0x00441780(1) and the
   target sound (0x00432990 with 0x18) on the new target's mech, kept at its
-  +0x618 (`program_hud_target_set`).
+  +0x618 (`program_hud_target_set`). The target keys (E, W and their Ctrl and
+  Shift forms, 0x004d5ee0..0x004d6a80) set through this too, so each new
+  target pulses, restarts the lock (the reticle's reset, 0.6 s) and plays its
+  mech's own sound (`mech_<name>`); in the port `TargetHooks::target_set`.
 - **The held zoom key** (the controls' update 0x00427d60): with the window
   not locked, the click whenever the window's hidden bit (+0x1514 bit 4)
   says the opposite of the key, then vt+0x60(-1) held or vt+0x64 let go,

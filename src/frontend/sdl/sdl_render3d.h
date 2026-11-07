@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 
 #include <map>
+#include <string>
 #include <vector>
 
 #include "frontend/sdl/sdl_fit.h"
@@ -16,11 +17,48 @@
 // SPIR-V and DXIL come with the Windows build.
 namespace sdlfe {
 
-class SdlRender3D : public platform::Render3D {
+enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
+
+struct CoreCriticalQuality {
+  std::string antialiasing = "off";
+  std::string anisotropy = "1";
+};
+
+struct PreparedModelBinding {
+  std::string chassis, lod, mesh, textures;
+};
+struct PreparedNormalBinding {
+  std::string chassis, lod, path;
+};
+struct CoreCriticalAssets {
+  bool render_thread = false;
+  std::string geometry = "legacy";
+  bool geometry_debug_normals = false;
+  std::string textures;
+  std::vector<PreparedModelBinding> models;
+  std::vector<PreparedNormalBinding> normals;
+  std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
+  bool empty() const {
+    return !render_thread && geometry == "legacy" && !geometry_debug_normals && textures.empty() &&
+           models.empty() && normals.empty() && lighting == "off" && sun_azimuth == "45" &&
+           sun_elevation == "35";
+  }
+};
+
+class FrameRenderer : public platform::Render3D {
+ public:
+  virtual bool ok() const = 0;
+  virtual void capture_next(const char* bmp_path) = 0;
+  virtual void flush() = 0;
+  virtual void viewport(int* x, int* y, int* w, int* h) const = 0;
+  virtual void set_shape(const FrameShape* shape) = 0;
+};
+
+class SdlRender3D : public FrameRenderer {
  public:
   SdlRender3D(SDL_GPUDevice* device, SDL_Window* window);
   ~SdlRender3D() override;
-  bool ok() const { return ok_; }
+  bool ok() const override { return ok_; }
   const char* driver_name() const override;
 
   int32_t create_texture(int width, int height, const uint8_t* rgba, uint8_t type) override;
@@ -40,13 +78,13 @@ class SdlRender3D : public platform::Render3D {
   void drop_frame() override;
 
   // Saves the next presented frame as a BMP instead of showing it.
-  void capture_next(const char* bmp_path) { capture_path_ = bmp_path; }
+  void capture_next(const char* bmp_path) override { capture_path_ = bmp_path; }
   // Draws what is collected so far (outside a scene), so a 2D layer goes on top.
-  void flush() {
+  void flush() override {
     if (!runs_.empty()) end_scene();
   }
-  void viewport(int* x, int* y, int* w, int* h) const { *x = vx_, *y = vy_, *w = vw_, *h = vh_; }
-  void set_shape(const FrameShape* s) { shape_ = s; }
+  void viewport(int* x, int* y, int* w, int* h) const override { *x = vx_, *y = vy_, *w = vw_, *h = vh_; }
+  void set_shape(const FrameShape* s) override { shape_ = s; }
 
  private:
   void upload(SDL_GPUTexture* t, int width, int height, const uint8_t* rgba);

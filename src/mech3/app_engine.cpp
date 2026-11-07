@@ -43,6 +43,7 @@
 #include "gamez/zinput/zinput.h"
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zmath/zmth_matrix.h"
+#include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_init.h"
 #include "gamez/zmodel/gmod_light.h"
@@ -54,6 +55,7 @@
 #include "gamez/zrender/zrndr_blit.h"
 #include "gamez/zsound/zsnd.h"
 #include "gamez/zsound/zsnd_cd.h"
+#include "gamez/zutil/zfix.h"
 #include "gamez/zutil/ztimer.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zrender/zrndr_tint.h"
@@ -620,6 +622,7 @@ int32_t GameEngine::video_open(uint32_t, int32_t hw, int32_t, int32_t) {
 // The screen at a size (FIX (A): DirectDraw's surfaces and the device made
 // for a mode): the 16-bit buffer, Render3D's viewport, the window's shape.
 void GameEngine::screen_size(int32_t w, int32_t h, int32_t frame_w, int32_t frame_h) {
+  if (p_.screen) p_.screen->cancel_overlay_16();
   width_ = w, height_ = h;
   // FIX (B): on a canvas (2D smaller than the frame) the dialogs' 640x480 frame centred on it.
   const bool canvas = frame_w > 0 && (frame_w != w || frame_h != h) && w >= 640 && h >= 480;
@@ -709,7 +712,10 @@ void GameEngine::video_lock() {
   t.format = 6;
   zrndr::set_finish_target(buffer_.data(), width_, height_, width_ * 2);  // 0x00558290, as 0x00576de0 sets it
 }
-void GameEngine::video_clear(Handle) { std::fill(buffer_.begin(), buffer_.end(), uint16_t{0}); }
+void GameEngine::video_clear(Handle) {
+  zrndr::observe_framebuffer_write(buffer_.data(), "frame clear");
+  std::fill(buffer_.begin(), buffer_.end(), uint16_t{0});
+}
 // 0x00576ea0: the back buffer to the screen.
 // A frame whose 3D scene was drawn (the Core state's) shows that instead.
 void GameEngine::video_flip(int32_t, int32_t, int32_t, int32_t) {
@@ -792,10 +798,13 @@ void GameEngine::video_clear_a(Handle rect) {
     for (int i = 0; i < 4; ++i) r[i] = static_cast<int32_t>(peek32(rect + 4 * i));
   zvid::depth_fill(r);
 }
-// 0x00576cf0: the 3D window cleared before the Core state draws (the sky
-// colour of the debug viewer: the window's clear colour is not traced).
+// 0x00576cf0: the frame before the Core state draws. The exe's colour clear is off here (0x005777f0), depth
+// only. FIX (bug): with bug fixes on, the fog's colour fills what no draw covers (zmod::fog_frame_fill).
 void GameEngine::video_clear_b(Handle) {
-  if (p_.render) p_.render->clear(true, 89, 115, 140);
+  if (!p_.render) return;
+  uint8_t r, g, b;
+  zmod::fog_frame_fill(&r, &g, &b);
+  p_.render->clear(zfix::options().bugs, r, g, b);
 }
 // 0x00579840: the cursor's on/off, the old state back. The menus draw their own.
 uint32_t GameEngine::video_show_cursor(uint32_t on) {
@@ -861,6 +870,7 @@ void GameEngine::image_draw(Handle image, int32_t x, int32_t y, int32_t key, Han
   auto it = grabs_.find(image);
   if (it == grabs_.end() || x || y || rect) return (void)Engine::image_draw(image, x, y, key, rect);
   const Grab& g = it->second;
+  zrndr::observe_framebuffer_write(buffer_.data(), "frame grab blit");
   if (g.width == width_ && g.height == height_ && g.pixels.size() == buffer_.size()) {
     buffer_ = g.pixels;
     return;
@@ -938,12 +948,14 @@ int32_t GameEngine::lock_back(zvid::Surface* s) {
   cover_colour_.resize(buffer_.size());
   zrndr::layer_cover() = {cover_alpha_.data(), cover_colour_.data(), kLayerKey};
   s->width = width_, s->height = height_, s->pitch = width_ * 2, s->pixels = buffer_.data();
+  if (p_.screen) p_.screen->begin_overlay_16(buffer_.data(), width_, height_, width_ * 2);
   return 0;
 }
 int32_t GameEngine::unlock_back(zvid::Surface*) {
   zrndr::layer_cover() = {};
   if (!kept_screen_.empty() &&
       std::all_of(buffer_.begin(), buffer_.end(), [](uint16_t p) { return p == kLayerKey; })) {
+    if (p_.screen) p_.screen->cancel_overlay_16();
     std::copy(kept_screen_.begin(), kept_screen_.end(), buffer_.begin());  // in place: the targets point at it
     kept_screen_.clear();
     buffer_is_screen_ = true;

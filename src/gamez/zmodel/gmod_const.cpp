@@ -111,6 +111,7 @@ Model* model_alloc() {
 // Mech3.exe 1.2 @ 0x00538a70. Every read error returns -1, which the caller
 // ignores.
 int read_model_data(std::FILE* f, Model& m) {
+  m.invalidate_render_geometry();
   bool ok = true;
   const uint32_t polys = m.count(0x10), verts = m.count(0x14), norms = m.count(0x18);
   const uint32_t morphs = m.count(0x1c), lights = m.count(0x20);
@@ -195,6 +196,7 @@ int read_models(std::FILE* f) {
 int model_release(Model* m) {
   if (!m) return 5;
   if (m->count(0xc) != 0) return 1;
+  m->invalidate_render_geometry();
   for (uint32_t i = 0; m->polygons && i < m->count(0x10); ++i) {
     Polygon& q = m->polygons[i];
     std::free(q.vertex_indices), std::free(q.normal_indices), std::free(q.uvs);
@@ -587,6 +589,7 @@ int drop_colinear(int32_t* n, float* p, std::vector<int32_t>* kept) {
 // with its vertex and normal indices; 1 when the model is full (the
 // record stays, uncounted).
 int add_record(Model& m, int32_t n, const PolygonAdd& a) {
+  m.invalidate_render_geometry();
   const int32_t count = count_at(m, 0x10);
   // new[] for the exe's realloc: its "Error adding poly to model3d" (line
   // 0x10f7) for a failed realloc has no counterpart.
@@ -631,6 +634,7 @@ void uv_gradient(float a0, float b0, float a1, float b1, float a2, float b2, flo
 // than 3 points gets its later UVs from the first three's gradient in the
 // plane its normal is most along (so the texture lies flat).
 void flatten_uvs(Model& m, int32_t index) {
+  m.invalidate_render_geometry();
   Polygon& q = m.polygons[index];
   const int32_t n = static_cast<int32_t>(q.flags & 0xff);
   if (!((q.material->flags & 1)) || n <= 3) return;
@@ -677,6 +681,7 @@ void snap_uvs(int32_t n, float* uv) {
 // flattened and snapped), colours (white without), scratch, material and
 // zone; the polygon counted.
 int fill_record(Model& m, int32_t n, const PolygonAdd& a) {
+  m.invalidate_render_geometry();
   const int32_t index = count_at(m, 0x10);
   Polygon& q = m.polygons[index];
   if ((a.material->flags & 1)) {
@@ -862,6 +867,7 @@ int model_add_polygon(Model* m, int32_t n, const PolygonAdd& a) {
 // (n - 1) & ~1 as n counts down) makes a new triangle appended to the
 // model. Only models with +0 = 0.
 void expand_strips(Model& m) {
+  m.invalidate_render_geometry();
   if (count_at(m, 0) != 0) return;
   const int32_t total = count_at(m, 0x10);
   for (int32_t i = 0; i < total; ++i) {
@@ -937,6 +943,7 @@ int model_scroll_tick(Model* m) {
   const float su = hget<float>(*m, 0x28), sv = hget<float>(*m, 0x2c);
   const bool no_u = !(su < 0.0f || su > 0.0f), no_v = !(sv < 0.0f || sv > 0.0f);
   if (no_u && no_v) return 0;
+  m->invalidate_render_geometry();
   const float dt = ztimer::state().dt;
   const float du = dt * su, dv = dt * sv;
   const int32_t n = static_cast<int32_t>(m->count(0x10));

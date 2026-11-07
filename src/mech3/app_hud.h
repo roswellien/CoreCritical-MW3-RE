@@ -77,6 +77,9 @@ struct HudReport {
   // target) since the last report; the MFD camera's place (0x00442900) from
   // its mech: across the ground, above its place, and along its front.
   int node_draws = 0, target_shown = 0;
+  // TARGET's pulse (+0x240c) and the target sounds asked for since the start.
+  float target_pulse = 0.0f;
+  int target_sounds = 0;
   // The radar's boundary lines (0x0043d920): each outline's corners, its
   // colour, the points its polyline holds now and whether it shows.
   int boundary_points[2] = {}, boundary_drawn[2] = {}, boundary_shown[2] = {};
@@ -139,6 +142,8 @@ int program_hud_pick_at(const float at[3], void** node, float* distance, float* 
 void program_hud_draw3d(float dt);   // the view target's vt+0xe4, 0x0041cd90: the HUD's Direct3D pass
 void program_hud_data(float dt);     // 0x0040f8d0's HUD part: the view target's HUD data update (0x0043c390)
 void program_hud_target_set(void* mech);  // 0x0041d890's HUD part: the view mech's TARGET on for its new target
+namespace ai { struct AiTarget; }
+void program_hud_target_set_by(const ai::AiTarget* t);  // the same, when t is the view's mech
 bool program_hud_aim(int32_t reticle[2], float point[3], bool* hit);
 // For the tests: the player's controls' look (-1..1 of the display's half
 // size; PlayerControls +0x140), as the mouse would set it.

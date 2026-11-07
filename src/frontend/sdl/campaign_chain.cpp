@@ -672,6 +672,7 @@ void CampaignChain::frame() {
       auto* d = dynamic_cast<mech3::DebriefScreen*>(e_.screen_of(st.end_win.screen_));
       if (d) {
         if (!failing_) ++wins_;
+        std::printf("mw3: chain debriefing rows after %s: %s\n", launched_.c_str(), mech3::debrief_rows(*d).c_str());
         std::printf("mw3: chain debriefing after %s: score %d, CONTINUE (%swins %d; the game now at %s)\n",
                     launched_.c_str(), d->score, failing_ ? "failed on purpose; " : "", wins_, mission_name().c_str());
         failing_ = false;

@@ -25,6 +25,7 @@
 #include "mech3/briefing.h"
 #include "mech3/debriefing.h"
 #include "mech3/lab_screen.h"
+#include "mech3/mech_objective.h"
 #include "mech3/mech_reader.h"
 #include "mech3/action_menu.h"
 #include "mech3/mech_skin.h"
@@ -937,6 +938,20 @@ std::vector<Engine::LanceMech> GameEngine::debrief_lance() {
     r.push_back(m);
   }
   return r;
+}
+// [0x0060994c], [0x00609950]: the mission's primary and secondary lists.
+std::vector<Engine::Objective> GameEngine::debrief_objectives(int32_t which) {
+  std::vector<Objective> r;
+  const Objectives& all = mission_objectives();
+  const ObjectiveGroup* g = which == 0 ? all.primary.get() : all.secondary.get();
+  if (!g) return r;
+  for (const auto& o : g->items) r.push_back({handle_of(o.get()), o->done != 0, o->visible != 0});
+  return r;
+}
+// Mech3.exe 1.2 @ 0x0045e080 (with 0): the description, without the nav point's name.
+const char* GameEngine::objective_text(Handle obj) {
+  const auto* o = static_cast<const mech3::Objective*>(object_of(obj));
+  return o && o->desc ? o->desc->c_str() : nullptr;
 }
 uint32_t GameEngine::player_allies() { return mech_player_allies(); }
 bool GameEngine::vehicle_armor(Handle v, LanceArmor* a) {

@@ -65,37 +65,30 @@ float fog_sphere(const float centre[3], float radius) {
   return clamp01(fog_amount);
 }
 
+float fog_at(const float v[3]) {
+  const Fog& f = fog();
+  const float d2 = horizontal_sq(v);
+  if (!(d2 > f.near_sq)) return 0.0f;
+  const double y_exact = world_y(v);
+  const float y = static_cast<float>(y_exact);
+  if (y_exact >= f.alt_high) return 0.0f;
+  if (!(d2 >= f.far_sq)) {
+    const double g = (double{approx_sqrt(d2)} - f.near_range) * f.inv_range;
+    float out = static_cast<float>(g);
+    if (y > f.alt_low) out = static_cast<float>((double{f.alt_high} - y) * f.inv_alt * g);
+    return clamp01(out);
+  }
+  if (!(y > f.alt_low)) return 1.0f;
+  return clamp01((double{f.alt_high} - y) * f.inv_alt);
+}
+
 // Mech3.exe 1.2 @ 0x00555a70. Walks the vertices last to first.
 int32_t fog_vertices(int32_t count) {
   const Fog& f = fog();
   int32_t any = 0;
   for (int32_t i = count - 1; i >= 0; --i) {
-    const float* v = g_calc.verts[i];
-    float& out = g_calc.factor[i];
-    const float d2 = horizontal_sq(v);
-    if (!(d2 > f.near_sq)) {
-      out = 0.0f;
-      continue;
-    }
-    const double y_exact = world_y(v);
-    const float y = static_cast<float>(y_exact);
-    if (y_exact >= f.alt_high) {
-      out = 0.0f;
-      continue;
-    }
-    if (!(d2 >= f.far_sq)) {
-      const double g = (double{approx_sqrt(d2)} - f.near_range) * f.inv_range;
-      out = static_cast<float>(g);
-      if (y > f.alt_low) out = static_cast<float>((double{f.alt_high} - y) * f.inv_alt * g);
-      out = clamp01(out);
-    } else if (!(y > f.alt_low)) {
-      out = 1.0f;
-      any = 1;
-      continue;
-    } else {
-      out = clamp01((double{f.alt_high} - y) * f.inv_alt);
-    }
-    if (out > kVisible) any = 1;
+    g_calc.factor[i] = fog_at(g_calc.verts[i]);
+    if (g_calc.factor[i] > kVisible) any = 1;
   }
   if (!any) return 0;
   // The device colour push, without the device-up test of zrndr::device_fog_color.

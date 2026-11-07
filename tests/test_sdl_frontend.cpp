@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <cctype>
 #include <cmath>
@@ -17,13 +18,13 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <fstream>
 #endif
 #include <set>
 #include <string>
 #include <vector>
 
 #include "check.h"
+#include "mech3/data_folder.h"
 #include "frontend/sdl/gdi_font_size.h"
 #include "frontend/sdl/sdl_fit.h"
 #include "frontend/sdl/launcher_notes.h"
@@ -39,6 +40,7 @@
 #include "frontend/sdl/sdl_vfw.h"
 #include "mech3/app_movie.h"
 #include "mech3/movie_shape.h"
+#include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zimage/zimg_library.h"
 #include "gamez/zutil/zfix.h"
@@ -256,6 +258,35 @@ TEST(sdl_input_t16000m_twist_reaches_rz) {
     }
     in.close(platform::Input::kJoystick);
   }
+  SDL_CloseJoystick(v);
+  SDL_DetachVirtualJoystick(id);
+}
+
+// A T.16000M's lever through its map and the popup's binding (Invert as
+// shown): the low end, its top, full ahead, the high end full reverse; a
+// slider stays in DirectInput's default 0..65535 (zInput sets none on them).
+TEST(sdl_input_t16000m_lever_up_is_ahead) {
+  EXPECT(SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD));
+  const SDL_JoystickID id = attach_stick("T.16000M", 4, 16, 1, 0x044f, 0xb10a);
+  SDL_Joystick* v = SDL_OpenJoystick(id);
+  sdlfe::SdlInput in;
+  in.hid_usages = [](SDL_Joystick*) { return sdlfe::hid_axis_usages(kT16000m, sizeof kT16000m); };
+  EXPECT(in.open(platform::Input::kJoystick));
+  joy_setup_as_zinput(in);
+  EXPECT(in.acquire(platform::Input::kJoystick) == 0);
+  const mech3::AxisBinding lever{7, -0.5f / 32767.5f, 1.0f, 0.0f};
+  float at[2] = {};
+  for (int k = 0; k < 2; ++k) {
+    SDL_SetJoystickVirtualAxis(v, 3, k == 0 ? -32768 : 32767);
+    SDL_UpdateJoysticks();
+    platform::JoyState st;
+    EXPECT(in.joystick_state(&st) == 0);
+    EXPECT(st.slider[0] == (k == 0 ? 0 : 65535));
+    at[k] = mech3::lever_throttle(lever, &st);
+  }
+  std::printf("  T.16000M lever: low end %.2f, high end %.2f\n", at[0], at[1]);
+  EXPECT(at[0] == 1.0f && at[1] == -1.0f);
+  in.close(platform::Input::kJoystick);
   SDL_CloseJoystick(v);
   SDL_DetachVirtualJoystick(id);
 }
@@ -999,7 +1030,7 @@ TEST(sdl_render_keeps_a_shown_frame) {
   EXPECT(w.init(true));
   w.create("mw3 hold test", 1280, 720);
   w.frame_size(1280, 720, 853, 480);
-  sdlfe::SdlRender3D* r = w.render();
+  auto* r = w.render();
   auto frame = [&](uint8_t red) {
     r->set_viewport(0, 0, 1280, 720);
     r->clear(true, red, 40, 200);
@@ -1025,13 +1056,28 @@ TEST(sdl_render_keeps_a_shown_frame) {
 // A mission's colour clear is off (start_mission): a new back buffer, at the first frame or after
 // a size change, still starts a defined black where no draw reaches. Metal's undefined memory
 // happened to be magenta; anything but the defined colour fails here.
+// FIX (bug), Owen 2026-11-04: what no draw covers in a mission takes the fog's colour; black with fog off.
+TEST(mission_frame_fill_is_the_fogs_colour) {
+  const zmod::Fog kept = zmod::fog();
+  const float tan[3] = {0.8f, 0.5f, 0.25f};
+  zmod::fog().on = 1;
+  for (int i = 0; i < 3; ++i) zmod::fog().color[i] = tan[i];
+  uint8_t r = 1, g = 1, b = 1;
+  zmod::fog_frame_fill(&r, &g, &b);
+  EXPECT(r == 204 && g == 127 && b == 63);
+  zmod::fog().on = 0;
+  zmod::fog_frame_fill(&r, &g, &b);
+  EXPECT(r == 0 && g == 0 && b == 0);
+  zmod::fog() = kept;
+}
+
 TEST(sdl_render_new_frame_is_defined_with_the_colour_clear_off) {
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) return;
   sdlfe::SdlWindow w;
   EXPECT(w.init(true));
   w.create("mw3 new frame test", 640, 480);
   w.frame_size(640, 480, 640, 480);
-  sdlfe::SdlRender3D* r = w.render();
+  auto* r = w.render();
   auto scene = [&](bool colour, uint8_t red, bool quad) {
     r->set_viewport(0, 0, 640, 480);
     r->clear(colour, red, 0, 0);
@@ -1793,12 +1839,55 @@ TEST(sdl_program_mouse_click_fires_the_laser) {
 // the installer's "Program" value is a folder or the exe's path; mw3.cfg's
 // install= replaced with the other lines kept; mw3.cfg's own first, then the
 // search, and nothing asked when asking is not allowed.
+// An install in any case (FIX (A), zutl::any_case): lower, upper and mixed, each
+// part found by its letters. On a case-insensitive disk the exact name answers,
+// and only the "none" lines test anything: docs/linux.md, Checking runs it on Linux.
+TEST(sdl_install_any_case_finds_the_files) {
+  const std::string dir = std::string(MW3_TEST_TMP) + "/sdl_any_case";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  auto file = [&](const std::string& rel) {
+    std::filesystem::create_directories(std::filesystem::path(dir + "/" + rel).parent_path(), ec);
+    std::ofstream(dir + "/" + rel) << "x";
+  };
+  file("low/zbd/reader.zbd"), file("low/mech3msg.dll");
+  file("UP/ZBD/READER.ZBD"), file("UP/VIDEO/INTRO.AVI");
+  file("Mix/Zbd/Reader.zbd");
+  EXPECT(sdlfe::install_valid(dir + "/low"));
+  EXPECT(sdlfe::install_valid(dir + "/UP"));
+  EXPECT(sdlfe::install_valid(dir + "/Mix"));
+  EXPECT(!zutl::any_case(dir + "/low", "Mech3Msg.dll").empty());
+  EXPECT(!zutl::any_case(dir + "/UP", "video/intro.avi").empty());
+  EXPECT(!zutl::any_case(dir + "/UP", "video").empty());
+  EXPECT(zutl::any_case(dir + "/low", "Mech3.exe").empty());
+  EXPECT(zutl::any_case(dir + "/low", "zbd/none/reader.zbd").empty());
+  // Through the mounts, each folder keeping its order: an earlier mount's copy in another case wins.
+  file("a/ZBD/One.zbd"), file("b/zbd/one.zbd");
+  const zutl::Mounts saved = zutl::mounts();
+  zutl::mounts() = {};
+  zutl::mount(dir + "/a"), zutl::mount(dir + "/b");
+  zutl::mount(dir + "/UP/zbd");  // a mount named by the game, in the install's other case
+  const bool in_named_mount = !zutl::find("reader.zbd").empty();
+  const std::string found = zutl::find("zbd\\one.zbd");
+  const bool other_missing = zutl::find("zbd\\two.zbd").empty();
+  zutl::mounts() = saved;
+  EXPECT(found.find("/a/") != std::string::npos);
+  EXPECT(other_missing);
+  EXPECT(in_named_mount);
+}
+
 TEST(sdl_install_is_found_and_saved) {
   namespace fs = std::filesystem;
   const std::string game = MW3_GAME_DIR, tmp = std::string(MW3_TEST_TMP) + "/sdl_install";
   fs::remove_all(tmp);
   fs::create_directories(tmp + "/half/zbd");
   std::string missing;
+  // The search tries this machine's own candidates first, so one with MW3
+  // installed (the registry, the default folders) finds that one here.
+  std::string installed;
+  for (const std::string& d : sdlfe::install_candidates())
+    if (installed.empty() && sdlfe::install_valid(d)) installed = d;
+  if (!installed.empty()) std::printf("  (MW3 is installed here: the search finds %s)\n", installed.c_str());
   if (fs::exists(game + "/zbd/reader.zbd")) {
     EXPECT(sdlfe::install_valid(game));
     EXPECT(sdlfe::install_of_pick(game + "/Mech3.exe") == game);
@@ -1806,11 +1895,12 @@ TEST(sdl_install_is_found_and_saved) {
     EXPECT(sdlfe::install_of_pick(game) == game);                        // a folder: itself
     bool searched = true;
     EXPECT(sdlfe::find_install(game, {}, false, &searched) == game && !searched);  // mw3.cfg's, still there
-    EXPECT(sdlfe::find_install(tmp + "/gone", {game}, false, &searched) == game && searched);
+    EXPECT(sdlfe::find_install(tmp + "/gone", {game}, false, &searched) == (installed.empty() ? game : installed) &&
+           searched);
   }
   EXPECT(!sdlfe::install_valid(tmp, &missing) && missing == "zbd\\ and video\\");
   EXPECT(!sdlfe::install_valid(tmp + "/half", &missing) && missing == "zbd\\reader.zbd and video\\");
-  EXPECT(sdlfe::find_install(tmp + "/gone", {tmp + "/half"}, false, nullptr).empty());  // none, and no dialog
+  EXPECT(sdlfe::find_install(tmp + "/gone", {tmp + "/half"}, false, nullptr) == installed);  // else none, no dialog
 #if defined(_WIN32)
   EXPECT(sdlfe::install_of_program_value("\"C:\\Games\\MW3\\MECH3.EXE\"") == "C:\\Games\\MW3");
   EXPECT(sdlfe::install_of_program_value("C:\\Games\\MW3\\") == "C:\\Games\\MW3");
@@ -1890,6 +1980,29 @@ TEST(sdl_program_frames_end_a_paused_mission) {
 // A check run (--hidden --frames) with mw3.cfg's install gone and the search
 // finding none (MW3_FIND_INSTALL=1: not the development copy) quits with the
 // report, never a dialog; with the development copy it starts.
+// A crash says why in the log (crash_report.h), for a player's report. The
+// test's run stops at the log line, with no box and no real crash.
+TEST(sdl_program_crash_says_why_in_the_log) {
+  const std::string dir = std::string(MW3_TEST_TMP) + "/sdl_crash_report";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  std::filesystem::create_directories(dir, ec);
+  setenv("MW3_CRASH_TEST", "1", 1);
+  std::vector<std::string> args = {MW3_BIN, "--nosound", "--write-dir", dir};
+  std::vector<char*> argv;
+  for (std::string& a : args) argv.push_back(a.data());
+  argv.push_back(nullptr);
+  pid_t pid = 0;
+  const int spawned = posix_spawn(&pid, MW3_BIN, nullptr, nullptr, argv.data(), environ);
+  unsetenv("MW3_CRASH_TEST");
+  EXPECT(spawned == 0);
+  int status = 0;
+  EXPECT(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 70);
+  std::ifstream in(dir + "/mw3.log");
+  const std::string log((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT(log.find("mw3: crashed: segmentation fault") != std::string::npos);
+}
+
 TEST(sdl_program_check_runs_never_ask_for_the_install) {
   const std::string dir = std::string(MW3_TEST_TMP) + "/sdl_find_install_write";
   std::filesystem::remove_all(dir);
@@ -1983,8 +2096,8 @@ TEST(sdl_window_shape_maps_the_mouse_through_the_frame) {
   const sdlfe::FrameShape v640{640, 480, true};
   const sdlfe::FitRect r43 = sdlfe::fit_rect(1280, 960, v640);
   EXPECT(r43.x == 0 && r43.y == 0 && r43.w == 1280 && r43.h == 960);
-  // 21:9 and 32:9 screens: mode 16 is 16:9 at their height (vmode_size),
-  // pillarboxed and centred (resolution.md section 10).
+  // Fixed 16:9 modes still pillarbox on wider screens. Native custom modes
+  // instead use their full shape (resolution_ultrawide_hud_and_pointer_share_the_frame).
   const sdlfe::FitRect r219 = sdlfe::fit_rect(3440, 1440, sdlfe::FrameShape{2560, 1440, true, 853, 480});
   EXPECT(r219.x == 440 && r219.y == 0 && r219.w == 2560 && r219.h == 1440);
   const sdlfe::FitRect r329 = sdlfe::fit_rect(3840, 1080, sdlfe::FrameShape{1920, 1080, true, 853, 480});
@@ -2420,6 +2533,9 @@ TEST(sdl_program_campaign_chain) {
   std::printf("  vehicles killed: %d salvaged their weapons, %d none on the coin, %d unarmed\n", veh_weapons, veh_coin, veh_unarmed);
   EXPECT(veh_weapons >= 5 && veh_weapons + veh_coin > veh_unarmed);
   EXPECT(lk.find("mw3: chain done at op 2 mission 1 after 4 wins") != std::string::npos);
+  // The debriefing's rows are the mission's objectives, scored (campaign.md section 3).
+  EXPECT(lk.find("rows after op 1 mission 1: Primary Objectives | Take Com. Center Offline | 2500 | ") != std::string::npos);
+  EXPECT(lk.find("Secondary Objectives | Destroy Smoke Jaguar Forces | ") != std::string::npos);
   EXPECT(lk.find("mw3: 0 original functions reached that are not ported") != std::string::npos);
   // The retries (campaign.md section 14, The retry): a lost mission is
   // briefed again (0x0047ac20 reads the loss), its animations reset
@@ -2555,6 +2671,21 @@ TEST(sdl_program_action_chain) {
   for (size_t at = 0; (at = log.find("mw3: modes case ", at)) != std::string::npos; ++at)
     if (log.compare(log.find(':', at + 16), 7, ": world") != 0) std::printf("  %s\n", log.substr(at + 11, log.find('\n', at) - at - 11).c_str());
   EXPECT(won == 12 && cleared == 8 && lost == 20 && not_won == 0);  // 12 cases end on their objectives, 8 on waves
+  // A round of waves left by QUIT (not ended, so a round less): 1000 a wave
+  // and a hundred for each round left at each, by the wave it stopped on.
+  int wave_scores = 0, wave_scores_ok = 0;
+  for (size_t at = 0; (at = log.find(" cleared at core frame", at)) != std::string::npos; ++at) {
+    const size_t start = log.rfind("waves ", at), rows = log.find("debriefing rows", at), eol = log.find('\n', rows);
+    int first = 0, defeated = 0, total = -1;
+    std::sscanf(log.c_str() + start, "waves %d", &first);
+    const std::string line = log.substr(rows, eol - rows);
+    if (const size_t m = line.find("Mechs Defeated | "); m != std::string::npos) defeated = std::atoi(line.c_str() + m + 17);
+    if (const size_t m = line.find("Mission Total | "); m != std::string::npos) total = std::atoi(line.c_str() + m + 16);
+    ++wave_scores;
+    wave_scores_ok += total == 2000 + (first + 1) * 100 + first * 100 + defeated;
+  }
+  std::printf("  %d rounds of waves, %d scored by their waves\n", wave_scores, wave_scores_ok);
+  EXPECT(wave_scores == 8 && wave_scores_ok == 8);
   EXPECT(log.find("mw3: modes done: 20 cases, 20 tallied as expected, 0 not") != std::string::npos);
   EXPECT(log.find("mw3: 0 original functions reached that are not ported") != std::string::npos);
 }
@@ -3944,7 +4075,8 @@ TEST(launcher_first_start_notes) {
   if (counts) {
     EXPECT(v10[0].find("No music yet") != std::string::npos && v10[0].find("ADD FROM MY DISC") != std::string::npos &&
            v10[0].find("in M as track02") != std::string::npos && v10[0].find("movies") == std::string::npos);
-    EXPECT(odd[0].find("neither") != std::string::npos && odd[0].find("patch") == std::string::npos &&
+    EXPECT(odd[0].find("modded") != std::string::npos && odd[0].find("data mods") != std::string::npos &&
+           odd[0].find("Mech3.exe") != std::string::npos && odd[0].find("1.2") == std::string::npos &&
            odd[0].find("SETUP") == std::string::npos);  // the 1.2 patch is built in now
     EXPECT(cd[0].find("no movies") != std::string::npos && cd[0].find("ADD FROM MY DISC") != std::string::npos &&
            cd[0].find("music") == std::string::npos);
@@ -4265,6 +4397,72 @@ TEST(sdl_program_launcher_starts_mw3_as_its_own_program) {
          r.args[7] == "--ready-file");
   EXPECT(r.exited && r.game_alive && r.game_finished);
   EXPECT(has(r.log, "the game's first frame") && has(r.log, "the launcher closes") && !has(r.log, "MechWarrior 3 exited"));
+}
+
+// In an AppImage the launcher waits for the game: its end would unmount what
+// the game is running from (docs/linux.md, Packaging).
+TEST(sdl_program_launcher_waits_for_the_game_in_an_appimage) {
+  const LauncherRun r = run_launcher_with("launcher_game_image", "READY\nsleep 2", nullptr, {{"APPIMAGE", "/x.AppImage"}});
+  EXPECT(r.exited && !r.game_alive && r.game_finished);
+  EXPECT(has(r.log, "the game's first frame") && has(r.log, "MechWarrior 3 exited (0)"));
+}
+
+// The data folder elsewhere (docs/program.md): the three programs' starts with
+// a pointer. The launcher's move, end to end, hidden.
+TEST(sdl_program_data_folder_pointer_and_move) {
+  const std::string dir = std::string(MW3_TEST_TMP) + "/data_folder_program";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  const std::string usual = dir + "/usual", gone = dir + "/gone/mine", to = dir + "/drive/mine";
+  std::filesystem::create_directories(usual, ec);
+  setenv("MW3_USUAL_FOLDER", usual.c_str(), 1);
+  auto wait = [](pid_t pid) {
+    int status = 0;
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  };
+  auto text = [](const std::string& path) {
+    std::ifstream in(path);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  };
+  // A pointer to a missing drive: said, no fresh folder, not the usual one in its place.
+  std::ofstream(usual + "/" + mech3::data_folder::kPointer) << gone << "\n";
+  const std::string log = dir + "/out.log";
+  EXPECT(wait(spawn_bin(MW3_BIN, {"--hidden", "--nosound"}, log)) == 1);
+  EXPECT(has(text(log), "data folder is not there") && !std::filesystem::exists(dir + "/gone"));
+  EXPECT(wait(spawn_launcher({"--hidden", "--nosound", "--window", "640x480"}, log)) == 1);
+  EXPECT(!std::filesystem::exists(dir + "/gone") && !std::filesystem::exists(usual + "/mw3launcher.log"));
+  // --write-dir wins over it.
+  setenv("MW3_START_ONLY", "1", 1);
+  const std::string named = dir + "/named";
+  EXPECT(wait(spawn_bin(MW3_BIN, {"--hidden", "--nosound", "--write-dir", named}, log)) == 0);
+  unsetenv("MW3_START_ONLY");
+  EXPECT(std::filesystem::exists(named + "/mw3.log") && !std::filesystem::exists(dir + "/gone"));
+  // No pointer, the launcher's move and its remove: the folder switched, the old copy gone.
+  std::filesystem::remove(usual + "/" + mech3::data_folder::kPointer, ec);
+  std::ofstream(usual + "/mw3.cfg") << "install=" << MW3_GAME_DIR << "\n";
+  std::filesystem::create_directories(usual + "/pilots", ec);
+  std::ofstream(usual + "/pilots/a.pil") << "pilot";
+  setenv("MW3_LAUNCHER_MOVE_TO", to.c_str(), 1);
+  setenv("MW3_LAUNCHER_MOVE_OLD", "remove", 1);
+  setenv("MW3_LAUNCHER_FRAMES", "90", 1);
+  EXPECT(wait(spawn_launcher({"--hidden", "--nosound", "--window", "640x480"}, log)) == 0);
+  unsetenv("MW3_LAUNCHER_MOVE_TO");
+  unsetenv("MW3_LAUNCHER_MOVE_OLD");
+  unsetenv("MW3_LAUNCHER_FRAMES");
+  EXPECT(text(usual + "/" + mech3::data_folder::kPointer) == to + "\n");
+  EXPECT(text(to + "/pilots/a.pil") == "pilot" && !std::filesystem::exists(usual + "/pilots"));
+  // The next launcher reads the pointer and passes the folder to the game.
+  const std::string game = dir + "/game.sh", args = dir + "/args.txt";
+  std::ofstream(game) << "#!/bin/sh\necho \"$@\" > " << args << "\nexit 0\n";
+  std::filesystem::permissions(game, std::filesystem::perms::owner_all, ec);
+  setenv("MW3_GAME_BIN", game.c_str(), 1);
+  setenv("MW3_NO_IMPORT", "1", 1);
+  EXPECT(wait(spawn_launcher({"--hidden", "--nosound", "--window", "640x480", "--launcher-play"}, log)) == 0);
+  unsetenv("MW3_GAME_BIN");
+  unsetenv("MW3_NO_IMPORT");
+  EXPECT(text(args).find("--write-dir " + to) != std::string::npos);
+  EXPECT(std::filesystem::exists(to + "/mw3launcher.log"));
+  unsetenv("MW3_USUAL_FOLDER");
 }
 
 TEST(sdl_program_launcher_stays_when_the_game_fails_or_is_slow) {
@@ -4630,3 +4828,20 @@ TEST(sdl_program_movies_keep_their_shape_on_a_wide_screen) {
 }
 #endif
 #endif
+
+TEST(sdl_render3d_core_critical_defaults_stay_opt_in) {
+  const sdlfe::RendererBackend backend = sdlfe::RendererBackend::sdl;
+  const sdlfe::CoreCriticalQuality quality{};
+  const sdlfe::CoreCriticalAssets assets{};
+  const sdlfe::HudOptions hud{};
+  EXPECT(backend == sdlfe::RendererBackend::sdl);
+  EXPECT(quality.antialiasing == "off" && quality.anisotropy == "1");
+  EXPECT(!assets.render_thread && assets.geometry == "legacy" &&
+         !assets.geometry_debug_normals);
+  EXPECT(assets.textures.empty() && assets.models.empty() &&
+         assets.normals.empty());
+  EXPECT(assets.lighting == "off" && assets.sun_azimuth == "45" &&
+         assets.sun_elevation == "35");
+  EXPECT(assets.empty());
+  EXPECT(hud.mode == "original" && hud.artwork.empty() && hud.text);
+}

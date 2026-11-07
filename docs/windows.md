@@ -45,6 +45,121 @@ the Mac's byte for byte, the `.m1v` differ by FFmpeg build but play either
 way; `--cue` on his MW3 disc image gives track02 (191.9 s) and track03
 (186.1 s).
 
+## Core Critical Vulkan development backend
+
+Configure the Windows x64 build with `-DMW3_CORE_CRITICAL_VULKAN=ON`,
+Vulkan headers, and `glslangValidator` in addition to the usual SDL and
+Direct3D 12 build tools. CMake accepts `MW3_VULKAN_HEADERS` as the include
+directory containing `vulkan/vulkan_core.h` and `GLSLANG` as the path to the
+shader compiler. It compiles the renderer's GLSL at build time.
+
+Build `mw3` and `mw3ccvulkan_checks`. Run the asset-free fixture with
+`ctest --test-dir build-win -R '^mw3ccvulkan(_wsi)?_checks$' --output-on-failure`.
+Set `MW34_VK_VALIDATION=1` and point `VK_LAYER_PATH` at the installed
+Khronos validation layer when checking a development build.
+
+```powershell
+& .\build-win\mw3.exe --cc-vulkan --window 960x720 --install $game --assets $fonts --write-dir $trial --ready-file "$trial/ready" --original --no-mods --no-import --no-vfw-helper -nofmv
+```
+
+Use a verified retail 1.2 install for `$game`, the Windows Fonts directory
+for `$fonts`, and a fresh local directory for `$trial`. The windowed trial
+renders with Vulkan and presents through the same GPU's DXGI swapchain.
+It requires Vulkan 1.1 and a device that supports Win32 external memory and
+keyed mutex sharing with DXGI.
+
+Replace `--cc-vulkan` with `--cc-vulkan-wsi` to use an SDL-created Vulkan
+surface and a native Vulkan swapchain. This route selects a graphics queue
+that can present to that surface before creating scene resources. It requires
+Vulkan 1.1 and surface/swapchain support, without DXGI interop. A failure reports
+the surface or device error. The two Core Critical routes are explicit choices;
+omitting both switches selects the upstream renderer. Both trials require a
+window and bypass the launcher. Fullscreen toggling is disabled during the trial.
+
+The native WSI fixture checks scene operations, hidden/minimized readiness,
+restore, and repeated swapchain resizing on a desktop with a Vulkan device.
+
+Add `--cc-aa fxaa --cc-af 16` to enable world FXAA and 16x anisotropic
+filtering. `--cc-aa` accepts `off` (default), `fxaa`, `ssaa2` (a 2x1 sample
+grid) and `ssaa4` (2x2). `--cc-af` accepts `1` (default/off), `2`, `4`, `8`
+and `16`. These are process-start options for either Core Critical presenter;
+they require a restart to change. The upstream backend rejects enhanced requests.
+Unsupported values or GPU capabilities fail visibly.
+
+FXAA runs on world color before sharp HUD composition. AF uses generated mip
+levels and anisotropic world samplers; HUD sampling stays at level zero.
+SSAA resolves to the current SDL output dimensions, including readbacks and
+held frames. Resize recreates the target at its new extent. Run the quality
+fixtures with `ctest --test-dir build-win -R '^mw3ccvulkan_quality_' --output-on-failure`.
+Run the upstream comparison with `SDL_GPU_DRIVER=direct3d12`, a separate
+profile, and `--no-launcher` in place of the Core Critical switch.
+
+Prepared visuals can be selected explicitly, using local Core Critical mesh and
+albedo components:
+
+```powershell
+& .\build-win\mw3.exe --cc-vulkan-wsi --window 960x720 --cc-model madcat 0 $meshLod0 $texturesLod0 --cc-model madcat 1 $meshLod1 $texturesLod1 --cc-aa fxaa --cc-af 16 --install $game --write-dir $trial --no-launcher
+```
+
+`--cc-model CHASSIS LOD MESH BWTEX1` is repeatable. It binds the named native
+library entry (`mech_<chassis>.flt` or `mech_<chassis>_1.flt`) to a validated
+BWMESH1–6/BWTEX1 pair. Rigid batches use immutable Vulkan geometry and current
+native controls; donor rigs retain Core Critical's visual retargeting solver.
+Mixed-bone seams and near/far-plane crossings use the adapter's CPU deformation
+and clipping path. Original model production, animation and gameplay continue;
+only the selected visual geometry is replaced. Optional `--cc-textures BWTEX1`
+replaces exact named native albedos, retaining the native alpha mask on reload.
+Invalid files, duplicate selections and incompatible control bindings fail with
+an error. No asset payload is bundled with the executable or this repository.
+
+This is component admission, not admission of a complete installed pack. BWSFM1
+surfaces, skin selection and pack capability negotiation are still pending.
+Morphing, non-unit node opacity, overlay, detached and changed source meshes
+retain their native geometry; those damage/cockpit paths need further parity
+validation. With lighting off, prepared geometry retains the existing directional
+visual shade and native fog samples. Per-pixel lighting and normal maps are opt-in below.
+
+Run asset-free reader and GPU fixtures with
+`ctest --test-dir build-win -R '^(mw3prepared_checks|mw3ccvulkan_prepared_)' --output-on-failure`.
+The reader fixture also builds without SDL on Linux and macOS. The Core Critical
+GPU adapter remains Windows-only; these portable readers do not establish a
+Linux, macOS or Android renderer port.
+
+Append `--cc-lighting normal --cc-model-normals madcat 0 $normalsLod0
+--cc-model-normals madcat 1 $normalsLod1` to the prepared-model command to use
+the existing BWNRM2 sidecars. Normal selections are repeatable and must match a
+selected chassis/LOD. Their batch counts, content hashes and albedo material names
+must match; `UINT32_MAX` is an explicit absent-map binding. The reader accepts
+BWNRM2 linear RGBA8 tangent normals, preserves authored alpha and rejects other
+normal formats. Its FNV content key checks payload consistency, not publisher identity.
+
+`--cc-lighting` accepts `off` (default, existing visual shade), `flat` (per-pixel
+directional lighting without normal perturbation), and `normal` (the same lighting
+with selected normal maps). Normal mode requires a normal selection; explicitly
+absent bindings retain geometric lighting. Selected files are validated even when
+lighting is off. Configuration belongs to each renderer and survives scene reload.
+
+`--cc-sun AZIMUTH ELEVATION` sets angles in degrees: azimuth 0 points toward world
++X, 90 toward +Z, and positive elevation toward +Y. Supported ranges are -360..360
+and 1..89. The default is 45/35. This affects selected prepared models; native world,
+cockpit and HUD lighting remain on their existing paths. It does not enable sky,
+weather, local lights or shadow maps.
+
+The lit path keeps true world positions separate from inverse-transpose normals.
+CPU-clipped and donor-deformed batches retain smooth normals in a transient Vulkan
+stream. Mirrored UVs retain handedness; singular UV charts and zero tangent vectors
+retain geometric lighting. Native fog and sharp HUD composition are preserved.
+
+Run the material GPU checks with
+`ctest --test-dir build-win -R '^mw3ccvulkan_material_' --output-on-failure`.
+The checks cover both presenters, FXAA/AF and SSAA, neutral/absent/invalid tangent
+vectors, singular/mirrored UVs, nonuniform transforms, depth clipping, native fog,
+HUD composition, instance isolation and resource reload. Per-pixel materials need
+further model/damage/LOD calibration; this is not full pack or release validation.
+
+The adapter and renderer sources derive from the Core Critical project.
+Their MIT notice is in [src/frontend/core_critical/LICENSE](../src/frontend/core_critical/LICENSE).
+
 ## The Indeo helper
 
 `tools\windows\build_indeo.cmd` builds `build-win\mw3indeo.exe`, the

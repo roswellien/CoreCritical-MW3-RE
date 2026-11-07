@@ -1,4 +1,5 @@
 #include "gamez/zrender/zrndr_ripple.h"
+#include "gamez/zrender/zrndr_blit.h"
 
 #include <cmath>
 #include <cstring>
@@ -172,6 +173,7 @@ RippleState& ripple_state() { return g_ripple; }
 void ripple(int32_t x, int32_t y, int32_t inner, int32_t outer, int32_t amplitude, float wavelength, float phase,
             const int32_t* clip, X87 precision) {
   if (!finish_target().base) return;
+  observe_framebuffer_write(finish_target().base, "ripple");
   if (precision == X87::k24) ripple_at<X87::k24>(x, y, inner, outer, amplitude, wavelength, phase, clip);
   else ripple_at<X87::k53>(x, y, inner, outer, amplitude, wavelength, phase, clip);
 }

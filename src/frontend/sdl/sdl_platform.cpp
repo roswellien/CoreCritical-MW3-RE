@@ -1,8 +1,15 @@
 #include "frontend/sdl/sdl_platform.h"
 
+#ifdef CC_MW3_RE_ADAPTER
+#include "frontend/core_critical/frame_renderer.hpp"
+#include <exception>
+#endif
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
+#include <algorithm>
 
 #include "frontend/sdl/sdl_input.h"
 #include "gamez/zgame/zgameapp.h"
@@ -11,8 +18,30 @@
 
 namespace sdlfe {
 
-bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt) {
+bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt, RendererBackend backend,
+                     const CoreCriticalQuality& quality, const CoreCriticalAssets& assets) {
+  if (backend == RendererBackend::sdl &&
+      (quality.antialiasing != "off" || quality.anisotropy != "1" || !assets.empty()))
+    return std::fprintf(stderr, "mw3: Core Critical quality requires a Core Critical Vulkan backend\n"), false;
   hidden_ = hidden_for_good;
+  if (backend != RendererBackend::sdl) {
+#ifdef CC_MW3_RE_ADAPTER
+    if (adopt) return std::fprintf(stderr, "mw3: Core Critical Vulkan requires its own window\n"), false;
+    auto flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
+    if (backend == RendererBackend::core_critical_wsi) flags |= SDL_WINDOW_VULKAN;
+    window_ = SDL_CreateWindow("MechWarrior 3", 1280, 960, flags);
+    if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
+    try {
+      render_ = cc_mw3_re::make_renderer(window_, backend, quality, assets);
+      render_->set_shape(&shape_);
+      return render_->ok();
+    } catch (const std::exception& error) {
+      return std::fprintf(stderr, "mw3: Core Critical Vulkan setup: %s\n", error.what()), false;
+    }
+#else
+    return std::fprintf(stderr, "mw3: this build has no Core Critical Vulkan adapter\n"), false;
+#endif
+  }
   // Metal, Direct3D 12 or Vulkan (SPIR-V only where the build has it).
   SDL_GPUShaderFormat formats = SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_DXIL;
 #if defined(MW3_HAVE_SPIRV)
@@ -25,6 +54,19 @@ bool SdlWindow::init(bool hidden_for_good, SDL_Window* adopt) {
   if (!window_) return std::fprintf(stderr, "mw3: SDL_CreateWindow: %s\n", SDL_GetError()), false;
   if (!SDL_ClaimWindowForGPUDevice(device_, window_))
     return std::fprintf(stderr, "mw3: SDL_ClaimWindowForGPUDevice: %s\n", SDL_GetError()), false;
+  // Diagnostic only: compare backend throughput without the default vblank cap.
+  const char* immediate = SDL_getenv("MW3_BENCHMARK_IMMEDIATE");
+  if (immediate && std::strcmp(immediate, "1") == 0) {
+    if (!SDL_WindowSupportsGPUPresentMode(device_, window_, SDL_GPU_PRESENTMODE_IMMEDIATE) ||
+        !SDL_SetGPUSwapchainParameters(device_, window_, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
+                                      SDL_GPU_PRESENTMODE_IMMEDIATE)) {
+      std::fprintf(stderr, "mw3 benchmark: immediate presentation unavailable: %s\n", SDL_GetError());
+      return false;
+    }
+    std::printf("mw3 benchmark: backend=%s adapter=%s present=immediate\n",
+                SDL_GetGPUDeviceDriver(device_),
+                SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device_), SDL_PROP_GPU_DEVICE_NAME_STRING, "unknown"));
+  }
   render_ = std::make_unique<SdlRender3D>(device_, window_);
   render_->set_shape(&shape_);
   return render_->ok();
@@ -39,6 +81,7 @@ SdlWindow::~SdlWindow() {
 
 uint32_t SdlWindow::create(const std::string& title, int width, int height) {
   if (!window_) return 0;
+  if (render_) render_->drain();
   windowed_w_ = width, windowed_h_ = height;
   if (fullscreen_) return SDL_SetWindowTitle(window_, title.empty() ? "MechWarrior 3" : title.c_str()), kHwnd;
   SDL_SetWindowSize(window_, width, height);
@@ -52,6 +95,7 @@ void SdlWindow::set_title(const std::string& title) {
 }
 void SdlWindow::show() {
   if (!window_ || hidden_) return;
+  if (render_) render_->drain();
   if (fullscreen_) SDL_SetWindowFullscreen(window_, true), SDL_SyncWindow(window_);
   // Brought forward and given the keyboard (the Mac's app activated, as SDL
   // does by default; Windows' foreground taken even from another process),
@@ -63,6 +107,7 @@ void SdlWindow::show() {
 // (pillarboxed in a window of another shape), and a window opened without
 // --window takes it (sdl_fit.h default_window).
 void SdlWindow::frame_size(int width, int height, int canvas_w, int canvas_h) {
+  if (render_) render_->drain();
   shape_.frame_w = width, shape_.frame_h = height;
   shape_.canvas_w = canvas_w, shape_.canvas_h = canvas_h;
   shape_.fit = zfix::options().any_resolution;
@@ -93,6 +138,7 @@ bool SdlWindow::first_start_size(int* w, int* h) {
 }
 void SdlWindow::switch_fullscreen(bool on) {
   if (!window_ || hidden_ || on == fullscreen_) return;
+  if (render_) render_->drain();
   fullscreen_ = on;
   if (on) {
     SDL_SetWindowFullscreen(window_, true);
@@ -216,9 +262,32 @@ void SdlScreen2D::present_16(const uint16_t* pixels, int width, int height, int 
   render_->set_viewport(vx, vy, vw, vh);
 }
 
+SdlScreen2D::SdlScreen2D(FrameRenderer* render, const HudOptions& options, SDL_Window* window, const FrameShape* shape)
+    : render_(render), hud_window_(window), hud_shape_(shape) {
+  if (options.mode != "original" && options.mode != "core-critical")
+    throw std::runtime_error("--cc-hud supports original or core-critical");
+  if (options.mode == "core-critical") {
+    if (!render_) throw std::runtime_error("Core Critical HUD requires a renderer");
+    hud_ = std::make_unique<GpuHud>(*render_, options);
+  }
+}
+SdlScreen2D::~SdlScreen2D() = default;
+void SdlScreen2D::begin_overlay_16(const uint16_t* target, int width, int height, int pitch) {
+  if (!hud_) return;
+  int output_height = height;
+  if (hud_window_) {
+    int output_width = 0;
+    SDL_GetWindowSizeInPixels(hud_window_, &output_width, &output_height);
+    if (hud_shape_ && hud_shape_->fit && hud_shape_->frame_w > 0)
+      output_height = std::min(output_height, int(int64_t(output_width) * hud_shape_->frame_h / hud_shape_->frame_w));
+  }
+  hud_->begin(target, width, height, pitch, output_height);
+}
+void SdlScreen2D::cancel_overlay_16() { if (hud_) hud_->cancel(); }
 void SdlScreen2D::overlay_16(const uint16_t* pixels, int width, int height, int pitch, bool rgb565, uint16_t key,
                              const uint8_t* alpha, const uint16_t* colour) {
   if (!render_ || width <= 0 || height <= 0) return;
+  if (hud_ && hud_->finish()) return;
   render_->flush();
   // Nothing drawn (every pixel still the key): nothing to lay over the frame.
   // A frame's locks often draw nothing (performance.md); the conversion,

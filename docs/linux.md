@@ -101,6 +101,17 @@ Vulkan, X11, Wayland and the audio servers stay the system's: SDL loads them
 at run time, and linuxdeploy's exclude list keeps them out. `APPIMAGE_EXTRACT_AND_RUN=1`
 runs the tools (and the AppImage) without FUSE, as in WSL or a container.
 
+**The launcher stays while the game runs, in an AppImage** (FIX (A),
+`Launcher::watch_game`; a player's report, reproduced 2026-11-04). Mounted
+through FUSE, the image is unmounted when its first process ends. The launcher
+used to close at the game's first frame, with `mw3` and its libraries still
+paged in from the mount: the game went on from what was already read, then died
+of SIGBUS at the first page it had not read, the end of the intro (200 s), with
+nothing in the log. It now hides its window and waits (`APPIMAGE` in the
+environment), and shows the box if the game ended by a signal. Checks must run
+the AppImage mounted, without `APPIMAGE_EXTRACT_AND_RUN`: unpacked, this never
+shows.
+
 ## Checking
 
 - Under WSL2 (2026-10-31): `mw3tests` 262 tests, 0 failed; `mw3sdltests`

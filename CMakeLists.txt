@@ -18,7 +18,7 @@ set(MW3_GAME_DIR "${CMAKE_SOURCE_DIR}/game/mw3-1.2" CACHE PATH "The MechWarrior 
 option(MW3_PACKAGE "Build mw3 and mw3import for players: no MW3_GAME_DIR in them" OFF)
 # The version mw3 --version and the Windows version resource give: git's
 # describe (a tag, or the commit) and the commit count.
-execute_process(COMMAND git describe --tags --always --dirty WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+execute_process(COMMAND git describe --tags --match "v[0-9]*" --always --dirty WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE MW3_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND git rev-list --count HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE MW3_BUILD_NUMBER OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
@@ -30,14 +30,23 @@ if(NOT MW3_BUILD_NUMBER)
 endif()
 
 if(MSVC)
-  add_compile_options(/W4)
+  add_compile_options(/W4 "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")  # build.cmd's own flags replace CMake's default
 else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
 # The rebuilt game and engine. No platform or engine types in here: the front end
 # (SDL3, with Godot as the fallback) talks to it through src/platform.
+add_library(cc_geometry_resources STATIC
+  src/frontend/core_critical/renderer/geometry/resource.cpp)
+target_compile_features(cc_geometry_resources PUBLIC cxx_std_17)
+if(MSVC)
+  target_compile_options(cc_geometry_resources PRIVATE /EHsc)
+endif()
 add_library(mw3core STATIC
+  src/gamez/zmodel/gmod_geometry.cpp
+  src/platform/prepared_visuals.cpp
+  src/platform/prepared_hud.cpp
   src/crt/msvc_math.cpp
   src/crt/msvc_rand.cpp
   src/crt/msvc_string.cpp
@@ -60,6 +69,7 @@ add_library(mw3core STATIC
   src/gamez/zutil/zutl_reg.cpp
   src/platform/reg_file.cpp
   src/platform/cue_audio.cpp
+  src/mech3/data_folder.cpp
   src/mech3/data_version.cpp
   src/mech3/patch12.cpp
   src/mech3/patch12_edits.cpp
@@ -300,7 +310,14 @@ add_library(mw3core STATIC
   src/mech3/music.cpp
 )
 target_include_directories(mw3core PUBLIC src)
+target_link_libraries(mw3core PUBLIC cc_geometry_resources)
+if(MSVC)
+  target_compile_options(mw3core PRIVATE /EHsc)
+endif()
 target_include_directories(mw3core PRIVATE third_party)
+if(MSVC)
+  target_compile_options(mw3core PRIVATE /EHsc)
+endif()
 # pl_mpeg (third_party/pl_mpeg): as written, its warnings not ours.
 set_source_files_properties(third_party/pl_mpeg/pl_mpeg.c PROPERTIES COMPILE_OPTIONS "$<IF:$<C_COMPILER_ID:MSVC>,/w,-w>")
 # tinfl (third_party/miniz, miniz's inflate) likewise.
@@ -374,6 +391,7 @@ if(LIBARCHIVE_INCLUDE AND LIBARCHIVE_LIB)
   target_compile_definitions(mw3core PUBLIC MW3_HAVE_LIBARCHIVE=1)
   message(STATUS "libarchive: ${LIBARCHIVE_LIB}")
 else()
+  target_compile_definitions(mw3core PUBLIC MW3_HAVE_LIBARCHIVE=0)
   message(STATUS "libarchive not found: SETUP reads folders, drives, .iso and .cue only")
 endif()
 
@@ -519,6 +537,21 @@ add_library(mw3probe SHARED
 target_link_libraries(mw3probe PRIVATE mw3core)
 
 enable_testing()
+find_package(Threads REQUIRED)
+add_executable(mw3render_worker_checks tests/test_render_worker.cpp)
+target_include_directories(mw3render_worker_checks PRIVATE src)
+target_link_libraries(mw3render_worker_checks PRIVATE Threads::Threads)
+if(MSVC)
+  target_compile_options(mw3render_worker_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3render_worker_checks COMMAND mw3render_worker_checks)
+set_tests_properties(mw3render_worker_checks PROPERTIES TIMEOUT 15)
+add_executable(mw3prepared_checks tests/test_prepared_visuals.cpp)
+target_link_libraries(mw3prepared_checks PRIVATE mw3core)
+if(MSVC)
+  target_compile_options(mw3prepared_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
 add_executable(mw3tests
   tests/main.cpp
   tests/test_znet.cpp
@@ -537,6 +570,7 @@ add_executable(mw3tests
   tests/test_lance.cpp
   tests/test_nav.cpp
   tests/test_setup_sources.cpp
+  tests/test_data_folder.cpp
   tests/test_patch12.cpp
   tests/test_video_device.cpp
   tests/test_resolution.cpp
@@ -559,9 +593,26 @@ target_compile_definitions(mw3tests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                           MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
                                           MW3_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME mw3tests COMMAND mw3tests)
+add_executable(mw3geometry_checks tests/test_geometry_handoff.cpp)
+target_link_libraries(mw3geometry_checks PRIVATE mw3core)
+if(MSVC)
+  target_compile_options(mw3geometry_checks PRIVATE /EHsc)
+endif()
+add_test(NAME mw3geometry_checks COMMAND mw3geometry_checks)
 
 # The SDL3 front end and the programs on it.
+option(MW3_CORE_CRITICAL_VULKAN "Build the experimental Core Critical Vulkan/DXGI renderer" OFF)
 find_package(SDL3 CONFIG QUIET)
+if(MW3_CORE_CRITICAL_VULKAN)
+  if(NOT WIN32 OR NOT SDL3_FOUND)
+    message(FATAL_ERROR "The Core Critical Vulkan renderer requires Windows x64 and SDL3")
+  endif()
+  include(CheckCXXSourceCompiles)
+  check_cxx_source_compiles("#if !defined(_M_X64) && !defined(__x86_64__)\n#error x64 required\n#endif\nint main() {}" MW3_CC_TARGET_X64)
+  if(NOT MW3_CC_TARGET_X64)
+    message(FATAL_ERROR "The Core Critical Vulkan renderer requires an x64 target")
+  endif()
+endif()
 if(SDL3_FOUND)
   # Platform implementations on SDL (docs/program.md): window and message
   # pump, input, render3d, sound, music; the debug world loader.
@@ -572,6 +623,7 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_install.cpp
     src/frontend/sdl/sdl_music.cpp
     src/frontend/sdl/sdl_platform.cpp
+    src/frontend/sdl/gpu_hud.cpp
     src/frontend/sdl/sdl_render3d.cpp
     src/frontend/sdl/sdl_sound.cpp
     src/frontend/sdl/sdl_vfw.cpp
@@ -580,6 +632,14 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_child.cpp
   )
   target_link_libraries(mw3sdl PUBLIC mw3core SDL3::SDL3 enet miniupnpc)
+  if(MSVC)
+    target_compile_options(mw3sdl PRIVATE /EHsc)
+  endif()
+  if(MW3_CORE_CRITICAL_VULKAN)
+    add_subdirectory(src/frontend/core_critical)
+    target_link_libraries(mw3sdl PRIVATE mw3ccvulkan)
+    target_compile_definitions(mw3sdl PRIVATE CC_MW3_RE_ADAPTER=1)
+  endif()
   # Windows: the Direct3D 12 shaders (sdl_render3d.hlsl), DXIL by the
   # Windows SDK's dxc, as headers the renderer includes.
   if(WIN32)
@@ -647,6 +707,7 @@ if(SDL3_FOUND)
     add_executable(mw3
       src/frontend/sdl/mw3_main.cpp
       src/frontend/sdl/run_log.cpp
+      src/frontend/sdl/crash_report.cpp
       src/frontend/sdl/launcher.cpp
       src/frontend/sdl/debug_states.cpp
       src/frontend/sdl/campaign_chain.cpp
@@ -654,6 +715,13 @@ if(SDL3_FOUND)
       src/frontend/sdl/first_run_import.cpp
     )
     target_link_libraries(mw3 PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MSVC)
+      target_compile_options(mw3text PRIVATE /EHsc)
+      target_compile_options(mw3 PRIVATE /EHsc)
+    endif()
+    if(MW3_CORE_CRITICAL_VULKAN)
+      target_compile_definitions(mw3 PRIVATE CC_MW3_RE_ADAPTER=1)
+    endif()
     target_compile_definitions(mw3 PRIVATE MW3_VERSION="${MW3_VERSION}")
     # The launcher's art (assets/launcher) in a development build; a package
     # carries it beside the exe (tools/windows/package.cmd) or in the app's
@@ -692,6 +760,7 @@ if(SDL3_FOUND)
       src/frontend/sdl/launcher_main.cpp
       src/frontend/sdl/launcher.cpp
       src/frontend/sdl/run_log.cpp
+      src/frontend/sdl/crash_report.cpp
     )
     target_link_libraries(mw3launcher PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
     target_compile_definitions(mw3launcher PRIVATE MW3_VERSION="${MW3_VERSION}")
@@ -730,6 +799,17 @@ if(SDL3_FOUND)
       tests/test_net_upnp.cpp
     )
     target_link_libraries(mw3sdltests PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    add_executable(mw3hud_checks tests/test_gpu_hud.cpp)
+    target_link_libraries(mw3hud_checks PRIVATE mw3text mw3sdl mw3core SDL3::SDL3)
+    if(MSVC)
+      target_compile_options(mw3hud_checks PRIVATE /EHsc)
+    endif()
+    add_test(NAME mw3hud_checks COMMAND mw3hud_checks)
+    if(WIN32 AND NOT CMAKE_VERSION VERSION_LESS 3.21)
+      add_custom_command(TARGET mw3hud_checks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:mw3hud_checks> $<TARGET_FILE_DIR:mw3hud_checks>
+        COMMAND_EXPAND_LISTS)
+    endif()
     target_compile_definitions(mw3sdltests PRIVATE MW3_GAME_DIR="${MW3_GAME_DIR}"
                                                  MW3_TEST_TMP_ROOT="${CMAKE_BINARY_DIR}"
                                                  MW3_BIN="$<TARGET_FILE:mw3>"

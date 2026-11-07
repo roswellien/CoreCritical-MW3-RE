@@ -42,6 +42,10 @@
 //   --nosound            no audio device (a silent DirectSound stand-in)
 //   --hidden             keep the window hidden
 //   --windowed           a window, not fullscreen (also --window, or windowed=1 in mw3.cfg)
+//   --cc-vulkan          experimental Windows Vulkan/DXGI backend (requires a window)
+//   --cc-vulkan-wsi      experimental Vulkan swapchain on an SDL surface
+//   --cc-aa MODE         off, fxaa, ssaa2 or ssaa4 on the Core Critical backend
+//   --cc-af LEVEL        1, 2, 4, 8 or 16 on the Core Critical backend
 //   --verbose            list every unported function reached at exit
 #include "crt/msvc_rand.h"
 #include <SDL3/SDL.h>
@@ -60,11 +64,14 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <exception>
 
 #include "frontend/sdl/campaign_chain.h"
 #include "frontend/sdl/modes_chain.h"
 #include "frontend/sdl/debug_states.h"
 #include "frontend/sdl/first_run_import.h"
+#include "frontend/sdl/crash_report.h"
+#include "frontend/sdl/data_folder_start.h"
 #include "frontend/sdl/run_log.h"
 #include "frontend/sdl/sdl_child.h"
 #include "frontend/sdl/launcher.h"
@@ -131,6 +138,9 @@ std::string campaign_summary() {
 }
 
 struct Args {
+  sdlfe::RendererBackend backend = sdlfe::RendererBackend::sdl;
+  sdlfe::CoreCriticalQuality quality;
+  sdlfe::CoreCriticalAssets cc_assets;
   SDL_Window* launcher_window = nullptr;  // the launcher's, for the game to take (one window; ours)
   std::string install, write_dir, mission, variant, dialog_file, dialog_name, shot, movie;
   std::string cfg_install;  // mw3.cfg's install= (the command line's wins)
@@ -149,6 +159,8 @@ struct Args {
   // The bug fixes (zfix bugs; fixes.md, The bug fixes switch): mw3.cfg's
   // bugfixes=0/1 (default 1), --original turns them off whatever it says.
   bool play_original = false;
+  sdlfe::HudOptions hud;
+  bool hud_mode_given = false, hud_artwork_given = false, hud_text_given = false;
   int cfg_bugfixes = 1;
   int cfg_throttle_reverse = 1;  // mw3.cfg's throttle_reverse= (ours, W56: zfix.h)
   bool first_start = false;   // the install found by the search, not mw3.cfg's (ours: the first start's notes)
@@ -220,10 +232,26 @@ struct Args {
 
 void usage() {
   std::printf(
-      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] [--assets DIR]... [--write-dir DIR] [--version]\n"
-      "    [--mission NAME | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] [--vehicle-ahead M [--vehicle-hold]] [--turret-ahead M] [--mech-ahead M] [--dialog FILE NAME]\n"
-      "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N [--fire-group 1..5]] [--objectives N] [--win N] [--lab-mech N]\n"
-      "    [--windowed] [--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | --no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] [--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] [--nosound] [--hidden] [--verbose]\n"
+      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] "
+      "[--assets DIR]... [--write-dir DIR] [--version]\n"
+      "    [--mission NAME | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] "
+      "[--vehicle-ahead M [--vehicle-hold]] [--turret-ahead M] [--mech-ahead M] [--dialog FILE "
+      "NAME]\n"
+      "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N "
+      "[--fire-group 1..5]] [--objectives N] [--win N] [--lab-mech N]\n"
+      "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
+      "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun "
+      "AZIMUTH ELEVATION]\n"
+      "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
+      "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
+      "    [--cc-render-thread 0|1]\n"
+      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] "
+      "[--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | "
+      "--no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] "
+      "[--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at "
+      "X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap "
+      "DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] "
+      "[--nosound] [--hidden] [--verbose]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
 }
@@ -340,6 +368,49 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--hidden") a.hidden = true;
     else if (s == "--windowed") a.windowed = true;
     else if (s == "--no-import") a.no_import = true;
+    else if (s == "--cc-vulkan") a.backend = sdlfe::RendererBackend::core_critical_dxgi, a.no_launcher = true;
+    else if (s == "--cc-hud" && next(1)) a.hud.mode = argv[++i], a.hud_mode_given = true;
+    else if (s == "--cc-hud-artwork" && next(1)) a.hud.artwork = argv[++i], a.hud_artwork_given = true;
+    else if (s == "--cc-hud-text" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") return false;
+      a.hud.text = value == "1", a.hud_text_given = true;
+    }
+    else if (s == "--cc-vulkan-wsi") a.backend = sdlfe::RendererBackend::core_critical_wsi, a.no_launcher = true;
+    else if (s == "--cc-aa" && next(1)) a.quality.antialiasing = argv[++i];
+    else if (s == "--cc-af" && next(1)) a.quality.anisotropy = argv[++i];
+    else if (s == "--cc-textures" && next(1)) a.cc_assets.textures = argv[++i];
+    else if (s == "--cc-lighting" && next(1)) a.cc_assets.lighting = argv[++i];
+    else if (s == "--cc-render-thread" && next(1)) {
+      const std::string value = argv[++i];
+      if (value != "0" && value != "1") {
+        std::fprintf(stderr, "--cc-render-thread supports 0 or 1\n");
+        return false;
+      }
+      a.cc_assets.render_thread = value == "1";
+    } else if (s == "--cc-geometry" && next(1))
+      a.cc_assets.geometry = argv[++i];
+    else if (s == "--cc-geometry-debug" && next(1)) {
+      if (std::string(argv[++i]) != "normals") {
+        std::fprintf(stderr,"--cc-geometry-debug supports normals\n");
+        return false;
+      }
+      a.cc_assets.geometry_debug_normals = true;
+    }
+    else if (s == "--cc-sun" && next(2)) {
+      a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
+    }
+    else if (s == "--cc-model-normals" && next(3)) {
+      sdlfe::PreparedNormalBinding binding;
+      binding.chassis = argv[++i], binding.lod = argv[++i], binding.path = argv[++i];
+      a.cc_assets.normals.push_back(std::move(binding));
+    }
+    else if (s == "--cc-model" && next(4)) {
+      sdlfe::PreparedModelBinding binding;
+      binding.chassis = argv[++i], binding.lod = argv[++i];
+      binding.mesh = argv[++i], binding.textures = argv[++i];
+      a.cc_assets.models.push_back(std::move(binding));
+    }
     else if (s == "--no-launcher") a.no_launcher = true;
     else if (s == "--ready-file" && next(1)) a.ready_file = argv[++i];
     else if (s == "--wide-menus") a.wide_menus = 1;
@@ -393,6 +464,10 @@ void read_config(const std::string& dir, Args& a) {
     if (line.rfind("install=", 0) == 0) a.cfg_install = line.substr(8);
     else if (line.rfind("mw1_game=", 0) == 0) a.cfg_mw1_game = line.substr(9);
     else if (line.rfind("assets=", 0) == 0) a.assets.push_back(line.substr(7));
+    else if (line.rfind("cc_hud=", 0) == 0 && !a.hud_mode_given) a.hud.mode = line.substr(7);
+    else if (line.rfind("cc_hud_artwork=", 0) == 0 && !a.hud_artwork_given) a.hud.artwork = line.substr(15);
+    else if (line == "cc_hud_text=0" && !a.hud_text_given) a.hud.text = false;
+    else if (line == "cc_hud_text=1" && !a.hud_text_given) a.hud.text = true;
     else if (line.rfind("mod=", 0) == 0) a.cfg_mods.push_back(line.substr(4));
     else if (line.rfind("joystick=", 0) == 0) a.cfg_joystick = line.substr(9);
     else if (line.rfind("joystick_axes=", 0) == 0) a.cfg_joystick_axes = line.substr(14);
@@ -529,10 +604,8 @@ std::string vfw_helper_path(const std::string& given) {
 }
 
 #if defined(_WIN32)
-constexpr const char* kSelf = "mw3.exe";
 constexpr const char* kImporter = "mw3import.exe";
 #else
-constexpr const char* kSelf = "mw3";
 constexpr const char* kImporter = "mw3import";
 #endif
 
@@ -540,8 +613,6 @@ constexpr const char* kImporter = "mw3import";
 // 1.2's, and no music. Lines for a box; flat() makes one for the log.
 std::vector<std::string> start_notes(const mech3::DataVersion& d, const std::string& write_dir) {
   std::vector<std::string> out;
-  const std::string patch = std::string("If you have the official 1.2 patch, start once with:\n    ") + kSelf +
-                            " --patch \"<the patch's ZIP or folder>\"\nYour install is not changed (README.txt).";
   auto list = [](const std::vector<std::string>& v) {
     std::string s;
     for (size_t i = 0; i < v.size() && i < 6; ++i) s += (i ? ", " : "") + v[i];
@@ -550,8 +621,7 @@ std::vector<std::string> start_notes(const mech3::DataVersion& d, const std::str
   };
   // 1.0's data and a mix need no note: they load as 1.2 (docs/patch12.md).
   if (d.name == "unknown")
-    out.push_back("Some MechWarrior 3 files are neither version 1.0's nor 1.2's (another version or a mod): " + list(d.unknown) +
-                  ". They may not play right. " + patch);
+    out.push_back(mech3::mod_note(list(d.unknown)));
   else if (d.name == "incomplete")
     out.push_back("Some MechWarrior 3 files are missing from the install: " + list(d.unknown) +
                   ". Reinstall MechWarrior 3 from its disc.");
@@ -593,6 +663,7 @@ std::string codec_path(const std::string& install) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (sdlfe::crash_box_main(argc, argv)) return 0;
   // In order with the log on stderr. Windows' CRT has no line buffering (and takes size 0 as
   // an invalid argument): unbuffered there.
 #if defined(_WIN32)
@@ -604,12 +675,15 @@ int main(int argc, char** argv) {
   if (!parse(argc, argv, a)) return 2;
   if (!a.shot.empty()) a.hidden = true;
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK)) {
-    std::fprintf(stderr, "mw3: SDL_Init: %s\n", SDL_GetError());
+    sdlfe::fatal_box(std::string("MechWarrior 3 cannot start: ") + SDL_GetError(), a.hidden);
     return 1;
   }
   // The write dir: saves and settings, outside the install (assets-layer.md).
-  if (a.write_dir.empty()) {
-    if (char* p = SDL_GetPrefPath("MicroProse", "MechWarrior 3")) a.write_dir = p, SDL_free(p);
+  // --write-dir wins; else the usual folder, or the one its pointer names (data_folder.h).
+  const bool write_dir_given = !a.write_dir.empty();
+  if (!write_dir_given && !sdlfe::data_folder_at_start(&a.write_dir, !a.hidden)) {
+    SDL_Quit();
+    return 1;
   }
   while (a.write_dir.size() > 1 && a.write_dir.back() == '/') a.write_dir.pop_back();
   // A --write-dir that does not exist is made, as SDL_GetPrefPath makes the default.
@@ -627,6 +701,7 @@ int main(int argc, char** argv) {
     std::printf("mw3 (MechWarrior 3 rebuild) %s: %s\n", MW3_VERSION, argc > 1 ? "started with arguments" : "started");
   else if (!a.write_dir.empty() && run_log.open(a.write_dir))
     std::printf("mw3 (MechWarrior 3 rebuild) %s, log %s\n", MW3_VERSION, run_log.path().c_str());
+  if (!a.hidden && !a.write_dir.empty()) sdlfe::crash_report_install("mw3", a.write_dir + "/mw3.log", true);
   if (!a.write_dir.empty()) read_config(a.write_dir, a);
   if (!a.mods_given) a.mods = a.cfg_mods;
   if (a.no_mods) a.mods.clear();
@@ -689,6 +764,7 @@ int main(int argc, char** argv) {
   if (setup_only) {
     sdlfe::LauncherOptions lo;
     lo.setup_only = setup_only;
+    lo.write_dir_fixed = write_dir_given;
     lo.write_dir = a.write_dir, lo.cfg_install = a.cfg_install, lo.cfg_mw1_game = a.cfg_mw1_game;
 #ifdef MW3_GAME_DIR
     if (!std::getenv("MW3_FIND_INSTALL")) lo.more_installs.push_back(MW3_GAME_DIR);
@@ -744,7 +820,7 @@ int main(int argc, char** argv) {
   zutl::set_write_dir(a.write_dir);
   zutl::mounts().confined = true;  // ours: names from data and the network stay inside these folders
   std::error_code ec;
-  if (!std::filesystem::exists(a.install + "/zbd/reader.zbd", ec)) {
+  if (zutl::any_case(a.install, "zbd/reader.zbd").empty()) {
     const std::string msg = "No MechWarrior 3 install at \"" + a.install +
                             "\". Start mw3 with the folder that holds Mech3.exe and zbd (README.txt).";
     std::fprintf(stderr, "mw3: %s\n", msg.c_str());
@@ -824,7 +900,13 @@ int main(int argc, char** argv) {
       };
     }
   }
-  const int result = run(a, vfw.get());
+  int result = 1;
+  try {
+    result = run(a, vfw.get());
+    std::printf("mw3: closed, result %d\n", result);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "mw3: rendering failed: %s\n", error.what());
+  }
   g_net_pass = nullptr;
   vfw.reset();
   SDL_Quit();  // after every SDL object above is gone
@@ -835,7 +917,16 @@ namespace {
 
 int run(const Args& a, platform::VideoForWindows* vfw) {
   sdlfe::SdlWindow window;
-  if (!window.init(a.hidden, a.launcher_window)) return 1;
+  if (a.backend == sdlfe::RendererBackend::sdl &&
+      (a.quality.antialiasing != "off" || a.quality.anisotropy != "1" || !a.cc_assets.empty()))
+    return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
+  if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
+    return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
+  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality, a.cc_assets)) {
+    // The reason is in the line before this (SdlWindow::init).
+    sdlfe::fatal_box(std::string("MechWarrior 3 could not open its window or graphics (Vulkan on Linux): ") + SDL_GetError(), a.hidden);
+    return 1;
+  }
   sdlfe::SdlInput input;
   input.joystick_want = a.cfg_joystick, input.joystick_axes = a.cfg_joystick_axes;
   sdlfe::SdlForceDevice force([&input] { return input.joystick(); });  // FIX (A): IFORCE2 as rumble (sdl_force.h)
@@ -870,7 +961,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   sound_clock.c = &movie_clock;
   const bool stepped = !a.movie.empty() && a.nosound;
   sdlfe::SdlAlert alert(window.sdl(), a.hidden);
-  sdlfe::SdlScreen2D screen(window.render());
+  sdlfe::SdlScreen2D screen(window.render(), a.hud, window.sdl(), &window.shape());
   std::unique_ptr<platform::SoundOutput> sound;
   if (a.nosound) {
     auto silent = std::make_unique<platform::SilentSoundOutput>();
@@ -951,6 +1042,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   {
     mech3::GameEngine engine(p, "mech3.exe" + a.original);
     sdlfe::SdlTwodHost host(&engine, &input, &window);
+    host.enable_hud_text(a.hud.mode == "core-critical" && a.hud.text);
     ztwod::set_host(&host);
     mech3::reset_states();
     mech3::Mech3App app(&engine);
@@ -967,7 +1059,25 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     std::unique_ptr<mech3::ActionGame> ia_game;  // --mission ia<N>: the launch's game
     std::unique_ptr<mech3::MultiplayerGame> multi_game;  // --mission <dir>mp<N>: the launch's
     std::vector<double> frame_ms;  // --frame-times: each frame's wall time
+    const char* benchmark_timestamps = std::getenv("MW3_BENCHMARK_TIMESTAMPS");
+    struct FrameTimestamp { int frame; uint64_t counter; };
+    std::vector<FrameTimestamp> frame_timestamps;
+    if (benchmark_timestamps) {
+      if (a.frame_times <= 0) throw std::runtime_error("Benchmark timestamps require --frame-times");
+      frame_timestamps.reserve(a.frames > 0 ? std::size_t(a.frames) : 4096);
+      std::printf("mw3: benchmark main thread %llu, counter frequency %llu\n",
+                  (unsigned long long)SDL_GetCurrentThreadID(),
+                  (unsigned long long)SDL_GetPerformanceFrequency());
+      std::fflush(stdout);
+    }
     uint64_t frame_last = 0;
+    auto record_frame_time = [&](int frame) {
+      if (a.frame_times <= 0 || frame < a.frame_times) return;
+      const uint64_t now = SDL_GetPerformanceCounter();
+      if (benchmark_timestamps) frame_timestamps.push_back({frame,now});
+      if (frame_last) frame_ms.push_back(static_cast<double>(now - frame_last) * 1000.0 / SDL_GetPerformanceFrequency());
+      frame_last = now;
+    };
     bool launch = false, launch_done = false;
     if (!a.mission.empty() && !a.fly) {
       // Through the original's states: the Load state loads the mission
@@ -1099,11 +1209,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         // (the pause and end screens draw none, and --frames must still end the run).
         if (!a.shot_any && !engine.drew_scene() && shots == 0) return;
         ++shots;
-        if (a.frame_times > 0 && shots >= a.frame_times) {
-          const uint64_t now = SDL_GetPerformanceCounter();
-          if (frame_last) frame_ms.push_back(static_cast<double>(now - frame_last) * 1000.0 / SDL_GetPerformanceFrequency());
-          frame_last = now;
-        }
+        record_frame_time(shots);
         // --vehicle-ahead (ours, for checking a vehicle up close: its shadow, its model, its weapons).
         static void* held = nullptr;
         static float held_at[3];
@@ -1314,6 +1420,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     if (!debug && !launch)
       engine.on_present = [&](int) {
         ++menu_frames;
+        record_frame_time(menu_frames);
         if (chain) chain->frame();
         if (modes) modes->frame();
         auto key = [&](int dik, bool down) {
@@ -1432,27 +1539,38 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
         for (Args::ClickAt& c : clicks)
           if (c.ingame) c.frame = s_menu_in_game ? s_menu_game_from + c.frame : -100;
         for (const Args::ClickAt& c : clicks) {
+          if (menu_frames != c.frame && menu_frames != c.frame + 1 && menu_frames != c.frame + 2) continue;
           // The cursor put on the point (zInput's 0x0051b440, the game's
           // 640 x 480 about its centre), then the press and the release.
           // A 640x480 frame pixel; over a mission on a canvas the dialogs' frame
           // is centred (resolution.md step 5); the menus' frame is at 0, and
           // with wide menus a right group's piece is the extra width further.
+          const float dw = static_cast<float>(mech3::display().w > 0 ? mech3::display().w : 640);
+          const float dh = static_cast<float>(mech3::display().h > 0 ? mech3::display().h : 480);
+          const bool over_mission = app.current() == &mech3::states().core || app.current() == &mech3::states().pause;
+          const int32_t extra = std::max(0, mech3::display().w - 640);
+          const int32_t ox = over_mission ? ztwod::dialog_origin().x : c.group == 2 ? extra : c.group == 1 ? extra / 2 : 0;
+          const int32_t oy = over_mission ? ztwod::dialog_origin().y : 0;
+          const float px = static_cast<float>(c.x + ox), py = static_cast<float>(c.y + oy);
+          int ww = 0, wh = 0;
+          window.client_size(&ww, &wh);
+          float wx = 0, wy = 0;
+          sdlfe::frame_to_window(px, py, static_cast<float>(ww), static_cast<float>(wh), window.shape(), &wx, &wy);
           if (menu_frames == c.frame) {
-            const float dw = static_cast<float>(mech3::display().w > 0 ? mech3::display().w : 640);
-            const float dh = static_cast<float>(mech3::display().h > 0 ? mech3::display().h : 480);
-            const bool over_mission = app.current() == &mech3::states().core || app.current() == &mech3::states().pause;
-            const int32_t extra = std::max(0, mech3::display().w - 640);
-            const int32_t ox = over_mission ? ztwod::dialog_origin().x : c.group == 2 ? extra : c.group == 1 ? extra / 2 : 0;
-            const int32_t oy = over_mission ? ztwod::dialog_origin().y : 0;
-            const float px = static_cast<float>(c.x + ox), py = static_cast<float>(c.y + oy);
             zin::mouse_set((px - dw / 2) / (dw / 2), (py - dh / 2) / (dh / 2));
+            // Windowed menus follow SDL's absolute cursor. Keep the synthetic
+            // motion and buttons in window coordinates, like physical input.
+            SDL_Event ev{};
+            ev.type = SDL_EVENT_MOUSE_MOTION;
+            ev.motion.x = wx, ev.motion.y = wy;
+            SDL_PushEvent(&ev);
           }
           if (!c.hover && (menu_frames == c.frame + 1 || menu_frames == c.frame + 2)) {
             SDL_Event ev{};
             ev.type = menu_frames == c.frame + 1 ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
             ev.button.button = SDL_BUTTON_LEFT;
             ev.button.down = menu_frames == c.frame + 1;
-            ev.button.x = static_cast<float>(c.x), ev.button.y = static_cast<float>(c.y);
+            ev.button.x = wx, ev.button.y = wy;
             SDL_PushEvent(&ev);
           }
         }
@@ -1563,7 +1681,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           if (g_net_pass) g_net_pass();
         };
       // Ours: Alt+Enter, and the game's sounds silent while the window is away.
-      pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
+      if (a.backend == sdlfe::RendererBackend::sdl)
+        pump.toggle_fullscreen = [&] { window.switch_fullscreen(!window.fullscreen()); };
       if (auto* s = dynamic_cast<sdlfe::SdlSoundOutput*>(sound.get())) pump.focus_changed = [s](bool on) { s->set_focused(on); };
       if (!debug && !launch && (a.frames > 0 || !a.shot.empty()))
         pump.should_quit = [&] { return (a.frames > 0 && menu_frames >= a.frames) || (!a.shot.empty() && menu_frames > a.shot_frame); };
@@ -1591,15 +1710,28 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       // and leaves the world to the process's end: stop_game after zSound's shutdown freed
       // the sounds the world's nodes still held (the exit's SIGTRAP, docs/program.md).
       result = app.run(pump);
+      window.render()->drain();
       if (!frame_ms.empty()) {  // --frame-times: the frames' wall times
         std::vector<double> s = frame_ms;
         std::sort(s.begin(), s.end());
         double sum = 0;
         for (double v : s) sum += v;
         auto at = [&](double q) { return s[std::min(s.size() - 1, static_cast<size_t>(q * s.size()))]; };
-        std::printf("mw3: frame times over %zu frames: mean %.2f ms, median %.2f, p95 %.2f, p99 %.2f, max %.2f\n",
+        std::printf("mw3: frame times over %zu frames: mean %.4f ms, median %.4f, p95 %.4f, p99 %.4f, max %.4f\n",
                     s.size(), sum / s.size(), at(0.5), at(0.95), at(0.99), s.back());
       }
+    }
+    // Save the buffered clock samples after timing, never with per-frame I/O.
+    if (benchmark_timestamps && !frame_timestamps.empty()) {
+      auto* output = std::fopen(benchmark_timestamps,"w");
+      if (!output) throw std::runtime_error("Cannot write benchmark timestamps");
+      std::fprintf(output,"# counter_frequency %llu\nframe,counter\n",
+                   (unsigned long long)SDL_GetPerformanceFrequency());
+      for (const auto& sample : frame_timestamps)
+        std::fprintf(output,"%d,%llu\n",sample.frame,(unsigned long long)sample.counter);
+      const bool failed = std::ferror(output) != 0;
+      const int closed = std::fclose(output);
+      if (failed || closed) throw std::runtime_error("Incomplete benchmark timestamps");
     }
     app.destroy();  // the app's destructor: the settings saved
     if (a.verbose) engine.print_unported_summary();

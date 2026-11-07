@@ -1,19 +1,20 @@
 // Any screen size and 16:9 (docs/resolution.md section 5): the modes' sizes,
 // the device's range and RESOLUTION's list, and the camera's horizontal angle,
 // with zfix's any_resolution on and off (off: the original's).
+#include <array>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
-#include <filesystem>
-
 #include "check.h"
+#include "frontend/sdl/sdl_fit.h"
 #include "gamez/zclass/camera.h"
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_node.h"
-#include "gamez/zutil/zfix.h"
 #include "gamez/zreader/zreader.h"
+#include "gamez/zutil/zfix.h"
 #include "mech3/app_hooks.h"
 #include "mech3/hud.h"
 #include "mech3/options.h"
@@ -102,7 +103,9 @@ TEST(resolution_new_modes_only_with_the_fix) {
     }
   }
   FixOn f(true);
-  const int32_t sizes[][3] = {{11, 1280, 720}, {12, 1600, 900}, {13, 1920, 1080}, {14, 2560, 1440}, {15, 3840, 2160}};
+  const int32_t sizes[][3] = {{11, 1280, 720},  {12, 1600, 900},  {13, 1920, 1080},
+                              {14, 2560, 1440}, {15, 3840, 2160}, {17, 2560, 1080},
+                              {18, 3440, 1440}, {19, 3840, 1080}, {20, 5120, 1440}};
   for (const auto& s : sizes) {
     mech3::set_vmode(s[0]);
     EXPECT(mech3::render().w == s[1] && mech3::render().h == s[2]);
@@ -111,9 +114,11 @@ TEST(resolution_new_modes_only_with_the_fix) {
   }
   mech3::Options& o = mech3::options();
   const int32_t keep_w = o.screen_w, keep_h = o.screen_h;
-  // Wider than 16:9 (21:9, 32:9) plays 16:9 at the screen's height; 5:4 as asked.
-  const int32_t shapes[][4] = {{2560, 1080, 1920, 1080}, {3440, 1440, 2560, 1440}, {3840, 1080, 1920, 1080},
-                               {1280, 1024, 1280, 1024}, {1920, 1080, 1920, 1080}};
+  // Custom modes keep the full requested frame, including 21:9 and 32:9.
+  const int32_t shapes[][4] = {{2560, 1080, 2560, 1080}, {3440, 1440, 3440, 1440},
+                               {3840, 1080, 3840, 1080}, {5120, 1440, 5120, 1440},
+                               {7680, 2160, 7680, 2160}, {1280, 1024, 1280, 1024},
+                               {1920, 1080, 1920, 1080}};
   for (const auto& s : shapes) {
     o.screen_w = s[0], o.screen_h = s[1];
     mech3::set_vmode(mech3::kCustomVMode);
@@ -121,10 +126,10 @@ TEST(resolution_new_modes_only_with_the_fix) {
   }
   o.screen_w = 2560, o.screen_h = 1080;
   mech3::set_vmode(mech3::kCustomVMode);
-  EXPECT(mech3::display().w == 853 && mech3::display().h == 480);  // the canvas, scale 2.25
-  o.screen_w = 10000, o.screen_h = 100;  // clamped to 640x480 .. the cap, then 16:9
+  EXPECT(mech3::display().w == 1138 && mech3::display().h == 480);  // canvas at native aspect
+  o.screen_w = 10000, o.screen_h = 100;  // invalid short height is bounded; no 16:9 crop
   mech3::set_vmode(mech3::kCustomVMode);
-  EXPECT(mech3::render().w == 853 && mech3::display().w == 853 && mech3::display().h == 480);
+  EXPECT(mech3::render().w == 7680 && mech3::display().w == 7680 && mech3::display().h == 480);
   o.screen_w = keep_w, o.screen_h = keep_h;
   mech3::set_vmode(5);
 }
@@ -149,12 +154,69 @@ TEST(resolution_range_and_list) {
   list.rebuild(0);
   std::vector<std::string> labels;
   for (auto* it : list.items) labels.push_back(it->text ? it->text : "");
-  EXPECT(list.count() == 12);  // 5..16
-  EXPECT(list.count() == 12 && labels[3] == "msg4058" && labels[5] == "msg4060");  // 8..10 by name
-  EXPECT(list.count() == 12 && labels[8] == "1920x1080" && list.value_at(8) == 13);
-  EXPECT(list.count() == 12 && list.value_at(11) == mech3::kCustomVMode);
+  EXPECT(list.count() == 16);                                                      // 5..20
+  EXPECT(list.count() == 16 && labels[3] == "msg4058" && labels[5] == "msg4060");  // 8..10 by name
+  EXPECT(list.count() == 16 && labels[8] == "1920x1080" && list.value_at(8) == 13);
+  EXPECT(list.count() == 16 && list.value_at(11) == mech3::kCustomVMode);
+  EXPECT(list.count() == 16 && list.value_at(15) == 20 && labels[15] == "5120x1440");
   list.rebuild(-1);
   EXPECT(list.count() == 2);  // software: 3 and 5
+}
+
+TEST(resolution_ultrawide_bounds_preserve_valid_aspects) {
+  FixOn enabled(true);
+  const auto saved = mech3::options();
+  // Oversized 16:9, 32:9 and square requests fit uniformly. Extreme inputs
+  // exercise bounded integer arithmetic rather than overflow or allocation.
+  const int32_t cases[][4] = {{5120, 2880, 3840, 2160},
+                              {10240, 2880, 7680, 2160},
+                              {2147483647, 2147483647, 2160, 2160},
+                              {-2147483647, -2147483647, 640, 480}};
+  for (const auto& size : cases) {
+    mech3::options().screen_w = size[0];
+    mech3::options().screen_h = size[1];
+    int32_t width = 0, height = 0;
+    EXPECT(mech3::vmode_size(mech3::kCustomVMode, &width, &height));
+    EXPECT(width == size[2] && height == size[3]);
+  }
+  mech3::options() = saved;
+}
+
+TEST(resolution_ultrawide_hud_and_pointer_share_the_frame) {
+  FixOn enabled(true);
+  const auto saved = mech3::options();
+  for (const auto& size : {std::array<int32_t, 2>{3440, 1440}, {5120, 1440}, {3840, 1080}}) {
+    mech3::options().screen_w = size[0];
+    mech3::options().screen_h = size[1];
+    mech3::set_vmode(mech3::kCustomVMode);
+    const auto& canvas = mech3::display();
+    const sdlfe::FrameShape shape{size[0], size[1], true, canvas.w, canvas.h};
+    const auto fit = sdlfe::fit_rect(float(size[0]), float(size[1]), shape);
+    EXPECT(fit.x == 0 && fit.y == 0 && fit.w == size[0] && fit.h == size[1]);
+    for (float fraction : {.1f, .5f, .9f}) {
+      float x = 0, y = 0, logical_x = 0, logical_y = 0;
+      sdlfe::frame_to_window(canvas.w * fraction, canvas.h * fraction, float(size[0]),
+                             float(size[1]), shape, &x, &y);
+      EXPECT(std::fabs(x - size[0] * fraction) < .001f);
+      EXPECT(std::fabs(y - size[1] * fraction) < .001f);
+      sdlfe::window_to_frame(x, y, float(size[0]), float(size[1]), shape, &logical_x, &logical_y);
+      EXPECT(std::fabs(logical_x - canvas.w * fraction) < .001f);
+      EXPECT(std::fabs(logical_y - canvas.h * fraction) < .001f);
+    }
+    int32_t right[] = {550, 380}, left[] = {20, 380}, centre[] = {280, 10};
+    EXPECT(mech3::hud_anchor("MFD", "position", canvas.w, canvas.h, right));
+    EXPECT(right[0] == canvas.w - 90 && right[1] == 380);
+    EXPECT(mech3::hud_anchor("TARGET", "position", canvas.w, canvas.h, left));
+    EXPECT(left[0] == 20 && left[1] == 380);
+    EXPECT(mech3::hud_anchor("COMPASS", "tape", canvas.w, canvas.h, centre));
+    EXPECT(centre[0] == 280 + (canvas.w - 640) / 2);
+    float cursor[] = {canvas.w * .5f, canvas.h * .5f};
+    mech3::screen_to_render(cursor);
+    EXPECT(std::fabs(cursor[0] - size[0] * .5f) < .001f && cursor[1] == size[1] * .5f);
+    mech3::render_to_screen(cursor);
+    EXPECT(std::fabs(cursor[0] - canvas.w * .5f) < .001f && cursor[1] == 240);
+  }
+  mech3::options() = saved;
 }
 
 TEST(resolution_camera_4_3_is_the_original) {
@@ -176,7 +238,8 @@ TEST(resolution_camera_wide_keeps_the_4_3_look) {
     EXPECT(squeeze(camera_h_at(1920, 1080), v, 1920, 1080) < 0.8);
   }
   FixOn f(true);
-  const int32_t shapes[][2] = {{1920, 1080}, {1280, 720}, {2560, 1080}, {1280, 1024}, {3840, 2160}};
+  const int32_t shapes[][2] = {{1920, 1080}, {1280, 720},  {2560, 1080}, {3440, 1440},
+                               {5120, 1440}, {7680, 2160}, {1280, 1024}, {3840, 2160}};
   for (const auto& s : shapes) {
     const float hf = camera_h_at(s[0], s[1]);
     EXPECT(std::fabs(squeeze(hf, v, s[0], s[1]) - look) < 1e-5);
@@ -258,8 +321,9 @@ TEST(resolution_canvas_past_mode_10) {
   const mech3::Options keep = mech3::options();
   {
     FixOn on(true);
-    const int32_t sizes[][3] = {{5, 640, 480}, {10, 1600, 1200}, {11, 853, 480}, {12, 853, 480},
-                                {13, 853, 480}, {14, 853, 480}, {15, 853, 480}};
+    const int32_t sizes[][3] = {{5, 640, 480},   {10, 1600, 1200}, {11, 853, 480}, {12, 853, 480},
+                                {13, 853, 480},  {14, 853, 480},   {15, 853, 480}, {17, 1138, 480},
+                                {18, 1147, 480}, {19, 1707, 480},  {20, 1707, 480}};
     for (const auto& s : sizes) {
       int32_t w = 0, h = 0;
       EXPECT(mech3::vmode_canvas(s[0], &w, &h) && w == s[1] && h == s[2]);

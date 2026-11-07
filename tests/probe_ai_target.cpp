@@ -47,7 +47,12 @@ std::vector<std::unique_ptr<Rec>> g_recs[2];  // kept in place: the records poin
 std::vector<uint32_t> g_handles;  // the targets' addresses, in the order made
 size_t g_next_handle = 0;
 
+std::vector<uint32_t> g_sets;  // the keys' vt+0xc0 calls, by contact
 struct Recording : mech3::ai::TargetHooks {
+  void target_set(AiTarget& t, Contact* c) override {
+    g_sets.push_back(addr_of(c));
+    t.set_target(c, false);
+  }
   uint32_t unported(const char* key, std::initializer_list<zgame::Arg> args) override { return call(key, args); }
   uint32_t team_of(Handle t) override { return peek(t + 0xc0); }
   void contact_delete(Contact*) override {}
@@ -159,6 +164,7 @@ uint32_t probe_targets_peek(uint32_t a) { return peek(a); }
 // --- AiTarget -----------------------------------------------------------------------
 // fields: target, ally, enemy, saved (addresses or 0), team, allies, enemies.
 void probe_aitarget_set(const uint32_t* contacts, int32_t n, const uint32_t* fields) {
+  g_sets.clear();
   g_target = AiTarget{};
   for (int32_t i = 0; i < n; ++i) {
     const uint32_t* c = contacts + 5 * i;  // address, owner, seen, entity, flags
@@ -208,6 +214,12 @@ uint32_t probe_aitarget_call(int32_t fn, int32_t side, uint32_t arg, uint32_t se
     default: break;
   }
   return 0;
+}
+// The keys' vt+0xc0 calls of the last case.
+int32_t probe_aitarget_sets(uint32_t* out, int32_t max) {
+  const int32_t n = static_cast<int32_t>(g_sets.size());
+  for (int32_t i = 0; i < n && i < max; ++i) out[i] = g_sets[static_cast<size_t>(i)];
+  return n;
 }
 // target, ally, enemy, saved, sensor range, range, range squared.
 void probe_aitarget_state(uint32_t* out) {

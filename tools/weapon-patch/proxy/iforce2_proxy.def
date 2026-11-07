@@ -1,0 +1,12 @@
+LIBRARY IFORCE2.dll
+EXPORTS
+  _IFCreateEffectStructs@12=IFORCE2o._IFCreateEffectStructs@12 @1
+  _IFCreateEffects@12=IFORCE2o._IFCreateEffects@12 @2
+  _IFLoadProjectFile@8=IFORCE2o._IFLoadProjectFile@8 @3
+  _IFLoadProjectObjectPointer@8=IFORCE2o._IFLoadProjectObjectPointer@8 @4
+  _IFLoadProjectPointer@8=IFORCE2o._IFLoadProjectPointer@8 @5
+  _IFLoadProjectResource@12=IFORCE2o._IFLoadProjectResource@12 @6
+  _IFReleaseEffectStructs@8=IFORCE2o._IFReleaseEffectStructs@8 @7
+  _IFReleaseEffects@8=IFORCE2o._IFReleaseEffects@8 @8
+  _IFReleaseProject@4=IFORCE2o._IFReleaseProject@4 @9
+  _IForceDLLMain@12=IFORCE2o._IForceDLLMain@12 @10

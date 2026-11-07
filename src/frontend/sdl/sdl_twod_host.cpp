@@ -2,6 +2,7 @@
 #include <string>
 #include <algorithm>
 #include "frontend/sdl/sdl_twod_host.h"
+#include "frontend/sdl/sdl_platform.h"
 
 #include "gamez/zutil/zutl_msgdll.h"
 
@@ -11,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 
 #include "frontend/sdl/gdi_font_size.h"
 #include "frontend/sdl/sdl_input.h"
@@ -81,6 +83,9 @@ SdlTwodHost::SdlTwodHost(mech3::GameEngine* engine, SdlInput* input, platform::W
 }
 
 SdlTwodHost::~SdlTwodHost() {
+  for (const auto& [key, font] : hud_fonts_) TTF_CloseFont(font);
+  hud_fonts_.clear();
+  hud_text_sources_.clear();
   for (auto& [h, f] : fonts_)
     if (f.ttf) TTF_CloseFont(f.ttf);
   if (ttf_ok_) TTF_Quit();
@@ -146,6 +151,7 @@ void SdlTwodHost::free_image(zimg::Texture* image) {
   freed_.insert(image);
 }
 zimg::Texture* SdlTwodHost::made(zimg::Texture* image) {
+  hud_text_sources_.erase(image);
   freed_.erase(image);  // the address may come back for a new image
   return image;
 }
@@ -283,6 +289,7 @@ zimg::Texture* SdlTwodHost::screen_grab(int32_t buffer) {
 }
 
 void SdlTwodHost::texture_free(zimg::Texture* t) {
+  hud_text_sources_.erase(t);
   if (t && t == held_grab_) {  // the box gone: the kept frame let go
     held_grab_ = nullptr;
     if (engine_) engine_->drop_held();
@@ -572,21 +579,37 @@ int32_t SdlTwodHost::DrawTextA(Handle d, const char* text, int32_t length, ztwod
     return zvid::pack_bytes(static_cast<uint8_t>(c), static_cast<uint8_t>(c >> 8), static_cast<uint8_t>(c >> 16));
   };
   const uint16_t fg = pack(x->text), bg = pack(x->bk);
+  HudTextSource* hud_text = nullptr;
+  if (hud_text_enabled_ && !img->palette && !img->alpha && img->width > 0 && img->height > 0) {
+    auto& source = hud_text_sources_[img];
+    const auto count = size_t(img->width) * img->height;
+    const auto hash = platform::hud_identity(img->width, img->height, px, count);
+    if (source.pixels_hash != hash) {
+      source.lines.clear();
+      source.base.assign(px, px + count);
+    }
+    hud_text = &source;
+  }
   int y0 = rect->top;
   if (format & kSingleLine) {
-    if (format & kVCenter) y0 = rect->top + (rect->bottom - rect->top - lh) / 2;
-    else if (format & kBottom) y0 = rect->bottom - lh;
+    if (format & kVCenter)
+      y0 = rect->top + (rect->bottom - rect->top - lh) / 2;
+    else if (format & kBottom)
+      y0 = rect->bottom - lh;
   }
   for (size_t i = 0; i < ls.size(); ++i) {
     const std::string& l = ls[i];
     int w = 0, h = 0;
     if (!l.empty()) TTF_GetStringSize(f->ttf, l.c_str(), l.size(), &w, &h);
     int x0 = rect->left;
-    if (format & kCenter) x0 = rect->left + (box_w - w) / 2;
-    else if (format & kRight) x0 = rect->right - w;
+    if (format & kCenter)
+      x0 = rect->left + (box_w - w) / 2;
+    else if (format & kRight)
+      x0 = rect->right - w;
     const int ly = y0 + static_cast<int>(i) * lh;
     auto put = [&](int px_, int py_, uint16_t c) {
-      if (px_ < rect->left || px_ >= rect->right || py_ < rect->top || py_ >= rect->bottom) return;  // clipped
+      if (px_ < rect->left || px_ >= rect->right || py_ < rect->top || py_ >= rect->bottom)
+        return;  // clipped
       if (px_ < 0 || py_ < 0 || px_ >= img->width || py_ >= img->height) return;
       px[py_ * img->width + px_] = c;
     };
@@ -594,15 +617,151 @@ int32_t SdlTwodHost::DrawTextA(Handle d, const char* text, int32_t length, ztwod
       for (int yy = 0; yy < lh; ++yy)
         for (int xx = 0; xx < w; ++xx) put(x0 + xx, ly + yy, bg);
     if (l.empty()) continue;
-    SDL_Surface* surf = TTF_RenderText_Solid(f->ttf, l.c_str(), l.size(), SDL_Color{255, 255, 255, 255});
+    SDL_Surface* surf =
+        TTF_RenderText_Solid(f->ttf, l.c_str(), l.size(), SDL_Color{255, 255, 255, 255});
     if (!surf) continue;
+    if (hud_text) {
+      HudTextLine line{l, f->face, f->em,      f->weight, int(f->italic), x0,   ly, ly + f->ascent,
+                       w, lh,      x->bk_mode, *rect,     x->text,        x->bk};
+      // Repainting an unchanged native glyph is idempotent. Keeping another
+      // antialiased recipe would darken its edge and grow the cache forever.
+      const auto same_recipe = [&](const auto& old) {
+        return old.text == line.text && old.face == line.face && old.em == line.em &&
+               old.weight == line.weight && old.italic == line.italic && old.x == line.x &&
+               old.y == line.y && old.baseline == line.baseline && old.width == line.width &&
+               old.height == line.height && old.background_mode == line.background_mode &&
+               old.colour == line.colour && old.background == line.background &&
+               old.clip.left == line.clip.left && old.clip.top == line.clip.top &&
+               old.clip.right == line.clip.right && old.clip.bottom == line.clip.bottom;
+      };
+      if (hud_text->lines.empty() || !same_recipe(hud_text->lines.back())) {
+        if (hud_text->lines.size() >= 4096)
+          throw std::runtime_error("HUD text recipe budget exceeded");
+        hud_text->lines.push_back(std::move(line));
+      }
+    }
     const auto* p = static_cast<const uint8_t*>(surf->pixels);
     for (int yy = 0; yy < surf->h; ++yy)
       for (int xx = 0; xx < surf->w; ++xx)
         if (p[yy * surf->pitch + xx]) put(x0 + xx, ly + yy + f->shift, fg);
     SDL_DestroySurface(surf);
   }
+  if (hud_text)
+    hud_text->pixels_hash =
+        platform::hud_identity(img->width, img->height, px, size_t(img->width) * img->height);
   return total;
+}
+
+std::shared_ptr<const platform::HudImage> SdlTwodHost::hud_text_image(const zimg::Texture* source,
+                                                                      float density, uint16_t key) {
+  auto found = hud_text_sources_.find(source);
+  if (!hud_text_enabled_ || found == hud_text_sources_.end() || found->second.lines.empty() ||
+      !std::isfinite(density) || density <= 1 || source->palette || source->alpha)
+    return {};
+  auto& record = found->second;
+  const size_t count = size_t(source->width) * source->height;
+  if (record.base.size() != count ||
+      record.pixels_hash != platform::hud_identity(source->width, source->height,
+                                                   static_cast<const uint16_t*>(source->pixels),
+                                                   count))
+    return {};
+  const int scale = std::clamp(int(std::lround(density * 256)), 256, 2048);
+  uint64_t signature = platform::hud_identity(source->width, source->height, record.base);
+  auto bytes = [&](const void* data, size_t size) {
+    const auto* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i) {
+      signature ^= p[i];
+      signature *= 0x100000001b3ULL;
+    }
+  };
+  bytes(&key, sizeof key);
+  bytes(&source->flags, sizeof source->flags);
+  for (const auto& line : record.lines) {
+    bytes(line.text.data(), line.text.size());
+    bytes(line.face.data(), line.face.size());
+    for (int v :
+         {line.em, line.weight, line.italic, line.x, line.y, line.baseline, line.width, line.height,
+          line.background_mode, line.clip.left, line.clip.top, line.clip.right, line.clip.bottom})
+      bytes(&v, sizeof v);
+    bytes(&line.colour, sizeof line.colour);
+    bytes(&line.background, sizeof line.background);
+  }
+  if (record.cached && record.cached_scale == scale && record.cached_signature == signature)
+    return record.cached;
+  auto result = std::make_shared<platform::HudImage>();
+  const float k = scale / 256.f;
+  result->width = unsigned(std::ceil(source->width * k));
+  result->height = unsigned(std::ceil(source->height * k));
+  if (result->width > 8192 || result->height > 8192 ||
+      uint64_t(result->width) * result->height > 16 * 1024 * 1024)
+    throw std::runtime_error("HUD text exceeds the output image budget");
+  result->pixels.resize(size_t(result->width) * result->height);
+  for (unsigned y = 0; y < result->height; ++y)
+    for (unsigned x = 0; x < result->width; ++x) {
+      const uint16_t pixel = record.base[std::min(source->height - 1, int(y / k)) * source->width +
+                                         std::min(source->width - 1, int(x / k))];
+      result->pixels[size_t(y) * result->width + x] =
+          (source->flags & zimg::kAlpha) && pixel == key ? 0 : SdlScreen2D::rgba(pixel, true);
+    }
+  auto composite = [&](int x, int y, uint32_t colour, unsigned alpha, const ztwod::Rect& clip) {
+    if (x < 0 || y < 0 || x >= int(result->width) || y >= int(result->height) ||
+        x < int(std::floor(clip.left * k)) || y < int(std::floor(clip.top * k)) ||
+        x >= int(std::ceil(clip.right * k)) || y >= int(std::ceil(clip.bottom * k)))
+      return;
+    auto& destination = result->pixels[size_t(y) * result->width + x];
+    uint32_t mixed = (alpha + (destination >> 24) * (255 - alpha) / 255) << 24;
+    for (unsigned shift : {0U, 8U, 16U}) {
+      const unsigned component = (((colour >> shift) & 255) * alpha +
+                                  ((destination >> shift) & 255) * (255 - alpha) + 127) /
+                                 255;
+      mixed |= component << shift;
+    }
+    destination = mixed;
+  };
+  for (const auto& line : record.lines) {
+    const std::string font_key = line.face + '\n' + std::to_string(line.em) + '/' +
+                                 std::to_string(line.weight) + '/' + std::to_string(line.italic) +
+                                 '/' + std::to_string(scale);
+    auto font = hud_fonts_.find(font_key);
+    if (font == hud_fonts_.end()) {
+      if (hud_fonts_.size() >= 64) {
+        for (const auto& old : hud_fonts_) TTF_CloseFont(old.second);
+        hud_fonts_.clear();
+      }
+      const auto path = zutl::find(font_file(line.face).c_str());
+      TTF_Font* opened = path.empty() ? nullptr : TTF_OpenFont(path.c_str(), line.em * k);
+      if (!opened) throw std::runtime_error("Cannot open the enhanced HUD font");
+      TTF_SetFontHinting(opened, TTF_HINTING_LIGHT);
+      TTF_SetFontKerning(opened, false);
+      TTF_SetFontStyle(
+          opened, (line.weight >= 600 ? TTF_STYLE_BOLD : 0) | (line.italic ? TTF_STYLE_ITALIC : 0));
+      font = hud_fonts_.emplace(font_key, opened).first;
+    }
+    const int left = int(std::lround(line.x * k)), top = int(std::lround(line.y * k));
+    const int width = std::max(1, int(std::lround(line.width * k)));
+    if (line.background_mode == 2)
+      for (int y = top; y < int(std::lround((line.y + line.height) * k)); ++y)
+        for (int x = left; x < left + width; ++x) composite(x, y, line.background, 255, line.clip);
+    SDL_Surface* rendered = TTF_RenderText_Blended(font->second, line.text.c_str(),
+                                                   line.text.size(), SDL_Color{255, 255, 255, 255});
+    if (!rendered) throw std::runtime_error("Cannot rasterize enhanced HUD text");
+    SDL_Surface* converted = SDL_ConvertSurface(rendered, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(rendered);
+    if (!converted) throw std::runtime_error("Cannot convert enhanced HUD text");
+    const int glyph_top = int(std::lround(line.baseline * k)) - TTF_GetFontAscent(font->second);
+    const auto* pixels = static_cast<const uint8_t*>(converted->pixels);
+    for (int y = 0; y < converted->h; ++y)
+      for (int x = 0; x < width; ++x) {
+        const int sx = std::min(converted->w - 1, int(int64_t(x) * converted->w / width));
+        composite(left + x, glyph_top + y, line.colour, pixels[y * converted->pitch + sx * 4 + 3],
+                  line.clip);
+      }
+    SDL_DestroySurface(converted);
+  }
+  record.cached = result;
+  record.cached_scale = scale;
+  record.cached_signature = signature;
+  return result;
 }
 
 int32_t SdlTwodHost::GetTextMetricsA(Handle d, ztwod::TextMetrics* out) {
