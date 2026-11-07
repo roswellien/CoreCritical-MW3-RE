@@ -403,6 +403,36 @@ void check_environment_packs() {
                   "Corrupt BWSFM1 pin accepted");
   // A relocated manifest must resolve its own pinned sibling, not a
   // similarly named file under the registry directory.
+  {
+    const char *paths[] = {"environment/authored.bin", "environment/world.bin"};
+    const char *formats[] = {"BWSNR2", "BWSNR3"};
+    for (unsigned page = 0; page < 2; ++page) {
+      const auto base = env_test_page(page == 1);
+      for (unsigned fault = 0; fault < 6; ++fault) {
+        auto data = base;
+        if (fault == 0)
+          data.resize(8);
+        else if (fault == 1)
+          data[8] = data[9] = data[10] = data[11] = 0;
+        else if (fault == 2)
+          data[12] = data[13] = data[14] = data[15] = 0;
+        else if (fault == 3)
+          data[63] = 'x';
+        else if (fault == 4) {
+          data.insert(64, data.substr(12, 52));
+          data[8] = 2;
+        } else
+          data[20] = 4;
+        EnvironmentFixture malformed(folder /
+                                     ("normal-header-" + std::to_string(page) +
+                                      "-" + std::to_string(fault)));
+        malformed.put(paths[page], data, formats[page]);
+        malformed.save();
+        env_test_reject([&] { load_environment_packs({malformed.path()}); },
+                        "Malformed normal header admitted");
+      }
+    }
+  }
   EnvironmentFixture misplaced(folder / "misplaced");
   misplaced.put("catalogs/world.txt", "MW34SNP1\nworld.bin\n", "MW34SNP1");
   misplaced.manifest["files"].erase("environment/world.txt");

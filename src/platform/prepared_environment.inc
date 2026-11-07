@@ -202,6 +202,11 @@ void env_header(const EnvPin &pin) {
     if (it == magic.end() || count < 8 ||
         std::memcmp(head, it->second.data(), 8))
       env_fail("unsupported/mislabeled resource format");
+    if (pin.format == "BWSNR2" || pin.format == "BWSNR3") {
+      input.clear();
+      input.seekg(0, std::ios::beg);
+      (void)mw34::materials::read_surface_normal_header(input);
+    }
   }
 }
 void env_catalog(const EnvPack &pack, const char *role, const char *magic,
