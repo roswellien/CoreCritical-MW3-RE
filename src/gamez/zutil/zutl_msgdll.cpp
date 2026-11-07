@@ -1,4 +1,5 @@
 #include "gamez/zutil/zutl_msgdll.h"
+#include "platform/host_path.h"
 
 #include <cstdio>
 #include <cstring>
@@ -166,7 +167,7 @@ const char* get_text(int32_t id) {
 }  // namespace
 
 bool read_message_dll(const std::string& host_path, MessageDll& out) {
-  std::ifstream f(host_path, std::ios::binary);
+  std::ifstream f(platform::host_path(std::filesystem::u8path(host_path)), std::ios::binary);
   if (!f) return false;
   Pe pe;
   pe.b.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());

@@ -1,5 +1,6 @@
 #include "content/persistence.h"
 #include "content/hash.h"
+#include "platform/host_path.h"
 
 #include <array>
 #include <atomic>
@@ -41,7 +42,7 @@ struct Bundle {
     SavedState payload;
 };
 Bundle read_bundle(const fs::path &path) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(platform::host_path(path), std::ios::binary);
     char magic[8]{};
     if (!input.read(magic, 8) || std::string(magic, 8) != "CCSAVE1\n")
         fail("save-format", "Unsupported content save bundle");
@@ -249,16 +250,16 @@ void save_bundle(const fs::path &path, const Json &state, const std::vector<uint
     if (bytes.size() > 16 * 1024 * 1024)
         fail("save-limit", "Semantic save metadata exceeds 16 MiB");
     auto parent = path.parent_path().empty() ? fs::current_path() : path.parent_path();
-    fs::create_directories(parent);
+    fs::create_directories(platform::host_path(parent));
     fs::path stage =
         parent /
         (".save-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    if (!fs::create_directory(stage))
+    if (!fs::create_directory(platform::host_path(stage)))
         fail("save-busy", "Cannot reserve save staging directory");
     try {
         fs::path temporary = stage / "snapshot";
         {
-            std::ofstream output(temporary, std::ios::binary);
+            std::ofstream output(platform::host_path(temporary), std::ios::binary);
             output.write("CCSAVE1\n", 8);
             put64(output, bytes.size());
             put64(output, world.size());
@@ -270,17 +271,19 @@ void save_bundle(const fs::path &path, const Json &state, const std::vector<uint
         }
         // Verify the complete staged pair before replacing the last good save.
         read_bundle(temporary);
+        if (!platform::sync_file(temporary))
+            fail("save-flush", "Could not sync the staged content save");
 #if defined(_WIN32)
-        if (!MoveFileExW(temporary.c_str(), path.c_str(),
+        if (!MoveFileExW(platform::host_path(temporary).c_str(), platform::host_path(path).c_str(),
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             fail("save-activate", "Could not atomically activate save");
 #else
-        fs::rename(temporary, path);
+        fs::rename(platform::host_path(temporary), platform::host_path(path));
 #endif
-        fs::remove(stage);
+        fs::remove(platform::host_path(stage));
     } catch (...) {
         std::error_code error;
-        fs::remove_all(stage, error);
+        fs::remove_all(platform::host_path(stage), error);
         throw;
     }
 }
@@ -295,7 +298,7 @@ SavedState load_bundle(const fs::path &path, const ResolvedContentSet &resolved)
 }
 Json migrate_bundle(const fs::path &source, const fs::path &output, const Json &migration,
                     const ResolvedContentSet &resolved, bool preview) {
-    if (fs::exists(output))
+    if (fs::exists(platform::host_path(output)))
         fail("migration-output", "Migration needs a new output file");
     auto bundle = read_bundle(source);
     const Json previous_state = bundle.payload.state;
@@ -402,8 +405,9 @@ Json migrate_bundle(const fs::path &source, const fs::path &output, const Json &
                  "Changing simulation options requires an explicit boundary reset");
         bundle.payload.state["simulation_options"] = options;
     }
-    fs::path backup = output.string() + ".source-backup";
-    if (fs::exists(backup))
+    fs::path backup = output;
+    backup += ".source-backup";
+    if (fs::exists(platform::host_path(backup)))
         fail("migration-output", "Migration backup already exists");
     Json report = {{"preview", preview},
                    {"source_sha256", file_sha256(source)},
@@ -411,10 +415,10 @@ Json migrate_bundle(const fs::path &source, const fs::path &output, const Json &
                    {"world_bytes_before", previous_world_bytes},
                    {"world_bytes_after", bundle.payload.world.size()},
                    {"target_lock_sha256", sha256(resolved.lock.dump())},
-                   {"backup", fs::absolute(backup).generic_string()}};
+                   {"backup", fs::absolute(backup).generic_u8string()}};
     if (preview)
         return report;
-    fs::copy_file(source, backup);
+    fs::copy_file(platform::host_path(source), platform::host_path(backup));
     if (file_sha256(source) != file_sha256(backup))
         fail("migration-backup", "Could not verify source backup");
     save_bundle(output, bundle.payload.state, bundle.payload.world, resolved);

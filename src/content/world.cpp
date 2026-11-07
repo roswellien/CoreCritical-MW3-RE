@@ -1,4 +1,5 @@
 #include "content/world.h"
+#include "platform/host_path.h"
 
 #include "miniz/miniz_tinfl.h"
 #include <algorithm>
@@ -93,10 +94,10 @@ Matrix matrix(const Json &node) {
 }
 std::string bytes(const fs::path &path) {
     std::error_code ec;
-    const auto size = fs::file_size(path, ec);
+    const auto size = fs::file_size(platform::host_path(path), ec);
     if (ec || size > 256 * 1024 * 1024)
         fail("world-resource", "Missing or oversized geometry resource: " + path.string());
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(platform::host_path(path), std::ios::binary);
     std::string out(static_cast<size_t>(size), '\0');
     if (size && !in.read(out.data(), static_cast<std::streamsize>(size)))
         fail("world-resource", "Cannot read geometry resource: " + path.string());

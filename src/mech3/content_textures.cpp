@@ -1,4 +1,5 @@
 #include "mech3/content_textures.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -77,7 +78,7 @@ void validate_content_textures(const cc::content::ResolvedContentSet &content) {
             reject(*definition, "name", "Two definitions claim the same native texture name");
         const auto path =
             content.resource(definition->owner, definition->data.at("file").get<std::string>());
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(platform::host_path(path), std::ios::binary);
         char magic[8]{};
         if (!input.read(magic, sizeof magic) || std::memcmp(magic, "BWTEX1\0\0", 8))
             reject(*definition, "file", "Named textures require a BWTEX1 payload");
@@ -111,7 +112,7 @@ zimg::Texture *load_content_texture(const char *name) {
         return nullptr;
     const auto path =
         content->resource(definition->owner, definition->data.at("file").get<std::string>());
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(platform::host_path(path), std::ios::binary);
     const auto payload = platform::prepared::read_textures(input);
     const auto image =
         std::find_if(payload.images.begin(), payload.images.end(), [&](const auto &entry) {

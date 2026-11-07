@@ -104,7 +104,7 @@ Json compile_directory(const fs::path &source, const fs::path &output, const fs:
     }
 }
 } // namespace
-int main(int argc, char **argv) {
+int content_main(int argc, char **argv) {
     using namespace cc::content;
     try {
         if (argc < 2)
@@ -213,3 +213,12 @@ int main(int argc, char **argv) {
         return 2;
     }
 }
+
+#include "platform/utf8_main.h"
+#if defined(_WIN32)
+int wmain(int argc, wchar_t **argv) {
+    return platform::windows_utf8_main(argc, argv, content_main);
+}
+#else
+int main(int argc, char **argv) { return content_main(argc, argv); }
+#endif

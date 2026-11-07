@@ -1,4 +1,5 @@
 #include "gamez/zreader/zreader.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -6,6 +7,8 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <memory>
+#include <stdexcept>
 
 #include "crt/msvc_math.h"
 #include "crt/msvc_string.h"
@@ -694,11 +697,20 @@ Node* load(const char* path) {
     if (!f) continue;
     if (const std::string loose = mod_loose(*a, g_fname); !loose.empty()) {
       zutl::verify_managed_read(loose);
-      if (std::FILE* t = std::fopen(loose.c_str(), "rb")) {
-        Node* root = parse_text(t);
-        std::fclose(t);
-        if (root) return composed(root);
+      std::unique_ptr<std::FILE, decltype(&std::fclose)> text(
+          platform::file_open(std::filesystem::u8path(loose), "rb"), &std::fclose);
+      if (text) {
+        Node *root = parse_text(text.get());
+        const bool read_failed = std::ferror(text.get()) != 0;
+        text.reset();
+        if (root && !read_failed)
+          return composed(root);
+        if (root)
+          free_node(root);
       }
+      if (zutl::mounts().strict_reads)
+        throw std::runtime_error("Required managed loose reader could not be opened or parsed: " +
+                                 loose);
     }
     Node* root = new_nodes(List, 1);
     g_entry_end = std::ftell(f) + static_cast<long>(length), g_depth = 0, g_broken = false;

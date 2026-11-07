@@ -1,5 +1,6 @@
 #include "mech3/content_legacy.h"
 #include "mech3/content_base.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <set>
@@ -23,8 +24,10 @@ void verify_resource(const std::string &path) {
         return;
     std::error_code error;
     const auto &value = expected->second;
-    if (!cc::content::fs::is_regular_file(cc::content::fs::u8path(path), error) ||
-        cc::content::fs::file_size(cc::content::fs::u8path(path), error) != value.bytes ||
+    if (!cc::content::fs::is_regular_file(platform::host_path(cc::content::fs::u8path(path)),
+                                          error) ||
+        cc::content::fs::file_size(platform::host_path(cc::content::fs::u8path(path)), error) !=
+            value.bytes ||
         cc::content::file_sha256(cc::content::fs::u8path(path)) != value.sha256)
         cc::content::fail("payload-integrity", "Managed legacy resource changed after resolution",
                           value.owner, {}, value.logical);
@@ -110,7 +113,7 @@ void mount_content_legacy(const cc::content::ResolvedContentSet &content) {
     for (const auto &claim : content.lock.value("legacy_resources", cc::content::Json::array())) {
         const auto owner = claim.at("owner").get<std::string>();
         const auto path =
-            content.resource(owner, claim.at("source").get<std::string>()).generic_string();
+            content.resource(owner, claim.at("source").get<std::string>()).generic_u8string();
         const auto logical = claim.at("path").get<std::string>();
         if (!zutl::mod_may_serve(logical))
             cc::content::fail("protected-resource", "Managed overlay cannot provide a player file",
@@ -118,7 +121,7 @@ void mount_content_legacy(const cc::content::ResolvedContentSet &content) {
         mounts.managed_files[logical] = path;
         const auto package = std::find_if(content.packages.begin(), content.packages.end(),
                                           [&](const auto &package) { return package.id == owner; });
-        const auto root = package->root.generic_string();
+        const auto root = package->root.generic_u8string();
         const auto &integrity =
             package->manifest.at("files").at(claim.at("source").get<std::string>());
         g_resources[path] = {integrity.at("bytes").get<uint64_t>(), claim.at("sha256"), owner,

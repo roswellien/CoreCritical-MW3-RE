@@ -216,7 +216,7 @@ void semantic_navigation(const Definition &mission) {
     const bool multiplayer = mission.data.value("multiplayer", false);
     const std::string name =
         std::string(multiplayer ? "waynet_mp" : "waynet_") + std::to_string(number);
-    Json document = {"version", Json{107}, "name", Json{name}};
+    Json document = {"version", Json::array({107}), "name", Json::array({name})};
     std::map<std::string, int> points;
     int index = 0;
     for (const auto &nav : mission.data["nav_points"])
@@ -230,8 +230,8 @@ void semantic_navigation(const Definition &mission) {
             links.push_back(points.at(link.get<std::string>()));
         document.push_back(node);
         document.push_back(Json{12, floats(nav.at("position")), links, "name",
-                                Json{nav.value("label", nav.at("id").get<std::string>())},
-                                "auxname", Json{nav.at("id")}});
+                                Json::array({nav.value("label", nav.at("id").get<std::string>())}),
+                                "auxname", Json::array({nav.at("id")})});
     }
     world_readers::validate_document(name + ".zrd", document);
     g_readers[name + ".zrd"] = document;

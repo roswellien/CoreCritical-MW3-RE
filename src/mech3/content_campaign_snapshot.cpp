@@ -1,5 +1,6 @@
 #include "mech3/content_campaign.h"
 #include "mech3/content_state.h"
+#include "platform/host_path.h"
 
 #include <chrono>
 #include <cstring>
@@ -84,18 +85,20 @@ std::vector<uint8_t> capture_content_world_snapshot(const std::string &path) {
                    std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
                    "-" + std::to_string(++serial)))
                      .generic_string();
-    } while (cc::content::fs::exists(zutl::write_path(staged.c_str())));
+    } while (cc::content::fs::exists(
+        platform::host_path(cc::content::fs::u8path(zutl::write_path(staged.c_str())))));
     const auto host = zutl::write_path(staged.c_str());
     struct Cleanup {
         std::string path;
         ~Cleanup() {
             std::error_code ec;
-            cc::content::fs::remove(path, ec);
+            cc::content::fs::remove(platform::host_path(cc::content::fs::u8path(path)), ec);
         }
     } cleanup{host};
     if (!pilot_hooks().save_world_checked(staged.c_str(), 2))
         fail("save-native", "Native world snapshot failed; the previous bundle was preserved");
-    std::ifstream in(host, std::ios::binary | std::ios::ate);
+    std::ifstream in(platform::host_path(cc::content::fs::u8path(host)),
+                     std::ios::binary | std::ios::ate);
     const auto length = in ? in.tellg() : std::streampos(-1);
     if (length < 8 || length > std::streampos(512 * 1024 * 1024))
         fail("save-native", "Native world snapshot is missing or exceeds its size limit");

@@ -1,4 +1,5 @@
 #include "mech3/content_state.h"
+#include "platform/host_path.h"
 
 #include <chrono>
 #include <cstdio>
@@ -68,21 +69,17 @@ bool save_managed_pilot(Pilot &pilot) {
     using cc::content::fail;
     const auto target = fs::u8path(zutl::write_path(pilot.file_path().c_str()));
     const auto parent = target.parent_path().empty() ? fs::current_path() : target.parent_path();
-    fs::create_directories(parent);
+    fs::create_directories(platform::host_path(parent));
     const auto stage =
         parent /
         (".pilot-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    if (!fs::create_directory(stage))
+    if (!fs::create_directory(platform::host_path(stage)))
         fail("pilot-save", "Cannot reserve managed pilot staging directory");
     const auto temporary = stage / "pilot";
     const auto previous_dirty = pilot.dirty;
     pilot.close();
     try {
-#if defined(_WIN32)
-        pilot.file = _wfopen(temporary.c_str(), L"w+b");
-#else
-        pilot.file = std::fopen(temporary.c_str(), "w+b");
-#endif
+        pilot.file = platform::file_open(temporary, "w+b");
         if (!pilot.file || !pilot.write_header() || !pilot.write() || std::ferror(pilot.file) ||
             std::fflush(pilot.file) != 0)
             fail("pilot-save", "Managed pilot write failed; the previous pilot was preserved");
@@ -99,21 +96,22 @@ bool save_managed_pilot(Pilot &pilot) {
         if (std::fclose(written) != 0)
             fail("pilot-save", "Managed pilot close failed; the previous pilot was preserved");
 #if defined(_WIN32)
-        if (!MoveFileExW(temporary.c_str(), target.c_str(),
+        if (!MoveFileExW(platform::host_path(temporary).c_str(),
+                         platform::host_path(target).c_str(),
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             fail("pilot-save", "Cannot atomically activate the managed pilot");
 #else
-        fs::rename(temporary, target);
+        fs::rename(platform::host_path(temporary), platform::host_path(target));
 #endif
         std::error_code cleanup_error;
-        fs::remove(stage, cleanup_error);
+        fs::remove(platform::host_path(stage), cleanup_error);
         pilot.dirty = 0;
         return true;
     } catch (...) {
         pilot.close();
         pilot.dirty = previous_dirty;
         std::error_code error;
-        fs::remove_all(stage, error);
+        fs::remove_all(platform::host_path(stage), error);
         throw;
     }
 }

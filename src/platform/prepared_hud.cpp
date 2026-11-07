@@ -1,4 +1,5 @@
 #include "platform/prepared_hud.h"
+#include "platform/host_path.h"
 
 #include <cmath>
 #include <cstring>
@@ -46,12 +47,13 @@ HudImage read_header(std::istream& input, uint64_t file_bytes) {
 }
 }  // namespace
 HudImage inspect_hud_sprite(const std::filesystem::path& path) {
-  std::ifstream input(path, std::ios::binary);
-  return read_header(input, std::filesystem::file_size(path));
+  std::ifstream input(platform::host_path(path), std::ios::binary);
+  return read_header(input, std::filesystem::file_size(host_path(path)));
 }
 std::shared_ptr<const HudImage> load_hud_sprite(const std::filesystem::path& path) {
-  std::ifstream input(path, std::ios::binary);
-  auto image = std::make_shared<HudImage>(read_header(input, std::filesystem::file_size(path)));
+  std::ifstream input(platform::host_path(path), std::ios::binary);
+  auto image =
+      std::make_shared<HudImage>(read_header(input, std::filesystem::file_size(host_path(path))));
   image->pixels.resize(size_t(image->width) * image->height);
   for (auto& pixel : image->pixels) {
     uint8_t rgba[4];

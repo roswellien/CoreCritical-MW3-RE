@@ -1,4 +1,5 @@
 #include "content/legacy.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -59,11 +60,11 @@ std::string folder_id(const fs::path &root) {
 }
 std::string read_text(const fs::path &path) {
     std::error_code error;
-    auto size = fs::file_size(path, error);
+    auto size = fs::file_size(platform::host_path(path), error);
     if (error || size > 2 * 1024 * 1024)
         fail("legacy-metadata", "Missing or oversized legacy metadata", {}, {},
-             path.generic_string());
-    std::ifstream input(path, std::ios::binary);
+             path.generic_u8string());
+    std::ifstream input(platform::host_path(path), std::ios::binary);
     std::string result(static_cast<size_t>(size), '\0');
     if (!input.read(result.data(), static_cast<std::streamsize>(result.size())))
         fail("file-read", "Cannot read legacy metadata");
@@ -124,11 +125,14 @@ Json integrity(const fs::path &root, const Json &original, bool verify, bool req
     if (!original.contains("files")) {
         std::error_code error;
         uint64_t expanded = 0;
-        fs::recursive_directory_iterator it(root, fs::directory_options::none, error), end;
+        fs::recursive_directory_iterator it(platform::host_path(root), fs::directory_options::none,
+                                            error),
+            end;
         for (; it != end && !error; it.increment(error)) {
             if (it.depth() > 32)
                 fail("payload-limit", "Legacy directory depth exceeds 32");
-            auto relative = it->path().lexically_relative(root).generic_string();
+            auto relative =
+                platform::logical_host_path(it->path()).lexically_relative(root).generic_u8string();
             confined_path(root, relative);
             if (!it->is_directory(error) && !it->is_regular_file(error))
                 fail("unsafe-path", "Only regular package files are supported", {}, {}, relative);
@@ -174,7 +178,8 @@ Json integrity(const fs::path &root, const Json &original, bool verify, bool req
                  file.key());
         if (verify) {
             std::error_code error;
-            if (!fs::is_regular_file(path, error) || fs::file_size(path, error) != size ||
+            if (!fs::is_regular_file(platform::host_path(path), error) ||
+                fs::file_size(platform::host_path(path), error) != size ||
                 file_sha256(path) != file.value()["sha256"])
                 fail("payload-integrity", "Missing, changed or corrupt legacy payload", {}, {},
                      file.key());
@@ -300,7 +305,8 @@ void prepared(Package &package, const Json &original, bool verify) {
                     fail("unsupported-legacy-capability",
                          "Materials require surface-materials version 1", package.id, id);
                 if (verify) {
-                    std::ifstream input(confined_path(package.root, path), std::ios::binary);
+                    std::ifstream input(platform::host_path(confined_path(package.root, path)),
+                                        std::ios::binary);
                     char magic[8] = {};
                     input.read(magic, sizeof magic);
                     if (input.gcount() < static_cast<std::streamsize>(format.size()) ||
@@ -369,9 +375,9 @@ bool legacy_file_is_gameplay(const std::string &path) {
     return true;
 }
 std::optional<Package> try_load_legacy(const fs::path &input, bool verify_files) try {
-    const auto root = fs::weakly_canonical(input);
+    const auto root = platform::logical_host_path(fs::weakly_canonical(platform::host_path(input)));
     std::error_code error;
-    const bool has_manifest = fs::is_regular_file(root / "pack.json", error);
+    const bool has_manifest = fs::is_regular_file(platform::host_path(root / "pack.json"), error);
     Json original;
     bool mod = false;
     if (has_manifest) {
@@ -386,7 +392,7 @@ std::optional<Package> try_load_legacy(const fs::path &input, bool verify_files)
         if (schema != 1 && schema != 2)
             fail("unsupported-schema", "Unsupported legacy manifest schema");
     } else {
-        if (!fs::is_regular_file(root / "mod.txt", error))
+        if (!fs::is_regular_file(platform::host_path(root / "mod.txt"), error))
             return std::nullopt;
         original = mod_manifest(root);
         mod = true;

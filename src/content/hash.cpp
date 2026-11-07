@@ -1,5 +1,6 @@
 #include "content/hash.h"
 #include "content/content.h"
+#include "platform/host_path.h"
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -80,7 +81,7 @@ std::string sha256(const std::string &bytes) {
     return hash.finish();
 }
 std::string file_sha256(const fs::path &path) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(platform::host_path(path), std::ios::binary);
     if (!input)
         fail("file-read", "Cannot open payload", {}, {}, path.generic_string());
     Sha256 hash;

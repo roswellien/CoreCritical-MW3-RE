@@ -1,4 +1,5 @@
 #include "prepared_models.hpp"
+#include "platform/host_path.h"
 
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zmodel/gmod_const.h"
@@ -18,7 +19,7 @@ using platform::prepared::Matrix;
 using zcls::Node;
 
 std::ifstream open(const std::string &path) {
-    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
+    std::ifstream input(platform::host_path(std::filesystem::u8path(path)), std::ios::binary);
     if (!input)
         throw std::runtime_error("Cannot open prepared visual payload: " + path);
     return input;

@@ -1,4 +1,5 @@
 #include "mech3/content_campaign.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cmath>
@@ -262,8 +263,9 @@ Json capture_result(const CampaignGame &game, bool success) {
     return result;
 }
 
-std::string bundle_path(CampaignGame &game) {
-    return zutl::write_path((std::string(game.path()) + ".ccsave").c_str());
+cc::content::fs::path bundle_path(CampaignGame &game) {
+    return cc::content::fs::u8path(
+        zutl::write_path((std::string(game.path()) + ".ccsave").c_str()));
 }
 
 int32_t operation_alias(const Pilot &pilot, const std::string &id) {
@@ -334,7 +336,7 @@ Pilot *obtain_content_pilot() {
     if (auto *loaded = find_pilot("CoreCritical"))
         return loaded;
     const auto path = zutl::write_path("pilots/CoreCritical.mw3");
-    if (cc::content::fs::exists(path)) {
+    if (cc::content::fs::exists(platform::host_path(cc::content::fs::u8path(path)))) {
         if (auto *loaded = load_pilot("CoreCritical", false))
             return loaded;
         fail("campaign-pilot",
@@ -741,7 +743,7 @@ void refresh_content_campaign_semantics(CampaignGame &game) {
     const auto content = active_content();
     if (!content)
         fail("campaign-content", "Managed campaign has no active content set");
-    if (!cc::content::fs::exists(path)) {
+    if (!cc::content::fs::exists(platform::host_path(path))) {
         if (game.content_checkpoint_expected)
             fail("save-bundle", "The campaign's accepted checkpoint is missing");
         // A first briefing can save its starting inventory before any mission has
@@ -777,7 +779,7 @@ void refresh_content_campaign_semantics(CampaignGame &game) {
 }
 void read_content_campaign(CampaignGame &game) {
     const auto path = bundle_path(game);
-    if (!cc::content::fs::exists(path)) {
+    if (!cc::content::fs::exists(platform::host_path(path))) {
         if (game.campaign > 4 || active_content())
             fail("save-bundle",
                  "Managed campaign world exists without its required identity bundle");
@@ -817,7 +819,7 @@ bool restore_content_campaign(CampaignGame &game) {
     if (!content)
         fail("campaign-content", "Managed campaign has no active content set");
     const auto path = bundle_path(game);
-    if (!cc::content::fs::exists(path)) {
+    if (!cc::content::fs::exists(platform::host_path(path))) {
         if (game.content_checkpoint_expected)
             fail("save-bundle", "The campaign's accepted checkpoint is missing");
         return false;
@@ -867,11 +869,12 @@ bool restore_content_campaign(CampaignGame &game) {
         std::string path;
         ~Cleanup() {
             std::error_code error;
-            cc::content::fs::remove(path, error);
+            cc::content::fs::remove(platform::host_path(cc::content::fs::u8path(path)), error);
         }
     } cleanup{temporary};
     {
-        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        std::ofstream out(platform::host_path(cc::content::fs::u8path(temporary)),
+                          std::ios::binary | std::ios::trunc);
         out.write(reinterpret_cast<const char *>(saved.world.data()),
                   static_cast<std::streamsize>(saved.world.size()));
         if (!out)

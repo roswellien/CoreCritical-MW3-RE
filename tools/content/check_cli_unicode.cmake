@@ -1,0 +1,18 @@
+if(NOT DEFINED CLI OR NOT DEFINED ROOT)
+  message(FATAL_ERROR "Provide the built content CLI and its test workspace")
+endif()
+string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef token)
+set(case_root "${ROOT}/content-café with spaces-${token}")
+if(EXISTS "${case_root}")
+  message(FATAL_ERROR "Content CLI test directory already exists")
+endif()
+file(MAKE_DIRECTORY "${case_root}")
+file(WRITE "${case_root}/profile.json" "{\"schema_version\":1,\"packages\":[]}")
+execute_process(
+  COMMAND "${CLI}" resolve "${case_root}/profile.json" --store "${case_root}/store"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT result EQUAL 0 OR NOT output MATCHES "\"ok\":true")
+  message(FATAL_ERROR "Unicode content CLI arguments failed (${result}): ${output} ${error}")
+endif()
+file(REMOVE "${case_root}/profile.json")
+message(STATUS "Unicode and spaced profile/store command-line paths passed")

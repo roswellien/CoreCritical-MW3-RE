@@ -1,4 +1,5 @@
 #include "mech3/content_checkpoint.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <atomic>
@@ -33,7 +34,7 @@ struct Staging {
     fs::path directory;
     bool keep = false;
     explicit Staging(const fs::path &parent) {
-        fs::create_directories(parent);
+        fs::create_directories(platform::host_path(parent));
         static std::atomic<uint64_t> sequence{0};
         for (int attempt = 0; attempt < 16; ++attempt) {
             directory =
@@ -41,7 +42,7 @@ struct Staging {
                 (".checkpoint-import-" +
                  std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
                  std::to_string(++sequence));
-            if (fs::create_directory(directory))
+            if (fs::create_directory(platform::host_path(directory)))
                 return;
         }
         fail("checkpoint-busy", "Cannot reserve a checkpoint import staging directory");
@@ -51,27 +52,28 @@ struct Staging {
             return;
         std::error_code error;
         for (const auto *file : {"index.before", "bundle.new"})
-            fs::remove(directory / file, error);
-        fs::remove(directory, error);
+            fs::remove(platform::host_path(directory / file), error);
+        fs::remove(platform::host_path(directory), error);
     }
 };
 
 void activate(const fs::path &source, const fs::path &target, bool replace) {
 #if defined(_WIN32)
     const DWORD flags = MOVEFILE_WRITE_THROUGH | (replace ? MOVEFILE_REPLACE_EXISTING : 0);
-    if (!MoveFileExW(source.c_str(), target.c_str(), flags))
+    if (!MoveFileExW(platform::host_path(source).c_str(), platform::host_path(target).c_str(),
+                     flags))
         fail("checkpoint-activate", "Cannot atomically activate the checkpoint or pilot index", {},
              {}, target.generic_string());
 #else
     if (replace)
-        fs::rename(source, target);
+        fs::rename(platform::host_path(source), platform::host_path(target));
     else {
         // Same-filesystem link publication is atomic and refuses an existing name.
         // rename() alone would replace another importer's concurrently created
         // file.
-        fs::create_hard_link(source, target);
+        fs::create_hard_link(platform::host_path(source), platform::host_path(target));
         std::error_code error;
-        fs::remove(source, error);
+        fs::remove(platform::host_path(source), error);
     }
 #endif
 }
@@ -94,7 +96,8 @@ bool configure_content_checkpoint(GameEngine &engine, const std::string &path) t
     if (zutl::mounts().write.empty())
         fail("checkpoint-profile",
              "A checkpoint import requires the active profile's writable directory");
-    const auto write_root = fs::weakly_canonical(fs::u8path(zutl::mounts().write));
+    const auto write_root = platform::logical_host_path(
+        fs::weakly_canonical(platform::host_path(fs::u8path(zutl::mounts().write))));
     auto saved = cc::content::load_bundle(fs::u8path(path), *content);
     cc::content::validate_saved_campaign_graph(saved.state, *content);
     const auto graph = saved.state.at("graph");
@@ -148,14 +151,14 @@ bool configure_content_checkpoint(GameEngine &engine, const std::string &path) t
     if (known)
         previous_pilots.insert(known);
     const auto index = writable(write_root, known ? known->file_path() : "pilots/CoreCritical.mw3");
-    const bool had_index = fs::exists(index);
-    if (had_index && !fs::is_regular_file(index))
+    const bool had_index = fs::exists(platform::host_path(index));
+    if (had_index && !fs::is_regular_file(platform::host_path(index)))
         fail("checkpoint-index", "Selected pilot index is not a regular file");
     Staging staging(index.parent_path());
     const auto backup = staging.directory / "index.before";
     if (had_index) {
         const auto digest = cc::content::file_sha256(index);
-        fs::copy_file(index, backup);
+        fs::copy_file(platform::host_path(index), platform::host_path(backup));
         if (cc::content::file_sha256(backup) != digest || cc::content::file_sha256(index) != digest)
             fail("checkpoint-index", "Pilot index changed while preparing the "
                                      "import; source was preserved");
@@ -187,11 +190,11 @@ bool configure_content_checkpoint(GameEngine &engine, const std::string &path) t
                 content_campaign_operation_alias(*pilot, candidate->content_campaign + ":" + run);
         candidate->mission = visit;
         canonical = writable(write_root, std::string(candidate->path()) + ".ccsave");
-        if (fs::exists(canonical))
+        if (fs::exists(platform::host_path(canonical)))
             fail("checkpoint-exists",
                  "Import refuses to overwrite an existing canonical checkpoint", {}, {},
                  canonical.generic_string());
-        fs::create_directories(canonical.parent_path());
+        fs::create_directories(platform::host_path(canonical.parent_path()));
         pilot->campaigns.reserve(pilot->campaigns.size() + 1);
         // The source is never moved. save_bundle supplies the ordinary checked,
         // atomic bundle encoding, then no-replace publication claims its new name.
@@ -228,7 +231,7 @@ bool configure_content_checkpoint(GameEngine &engine, const std::string &path) t
                     activate(backup, index, true);
                 else {
                     std::error_code error;
-                    fs::remove(index, error);
+                    fs::remove(platform::host_path(index), error);
                 }
                 engine.set_launch(previous_launch);
                 engine.pilot_chosen(previous_current);
@@ -245,7 +248,7 @@ bool configure_content_checkpoint(GameEngine &engine, const std::string &path) t
         }
         if (owns_bundle) {
             std::error_code error;
-            fs::remove(canonical, error);
+            fs::remove(platform::host_path(canonical), error);
         }
         if (pilot && !previous_pilots.count(pilot)) {
             pilots().remove(pilot);
@@ -253,7 +256,7 @@ bool configure_content_checkpoint(GameEngine &engine, const std::string &path) t
             delete pilot;
             if (!had_index) {
                 std::error_code error;
-                fs::remove(index, error);
+                fs::remove(platform::host_path(index), error);
             }
         }
         std::rethrow_exception(failure);

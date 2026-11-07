@@ -1,13 +1,24 @@
 #include "check.h"
 #include "content/content.h"
 #include "content/hash.h"
+#include "content/legacy.h"
 #include "content/persistence.h"
+#include "gamez/zreader/zreader.h"
 #include "gamez/zutil/zfix.h"
+#include "gamez/zutil/zutl_path.h"
+#include "gamez/zutil/zutl_zar.h"
+#include "mech3/content_campaign.h"
+#include "mech3/content_legacy.h"
 #include "mech3/content_network.h"
 #include "mech3/content_registry.h"
 #include "mech3/content_state.h"
+#include "mech3/content_stock_campaign.h"
 #include "mech3/mech_config.h"
+#include "mech3/mods.h"
+#include "mech3/pilot.h"
 #include "mech3/source_archive.h"
+#include "platform/host_path.h"
+#include "platform/reg_file.h"
 
 #include <fstream>
 #include <functional>
@@ -30,6 +41,13 @@ fs::path scratch(const char *name) {
     fs::create_directories(path);
     return path;
 }
+fs::path long_unicode_root(const char *name) {
+    auto path = fs::path(MW3_TEST_TMP) / name / fs::u8path(u8"profile-\u6e2c\u8a66-\u00e9");
+    while (path.native().size() < 330)
+        path /= "long-profile-component-012345678901234567890123456789";
+    fs::create_directories(platform::host_path(path));
+    return path;
+}
 Json manifest(const std::string &id) {
     return {{"schema_version", 3}, {"game_id", "mw3"},        {"id", id},
             {"version", "1.0.0"},  {"files", Json::object()}, {"definitions", Json::array()}};
@@ -43,6 +61,262 @@ Json profile(std::initializer_list<std::pair<std::string, fs::path>> packages) {
     return result;
 }
 } // namespace
+
+TEST(content_long_unicode_paths_preserve_atomic_saves_and_package_roundtrips) {
+    const auto root = long_unicode_root("content-long-host-path");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            std::error_code error;
+            fs::remove_all(platform::host_path(path), error);
+        }
+    } cleanup{fs::path(MW3_TEST_TMP) / "content-long-host-path"};
+    EXPECT(root.native().size() > 260);
+#if defined(_WIN32)
+    EXPECT(platform::host_path(root).native().rfind(L"\\\\?\\", 0) == 0);
+    const auto unc = fs::path(L"\\\\server\\share\\folder");
+    EXPECT(platform::host_path(unc).native() == L"\\\\?\\UNC\\server\\share\\folder");
+    EXPECT(platform::host_path(fs::path(L"\\\\?\\unc\\server\\share\\folder")) ==
+           platform::host_path(unc));
+#endif
+    ResolvedContentSet content;
+    content.lock = {{"packages", Json::array()}};
+    content.gameplay_digest = sha256("long-path-gameplay");
+    content.session_digest = sha256("long-path-handles");
+    const auto save =
+        root /
+        "campaign-run-0123456789012345678901234567890123456789012345678901234567890123.ccsave";
+    const Json state = {{"score", 7}};
+    const std::vector<uint8_t> world{1, 2, 3, 4};
+    save_bundle(save, state, world, content);
+    const auto before = file_sha256(save);
+    EXPECT(load_bundle(save, content).world == world);
+    bool failed = false;
+#if defined(_WIN32)
+    auto *held = platform::file_open(save, "rb");
+    EXPECT(held != nullptr);
+    if (!held)
+        return;
+    try {
+        save_bundle(save, {{"score", 99}}, {9, 9}, content);
+    } catch (const Error &error) {
+        failed = error.diagnostic.code == "save-activate";
+    }
+    std::fclose(held);
+#else
+    try {
+        save_bundle(save / "blocked-child", {{"score", 99}}, {9, 9}, content);
+    } catch (const std::exception &) {
+        failed = true;
+    }
+#endif
+    EXPECT(failed && before == file_sha256(save));
+    EXPECT(load_bundle(save, content).state == state);
+    const auto source = root / "source";
+    fs::create_directories(platform::host_path(source));
+    const std::string payload = "project-authored long Unicode path payload";
+    {
+        std::ofstream output(platform::host_path(source / "payload.bin"), std::ios::binary);
+        output << payload;
+    }
+    auto package = manifest("long-path");
+    package["files"]["payload.bin"] = {{"bytes", payload.size()}, {"sha256", sha256(payload)}};
+    write_json_atomic(source / "pack.json", package);
+    EXPECT(read_json(source / "pack.json") == package);
+    const auto archive = root / "package.mw3pack";
+    package_directory(source, archive);
+    const auto store = root / "store";
+    const auto installed = install_package(source, store);
+    if (mech3::source::archives_supported())
+        EXPECT(install_package(archive, root / "archive-store").filename() == installed.filename());
+    const Json selected = {
+        {"schema_version", 1},
+        {"packages", Json::array({{{"id", "long-path"}, {"version", "1.0.0"}}})}};
+    const auto resolved = resolve(selected, root, store, {}, {});
+    EXPECT(resolved.packages.size() == 1);
+    EXPECT(platform::logical_host_path(resolved.packages.front().root) ==
+           resolved.packages.front().root);
+    EXPECT(file_sha256(resolved.resource("long-path", "payload.bin")) == sha256(payload));
+}
+
+TEST(content_long_unicode_profile_supports_native_vfs_and_managed_pilot_reads) {
+    struct Hooks final : mech3::PilotHooks {
+        void store_fill(mech3::Store &, int32_t) override {}
+        int32_t store_add_mech(mech3::Store &, int32_t, const char *) override { return 0; }
+    } hooks;
+    struct Restore {
+        std::shared_ptr<const ResolvedContentSet> content = mech3::active_content();
+        zutl::Mounts mounts = zutl::mounts();
+        mech3::PilotHooks *hooks = &mech3::pilot_hooks();
+        ~Restore() {
+            mech3::activate_content(content);
+            zutl::mounts() = mounts;
+            mech3::set_pilot_hooks(hooks);
+        }
+    } restore;
+    const auto root = long_unicode_root("content-long-native-path");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            std::error_code error;
+            fs::remove_all(platform::host_path(path), error);
+        }
+    } cleanup{fs::path(MW3_TEST_TMP) / "content-long-native-path"};
+    zutl::mounts() = {};
+    zutl::set_write_dir(root.generic_u8string());
+    zutl::mounts().confined = true;
+    auto *output = zutl::open("native/io.bin", "wb");
+    EXPECT(output != nullptr);
+    if (!output)
+        return;
+    EXPECT(std::fwrite("native", 1, 6, output) == 6);
+    std::fclose(output);
+    auto *input = zutl::open("native/io.bin", "rb");
+    EXPECT(input != nullptr);
+    if (!input)
+        return;
+    char bytes[6]{};
+    EXPECT(std::fread(bytes, 1, 6, input) == 6 && std::string(bytes, 6) == "native");
+    std::fclose(input);
+    EXPECT(zutl::list("native/*.bin") == std::vector<std::string>{"io.bin"});
+    // Keep a stock archive entry available: a failed selected loose read must
+    // not look like a successful fallback to this different value.
+    std::string binary;
+    auto word = [&](uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i)
+            binary.push_back(static_cast<char>(value >> (8 * i)));
+    };
+    word(4);
+    word(3);
+    word(3);
+    word(6);
+    binary += "winner";
+    word(1);
+    word(5);
+    zutl_zar::Archive archive;
+    zutl_zar::init(archive);
+    EXPECT(zutl_zar::create(archive, "zbd/reader.zbd"));
+    zutl_zar::add(archive, "overlay.zrd", binary.data(), static_cast<uint32_t>(binary.size()));
+    zutl_zar::close(archive);
+    zutl_zar::destroy(archive);
+    const auto overlay = root / "legacy";
+    const std::string loose = "(\"winner\" 77)", strings = "7=Selected Unicode overlay\n";
+    fs::create_directories(platform::host_path(overlay / "zbd"));
+    {
+        std::ofstream output(platform::host_path(overlay / "zbd/overlay.zrd"), std::ios::binary);
+        output << loose;
+    }
+    {
+        std::ofstream output(platform::host_path(overlay / "strings.txt"), std::ios::binary);
+        output << strings;
+    }
+    const Json legacy = {
+        {"schema_version", 1},
+        {"id", "long-overlay"},
+        {"version", "1.0.0"},
+        {"files",
+         {{"zbd/overlay.zrd", {{"bytes", loose.size()}, {"sha256", sha256(loose)}}},
+          {"strings.txt", {{"bytes", strings.size()}, {"sha256", sha256(strings)}}}}}};
+    write_json_atomic(overlay / "pack.json", legacy);
+    mech3::set_pilot_hooks(&hooks);
+    auto content = std::make_shared<ResolvedContentSet>();
+    content->definitions = mech3::stock_content();
+    auto package = load_package(overlay);
+    content->packages.push_back(package);
+    content->definitions.insert(content->definitions.end(), package.definitions.begin(),
+                                package.definitions.end());
+    resolve_legacy_claims(*content, Json::object());
+    mech3::activate_content(content);
+    mech3::mount_content_legacy(*content);
+    struct RestoreReader {
+        zrdr::State previous = zrdr::state();
+        RestoreReader() {
+            zrdr::state() = {};
+            zrdr::init();
+        }
+        ~RestoreReader() {
+            zrdr::close_archives(true);
+            zrdr::state() = previous;
+        }
+    } reader;
+    EXPECT(zrdr::open_archive("zbd/reader.zbd", true));
+    auto *tree = zrdr::load("overlay.zrd");
+    int32_t winner = 0;
+    EXPECT(tree && zrdr::get_int(tree, "winner", &winner) && winner == 77);
+    if (tree)
+        zrdr::free_node(tree);
+    std::map<int32_t, std::string> text;
+    mech3::mods_apply_strings(text, {});
+    EXPECT(text[7] == "Selected Unicode overlay");
+    mech3::Pilot pilot("LongProfile");
+    pilot.dirty = 0;
+    pilot.training->mission = 3;
+    auto &campaign = *static_cast<mech3::CampaignGame *>(pilot.campaigns.front());
+    campaign.slot.mech = -1;
+    EXPECT(mech3::adopt_content_stock_campaign(campaign));
+    campaign.c4 = 73;
+    const auto run = campaign.content_run;
+    EXPECT(pilot.save());
+    campaign.c4 = 74;
+    EXPECT(pilot.save()); // Refresh the already accepted semantic bundle.
+    auto *loaded = mech3::load_pilot("LongProfile", false);
+    EXPECT(loaded && loaded->training->mission == 3);
+    bool campaign_loaded = false;
+    if (loaded) {
+        for (const auto *entry : loaded->campaigns) {
+            const auto *game = static_cast<const mech3::CampaignGame *>(entry);
+            if (game->content_run == run)
+                campaign_loaded = game->c4 == 74;
+        }
+        mech3::pilots().remove(loaded);
+        loaded->dirty = 0;
+        delete loaded;
+    }
+    EXPECT(campaign_loaded);
+    const auto settings_path = (root / "settings.reg").generic_u8string();
+    const uint32_t expected = 42;
+    {
+        platform::RegFile settings(settings_path);
+        EXPECT(settings.open("Software\\LongPathFixture", true, true));
+        EXPECT(settings.write(true, "value", 4, &expected, sizeof expected));
+        settings.close(true);
+    }
+    platform::RegFile settings(settings_path);
+    EXPECT(settings.open("Software\\LongPathFixture", true, false));
+    uint32_t value = 0, size = sizeof value;
+    EXPECT(settings.read(true, "value", &value, &size) && value == expected);
+    // A correctly hashed malformed selected file must not reactivate the valid
+    // stock archive entry. Re-admit the new authored bytes as a fresh profile.
+    const std::string truncated = "(\"winner\" 77";
+    {
+        std::ofstream output(platform::host_path(overlay / "zbd/overlay.zrd"),
+                             std::ios::binary | std::ios::trunc);
+        output << truncated;
+    }
+    auto changed_manifest = legacy;
+    changed_manifest["files"]["zbd/overlay.zrd"] = {{"bytes", truncated.size()},
+                                                    {"sha256", sha256(truncated)}};
+    write_json_atomic(overlay / "pack.json", changed_manifest);
+    auto malformed = std::make_shared<ResolvedContentSet>();
+    malformed->definitions = mech3::stock_content();
+    auto changed = load_package(overlay);
+    malformed->packages.push_back(changed);
+    malformed->definitions.insert(malformed->definitions.end(), changed.definitions.begin(),
+                                  changed.definitions.end());
+    resolve_legacy_claims(*malformed, Json::object());
+    mech3::activate_content(malformed);
+    mech3::mount_content_legacy(*malformed);
+    zutl::mounts().strict_reads = true;
+    bool failed = false;
+    try {
+        auto *unexpected = zrdr::load("overlay.zrd");
+        if (unexpected)
+            zrdr::free_node(unexpected);
+    } catch (const std::runtime_error &) {
+        failed = true;
+    }
+    EXPECT(failed);
+}
 TEST(content_json_hash_and_path_boundaries) {
     EXPECT(sha256("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     EXPECT(sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

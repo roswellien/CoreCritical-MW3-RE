@@ -1,4 +1,5 @@
 #include "platform/content_visuals.h"
+#include "platform/host_path.h"
 
 #include <set>
 
@@ -50,7 +51,7 @@ void validate(const cc::content::ResolvedContentSet &content) {
                 reject(*definition, field, "Expected an owned package resource path");
             const auto path =
                 content.resource(definition->owner, data.at(field).get<std::string>());
-            if (!cc::content::fs::is_regular_file(path))
+            if (!cc::content::fs::is_regular_file(host_path(path)))
                 reject(*definition, field, "Appearance resource is missing");
         }
     }

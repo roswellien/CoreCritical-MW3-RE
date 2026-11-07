@@ -1,4 +1,5 @@
 #include "mech3/mods.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -243,7 +244,7 @@ std::vector<std::string> mods_apply_strings(std::map<int32_t, std::string>& text
   // The last mod first, so the first one's lines are the ones left.
   for (auto m = strings.rbegin(); m != strings.rend(); ++m) {
     zutl::verify_managed_read(*m);
-    std::ifstream f(*m);
+    std::ifstream f(platform::host_path(fs::u8path(*m)));
     if (!f) continue;
     int used = 0, n = 0;
     for (std::string line; std::getline(f, line);) {

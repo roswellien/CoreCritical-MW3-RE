@@ -4,6 +4,7 @@
 // this one is named for the module (docs/interp.md).
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zmodel/gmod_init.h"
+#include "platform/host_path.h"
 
 #include <sys/stat.h>
 
@@ -215,8 +216,17 @@ ScriptFile* open_loose(const char* name) {
 // mtime in the mounts (zutl_path.h); 0 when it exists.
 int stat_mtime(const char* name, int32_t* mtime) {
   const std::string p = zutl::find(name);
+  if (p.empty())
+    return -1;
+#if defined(_WIN32)
+  struct _stat st;
+  if (::_wstat(platform::host_path(std::filesystem::u8path(p)).c_str(), &st) != 0)
+    return -1;
+#else
   struct stat st;
-  if (p.empty() || ::stat(p.c_str(), &st) != 0) return -1;
+  if (::stat(p.c_str(), &st) != 0)
+    return -1;
+#endif
   *mtime = static_cast<int32_t>(st.st_mtime);
   return 0;
 }

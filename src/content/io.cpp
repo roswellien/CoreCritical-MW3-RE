@@ -1,4 +1,5 @@
 #include "content/content.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <atomic>
@@ -52,47 +53,50 @@ Json parse_json(const std::string &text, const std::string &source) {
 }
 Json read_json(const fs::path &path) {
     std::error_code error;
-    auto size = fs::file_size(path, error);
+    auto size = fs::file_size(platform::host_path(path), error);
     if (error || size > 16 * 1024 * 1024)
-        fail("file-read", "Missing or oversized JSON file", {}, {}, path.generic_string());
-    std::ifstream input(path, std::ios::binary);
+        fail("file-read", "Missing or oversized JSON file", {}, {}, path.generic_u8string());
+    std::ifstream input(platform::host_path(path), std::ios::binary);
     std::string bytes(static_cast<size_t>(size), '\0');
     if (!input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
-        fail("file-read", "Could not read JSON file", {}, {}, path.generic_string());
-    return parse_json(bytes, path.generic_string());
+        fail("file-read", "Could not read JSON file", {}, {}, path.generic_u8string());
+    return parse_json(bytes, path.generic_u8string());
 }
 void write_json_atomic(const fs::path &path, const Json &value) {
     std::error_code error;
     if (!path.parent_path().empty())
-        fs::create_directories(path.parent_path(), error);
+        fs::create_directories(platform::host_path(path.parent_path()), error);
     if (error)
-        fail("write-failed", error.message(), {}, {}, path.generic_string());
+        fail("write-failed", error.message(), {}, {}, path.generic_u8string());
     static std::atomic<unsigned long> sequence{0};
 #if defined(_WIN32)
     auto process = GetCurrentProcessId();
 #else
     auto process = getpid();
 #endif
-    fs::path staging =
-        path.string() + ".new-" + std::to_string(process) + "-" + std::to_string(++sequence);
+    fs::path staging = path;
+    staging += ".new-" + std::to_string(process) + "-" + std::to_string(++sequence);
     try {
         {
-            std::ofstream output(staging, std::ios::binary | std::ios::trunc);
+            std::ofstream output(platform::host_path(staging), std::ios::binary | std::ios::trunc);
             auto bytes = value.dump(2) + "\n";
             if (!output.write(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
                 !output.flush())
-                fail("write-failed", "Could not finish staged file", {}, {}, path.generic_string());
+                fail("write-failed", "Could not finish staged file", {}, {},
+                     path.generic_u8string());
         }
+        if (!platform::sync_file(staging))
+            fail("write-failed", "Could not sync staged file", {}, {}, path.generic_u8string());
 #if defined(_WIN32)
-        if (!MoveFileExW(staging.c_str(), path.c_str(),
+        if (!MoveFileExW(platform::host_path(staging).c_str(), platform::host_path(path).c_str(),
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             fail("write-failed", "Could not atomically activate staged file", {}, {},
-                 path.generic_string());
+                 path.generic_u8string());
 #else
-        fs::rename(staging, path);
+        fs::rename(platform::host_path(staging), platform::host_path(path));
 #endif
     } catch (...) {
-        fs::remove(staging, error);
+        fs::remove(platform::host_path(staging), error);
         throw;
     }
 }
@@ -127,12 +131,12 @@ fs::path confined_path(const fs::path &root, const std::string &relative) {
     for (unsigned char c : relative)
         if (c < 0x20 || c > 0x7e || std::string("<>\"|?*").find(char(c)) != std::string::npos)
             fail("unsafe-path", "Package paths require portable ASCII filenames", {}, {}, relative);
-    if (value.lexically_normal().generic_string() != relative)
+    if (value.lexically_normal().generic_u8string() != relative)
         fail("unsafe-path", "Package paths require one normalized spelling", {}, {}, relative);
     for (const auto &part : value) {
         if (part == ".." || part == ".")
             fail("unsafe-path", "Path traversal refused", {}, {}, relative);
-        const auto segment = part.generic_string();
+        const auto segment = part.generic_u8string();
         if (segment.empty() || segment.back() == '.' || segment.back() == ' ')
             fail("unsafe-path", "Trailing dots, spaces and empty path segments are not allowed", {},
                  {}, relative);
@@ -147,7 +151,9 @@ fs::path confined_path(const fs::path &root, const std::string &relative) {
              stem[3] >= '0' && stem[3] <= '9'))
             fail("unsafe-path", "Reserved device filenames are not allowed", {}, {}, relative);
     }
-    fs::path base = fs::weakly_canonical(root), result = fs::weakly_canonical(base / value);
+    fs::path base = platform::logical_host_path(fs::weakly_canonical(platform::host_path(root))),
+             result = platform::logical_host_path(
+                 fs::weakly_canonical(platform::host_path(base / value)));
     auto below = result.lexically_relative(base);
     if (below.empty() || below.is_absolute() || *below.begin() == "..")
         fail("unsafe-path", "Path escapes package", {}, {}, relative);
@@ -155,11 +161,11 @@ fs::path confined_path(const fs::path &root, const std::string &relative) {
     for (const auto &part : value) {
         current /= part;
         std::error_code error;
-        auto status = fs::symlink_status(current, error);
+        auto status = fs::symlink_status(platform::host_path(current), error);
         if (!error && fs::is_symlink(status))
             fail("unsafe-path", "Package links are not allowed", {}, {}, relative);
 #if defined(_WIN32)
-        DWORD attributes = GetFileAttributesW(current.c_str());
+        DWORD attributes = GetFileAttributesW(platform::host_path(current).c_str());
         if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
             fail("unsafe-path", "Package reparse points are not allowed", {}, {}, relative);
 #endif
@@ -209,8 +215,8 @@ fs::path ResolvedContentSet::resource(const std::string &owner, const std::strin
             auto path = confined_path(package.root, reference.path);
             const auto &expected = package.manifest.at("files").at(reference.path);
             std::error_code error;
-            if (!fs::is_regular_file(path, error) ||
-                fs::file_size(path, error) != expected.at("bytes") ||
+            if (!fs::is_regular_file(platform::host_path(path), error) ||
+                fs::file_size(platform::host_path(path), error) != expected.at("bytes") ||
                 file_sha256(path) != expected.at("sha256"))
                 fail("resource-changed",
                      "Resource changed after profile resolution; unload the session "

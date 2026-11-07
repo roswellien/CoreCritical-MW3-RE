@@ -1,5 +1,6 @@
 #include "content/content.h"
 #include "content/legacy.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <array>
@@ -76,7 +77,8 @@ int compare(const std::string &left, const std::string &right) {
 }
 bool matches(const Package &package, const Json &requirement) {
     if (requirement.contains("path") &&
-        package.root != fs::weakly_canonical(fs::u8path(requirement.at("path").get<std::string>())))
+        package.root != platform::logical_host_path(fs::weakly_canonical(platform::host_path(
+                            fs::u8path(requirement.at("path").get<std::string>())))))
         return false;
     if (requirement.contains("version") &&
         package.version != requirement.at("version").get<std::string>())
@@ -101,9 +103,11 @@ std::string key(const Definition &definition) { return definition.kind + "\n" + 
 std::vector<fs::path> package_roots(const fs::path &store) {
     std::vector<fs::path> roots;
     std::error_code error;
-    if (!fs::exists(store, error))
+    if (!fs::exists(platform::host_path(store), error))
         return roots;
-    fs::recursive_directory_iterator it(store, fs::directory_options::none, error), end;
+    fs::recursive_directory_iterator it(platform::host_path(store), fs::directory_options::none,
+                                        error),
+        end;
     for (; it != end && !error; it.increment(error)) {
         if (it->is_directory() && it->path().filename().string().rfind('.', 0) == 0) {
             it.disable_recursion_pending();
@@ -118,12 +122,12 @@ std::vector<fs::path> package_roots(const fs::path &store) {
             continue;
         }
         if (it->is_regular_file() && it->path().filename() == "pack.json")
-            roots.push_back(it->path().parent_path());
+            roots.push_back(platform::logical_host_path(it->path()).parent_path());
         if (roots.size() > 4096)
             fail("package-limit", "Installed package inventory exceeds 4096 versions");
     }
     if (error)
-        fail("store-read", error.message(), {}, {}, store.generic_string());
+        fail("store-read", error.message(), {}, {}, store.generic_u8string());
     std::sort(roots.begin(), roots.end());
     return roots;
 }
@@ -186,7 +190,7 @@ void resource_hashes(const Json &value, const std::string &owner,
                     if (extension == ".gltf")
                         document = read_json(path);
                     else if (extension == ".glb") {
-                        std::ifstream input(path, std::ios::binary);
+                        std::ifstream input(platform::host_path(path), std::ios::binary);
                         std::array<uint8_t, 20> header{};
                         if (!input.read(reinterpret_cast<char *>(header.data()), header.size()))
                             fail("gltf-header", "Truncated GLB resource", package.id);
@@ -211,7 +215,7 @@ void resource_hashes(const Json &value, const std::string &owner,
                                 const auto uri = asset.at("uri").get<std::string>();
                                 const auto dependency =
                                     (fs::path(reference.second).parent_path() / fs::u8path(uri))
-                                        .generic_string();
+                                        .generic_u8string();
                                 confined_path(package.root, dependency);
                                 if (!files.contains(dependency))
                                     fail("unlisted-resource",
@@ -232,7 +236,7 @@ Package load_package(const fs::path &root, bool verify_files) try {
     if (auto legacy = try_load_legacy(root, verify_files))
         return std::move(*legacy);
     Package package;
-    package.root = fs::weakly_canonical(root);
+    package.root = platform::logical_host_path(fs::weakly_canonical(platform::host_path(root)));
     package.manifest = read_json(confined_path(package.root, "pack.json"));
     const Json &manifest = package.manifest;
     if (!manifest.is_object() || !manifest.contains("schema_version") ||
@@ -277,7 +281,8 @@ Package load_package(const fs::path &root, bool verify_files) try {
             fail("file-table", "Invalid payload SHA-256", package.id, {}, file.key());
         if (verify_files) {
             std::error_code error;
-            if (!fs::is_regular_file(path, error) || fs::file_size(path, error) != size ||
+            if (!fs::is_regular_file(platform::host_path(path), error) ||
+                fs::file_size(platform::host_path(path), error) != size ||
                 file_sha256(path) != file.value().at("sha256"))
                 fail("payload-integrity", "Missing, changed or corrupt payload", package.id, {},
                      file.key());
@@ -330,7 +335,7 @@ Json installed_packages(const fs::path &store) {
         result.push_back({{"id", package.id},
                           {"version", package.version},
                           {"sha256", package.digest},
-                          {"path", root.generic_string()},
+                          {"path", root.generic_u8string()},
                           {"name", package.manifest.value("name", package.id)}});
     }
     return result;
@@ -357,12 +362,14 @@ ResolvedContentSet resolve(const Json &profile, const fs::path &profile_root, co
             fs::path path = fs::u8path(request.at("path").get<std::string>());
             if (path.is_relative())
                 path = profile_root / path;
-            if (fs::exists(path / "pack.json"))
-                metadata_bytes += fs::file_size(path / "pack.json");
+            if (fs::exists(platform::host_path(path / "pack.json")))
+                metadata_bytes += fs::file_size(platform::host_path(path / "pack.json"));
             if (metadata_bytes > 128ull * 1024 * 1024)
                 fail("inventory-limit",
                      "Profile package metadata exceeds the 128 MiB inventory budget");
-            request["path"] = fs::weakly_canonical(path).generic_string();
+            request["path"] =
+                platform::logical_host_path(fs::weakly_canonical(platform::host_path(path)))
+                    .generic_u8string();
             auto package = load_package(path, false);
             if (package.id != id)
                 fail("package-identity", "Profile path has a different package identity", id);
@@ -371,7 +378,7 @@ ResolvedContentSet resolve(const Json &profile, const fs::path &profile_root, co
         requirements.push_back(std::move(request));
     }
     for (const auto &root : package_roots(store)) {
-        metadata_bytes += fs::file_size(root / "pack.json");
+        metadata_bytes += fs::file_size(platform::host_path(root / "pack.json"));
         if (metadata_bytes > 128ull * 1024 * 1024)
             fail("inventory-limit",
                  "Installed package metadata exceeds the 128 MiB inventory budget");
@@ -717,6 +724,6 @@ ResolvedContentSet resolve(const Json &profile, const fs::path &profile_root, co
 } catch (const Error &) {
     throw;
 } catch (const std::exception &error) {
-    fail("invalid-profile", error.what(), {}, {}, profile_root.generic_string());
+    fail("invalid-profile", error.what(), {}, {}, profile_root.generic_u8string());
 }
 } // namespace cc::content

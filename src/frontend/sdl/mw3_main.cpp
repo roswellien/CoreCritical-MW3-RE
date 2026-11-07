@@ -117,6 +117,7 @@
 #include "mech3/mission.h"
 #include "mech3/app_sensors.h"
 #include "mech3/turret.h"
+#include "platform/host_path.h"
 #include "platform/reg_file.h"
 #include "platform/silent_sound.h"
 
@@ -505,7 +506,7 @@ bool parse(int argc, char** argv, Args& a) {
 
 // mw3.cfg in the write dir: install=DIR and assets=DIR lines.
 void read_config(const std::string& dir, Args& a) {
-  std::ifstream f(dir + "/mw3.cfg");
+  std::ifstream f(platform::host_path(std::filesystem::u8path(dir) / "mw3.cfg"));
   std::string line;
   while (std::getline(f, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -715,8 +716,10 @@ std::string codec_path(const std::string& install) {
 namespace {
 std::shared_ptr<const cc::content::ResolvedContentSet> resolve_content_profile(const Args& a) {
   if (a.content_profile.empty()) cc::content::fail("content-profile", "A content profile is required");
-  const auto profile_path = std::filesystem::absolute(a.content_profile);
-  const auto store = a.content_store.empty() ? profile_path.parent_path() / "store" : std::filesystem::absolute(a.content_store);
+  const auto profile_path = std::filesystem::absolute(std::filesystem::u8path(a.content_profile));
+  const auto store = a.content_store.empty()
+                         ? profile_path.parent_path() / "store"
+                         : std::filesystem::absolute(std::filesystem::u8path(a.content_store));
   const auto profile = cc::content::read_json(profile_path);
   auto resolved = std::make_shared<cc::content::ResolvedContentSet>(cc::content::resolve(
       profile, profile_path.parent_path(), store, mech3::stock_content(), mech3::content_capabilities()));
@@ -725,7 +728,7 @@ std::shared_ptr<const cc::content::ResolvedContentSet> resolve_content_profile(c
 }
 }  // namespace
 
-int main(int argc, char** argv) {
+int game_main(int argc, char** argv) {
   if (sdlfe::crash_box_main(argc, argv)) return 0;
   // In order with the log on stderr. Windows' CRT has no line buffering (and takes size 0 as
   // an invalid argument): unbuffered there.
@@ -765,7 +768,8 @@ int main(int argc, char** argv) {
   // A --write-dir that does not exist is made, as SDL_GetPrefPath makes the default.
   if (!a.write_dir.empty()) {
     std::error_code ec;
-    std::filesystem::create_directories(a.write_dir, ec);
+    std::filesystem::create_directories(platform::host_path(std::filesystem::u8path(a.write_dir)),
+                                        ec);
     if (ec) std::fprintf(stderr, "mw3: cannot make the write dir %s: %s\n", a.write_dir.c_str(), ec.message().c_str());
   }
   // Everything printed from here also goes to <write dir>/mw3.log, the last
@@ -927,15 +931,18 @@ int main(int argc, char** argv) {
     std::printf("mw3: %s\n", r.summary.c_str());
   }
   std::error_code patch_ec;
-  if (!patch_dir.empty() && std::filesystem::is_directory(patch_dir, patch_ec)) zutl::mount(patch_dir);
+  if (!patch_dir.empty() && std::filesystem::is_directory(
+                                platform::host_path(std::filesystem::u8path(patch_dir)), patch_ec))
+    zutl::mount(patch_dir);
   zutl::mount(a.install);
   if (const auto content = mech3::active_content()) {
     // Original numeric pilot files and settings must never share a directory
     // with a different resolved content session. Patch and store roots above
     // were resolved against the player's original data directory.
-    const auto profile_write = std::filesystem::path(a.write_dir) / "profiles" / cc::content::sha256(content->lock.dump());
+    const auto profile_write = std::filesystem::u8path(a.write_dir) / "profiles" /
+                               cc::content::sha256(content->lock.dump());
     std::error_code error;
-    std::filesystem::create_directories(profile_write, error);
+    std::filesystem::create_directories(platform::host_path(profile_write), error);
     if (error) {
       std::fprintf(stderr, "mw3: cannot create content profile data: %s\n", error.message().c_str());
       SDL_Quit();
@@ -948,15 +955,17 @@ int main(int argc, char** argv) {
       auto source=zutl::any_case(a.write_dir,font);
       if(source.empty())source=zutl::find(font);
       const auto target=profile_write/font;
-      if(source.empty()||std::filesystem::exists(target))continue;
-      std::filesystem::copy_file(std::filesystem::u8path(source),target,error);
+      if (source.empty() || std::filesystem::exists(platform::host_path(target)))
+        continue;
+      std::filesystem::copy_file(platform::host_path(std::filesystem::u8path(source)),
+                                 platform::host_path(target), error);
       if(error) {
         std::fprintf(stderr,"mw3: cannot prepare profile UI font %s: %s\n",font,error.message().c_str());
         SDL_Quit();
         return 2;
       }
     }
-    a.write_dir = profile_write.string();
+    a.write_dir = profile_write.generic_u8string();
   }
   zutl::set_write_dir(a.write_dir);
   zutl::mounts().strict_reads = static_cast<bool>(mech3::active_content());
@@ -1962,3 +1971,12 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
 }
 
 }  // namespace
+
+#include "platform/utf8_main.h"
+#if defined(_WIN32)
+int wmain(int argc, wchar_t **argv) {
+  return platform::windows_utf8_main(argc, argv, game_main);
+}
+#else
+int main(int argc, char **argv) { return game_main(argc, argv); }
+#endif

@@ -1,4 +1,5 @@
 #include "mech3/content_base.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -82,10 +83,12 @@ void discover(const std::string &root, const std::string &logical_dir, bool recu
               std::set<std::string> &names) {
     const auto host = logical_dir.empty() ? root : zutl::any_case(root, logical_dir);
     std::error_code error;
-    if (host.empty() || !fs::is_directory(fs::u8path(host), error))
+    if (host.empty() || !fs::is_directory(platform::host_path(fs::u8path(host)), error))
         return;
     auto add = [&](const fs::directory_entry &entry) {
-        const auto relative = entry.path().lexically_relative(fs::u8path(host)).generic_string();
+        const auto relative = platform::logical_host_path(entry.path())
+                                  .lexically_relative(fs::u8path(host))
+                                  .generic_string();
         const auto logical = lower(logical_dir.empty() ? relative : logical_dir + "/" + relative);
         if (!relevant(logical))
             return;
@@ -100,7 +103,8 @@ void discover(const std::string &root, const std::string &logical_dir, bool recu
                               "Native gameplay input inventory exceeds 65536 files");
     };
     if (recursive) {
-        fs::recursive_directory_iterator it(fs::u8path(host), fs::directory_options::none, error),
+        fs::recursive_directory_iterator it(platform::host_path(fs::u8path(host)),
+                                            fs::directory_options::none, error),
             end;
         size_t visited = 0;
         for (; it != end && !error; it.increment(error)) {
@@ -115,7 +119,7 @@ void discover(const std::string &root, const std::string &logical_dir, bool recu
             add(*it);
         }
     } else {
-        fs::directory_iterator it(fs::u8path(host), error), end;
+        fs::directory_iterator it(platform::host_path(fs::u8path(host)), error), end;
         size_t visited = 0;
         for (; it != end && !error; it.increment(error)) {
             if (++visited > 131072)
@@ -223,7 +227,8 @@ std::string content_base_digest() {
                 cc::content::fail("base-content-limit",
                                   "Native gameplay fallback inventory exceeds 131072 files");
             std::error_code error;
-            const auto size = fs::file_size(fs::u8path(copies[ordinal]), error);
+            const auto size =
+                fs::file_size(platform::host_path(fs::u8path(copies[ordinal])), error);
             if (error)
                 cc::content::fail("base-content", "Cannot inspect native gameplay input", {}, {},
                                   logical);
@@ -239,8 +244,15 @@ std::string content_base_digest() {
             if (script(logical) && !claimed_gameplay_source(copies[ordinal])) {
                 // Original native loose-vs-interp selection depends on this timestamp.
                 // Keep recovered selection semantics for unclaimed installation files.
+#if defined(_WIN32)
+                struct _stat written;
+                const auto status =
+                    ::_wstat(platform::host_path(fs::u8path(copies[ordinal])).c_str(), &written);
+#else
                 struct stat written;
-                if (::stat(copies[ordinal].c_str(), &written) != 0)
+                const auto status = ::stat(copies[ordinal].c_str(), &written);
+#endif
+                if (status != 0)
                     cc::content::fail("base-content", "Cannot inspect native source timestamp", {},
                                       {}, logical);
                 input["source_mtime"] = static_cast<int32_t>(written.st_mtime);

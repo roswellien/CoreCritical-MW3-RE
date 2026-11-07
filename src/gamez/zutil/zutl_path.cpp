@@ -1,4 +1,5 @@
 #include "gamez/zutil/zutl_path.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -12,7 +13,7 @@ Mounts g_mounts;
 
 bool is_file(const std::string& p) {
   std::error_code ec;
-  return std::filesystem::is_regular_file(p, ec);
+  return std::filesystem::is_regular_file(platform::host_path(std::filesystem::u8path(p)), ec);
 }
 
 std::string join(const std::string& dir, const std::string& rel) {
@@ -143,7 +144,8 @@ std::string any_case(const std::string& root, const std::string& rel) {
   std::string at = root;
   std::error_code ec;
   // The root by its letters too: the game's own mounts are named ("<install>/zbd/c1").
-  if (!at.empty() && !std::filesystem::exists(at, ec)) {
+  if (!at.empty() &&
+      !std::filesystem::exists(platform::host_path(std::filesystem::u8path(at)), ec)) {
     const size_t slash = at.rfind('/');
     if (slash == std::string::npos || slash == 0) return {};
     at = any_case(at.substr(0, slash), at.substr(slash + 1));
@@ -155,18 +157,23 @@ std::string any_case(const std::string& root, const std::string& rel) {
     i = end + 1;
     if (part.empty()) continue;
     std::string next = join(at, part);
-    if (!std::filesystem::exists(next, ec)) {
+    if (!std::filesystem::exists(platform::host_path(std::filesystem::u8path(next)), ec)) {
       next.clear();
-      for (std::filesystem::directory_iterator it(at.empty() ? "." : at, ec), last; !ec && it != last; it.increment(ec))
-        if (same_letters(it->path().filename().string(), part)) {
-          next = join(at, it->path().filename().string());
+      for (std::filesystem::directory_iterator
+               it(platform::host_path(std::filesystem::u8path(at.empty() ? "." : at)), ec),
+           last;
+           !ec && it != last; it.increment(ec))
+        if (same_letters(it->path().filename().u8string(), part)) {
+          next = join(at, it->path().filename().u8string());
           break;
         }
       if (next.empty()) return {};
     }
     at = next;
   }
-  return std::filesystem::exists(at, ec) ? at : std::string{};
+  return std::filesystem::exists(platform::host_path(std::filesystem::u8path(at)), ec)
+             ? at
+             : std::string{};
 }
 
 Mounts& mounts() { return g_mounts; }
@@ -278,12 +285,13 @@ std::FILE* open(const char* path, const char* mode) {
     const std::string p = write_path(path);
     if (p.empty()) return nullptr;
     std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(p).parent_path(), ec);
-    return std::fopen(p.c_str(), m.c_str());
+    std::filesystem::create_directories(
+        platform::host_path(std::filesystem::u8path(p).parent_path()), ec);
+    return platform::file_open(std::filesystem::u8path(p), m.c_str());
   }
   const std::string p = find(path);
   if (!p.empty()) verify_managed_read(p);
-  return p.empty() ? nullptr : std::fopen(p.c_str(), m.c_str());
+  return p.empty() ? nullptr : platform::file_open(std::filesystem::u8path(p), m.c_str());
 }
 
 std::vector<std::string> list(const char* pattern) {
@@ -310,10 +318,14 @@ std::vector<std::string> list(const char* pattern) {
     if (!g_mounts.mods.empty() && is_mod_dir(r) && !mod_may_serve(dir + "/")) continue;
     std::error_code ec;
     const std::string at = any_case(r, dir);  // the folder's case too, as the names'
-    for (std::filesystem::directory_iterator it(at.empty() ? join(r, dir) : at, ec), end; !ec && it != end; it.increment(ec)) {
+    for (std::filesystem::directory_iterator
+             it(platform::host_path(std::filesystem::u8path(at.empty() ? join(r, dir) : at)), ec),
+         end;
+         !ec && it != end; it.increment(ec)) {
       if (!it->is_regular_file(ec)) continue;
       std::string name;
-      if (!to_game(it->path().filename().string(), &name)) continue;  // no name the game could open
+      if (!to_game(it->path().filename().u8string(), &name))
+        continue; // no name the game could open
       if (!match(pat.c_str(), name.c_str())) continue;
       const std::string u = upper(name);
       if (std::none_of(out.begin(), out.end(), [&](const std::string& o) { return upper(o) == u; }))

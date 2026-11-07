@@ -1,6 +1,7 @@
 #include "content/content.h"
 #include "gamez/zutil/zutl_path.h"
 #include "mech3/source_archive.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <array>
@@ -21,7 +22,7 @@ namespace {
 struct Staging {
     fs::path path;
     explicit Staging(const fs::path &parent) {
-        fs::create_directories(parent);
+        fs::create_directories(platform::host_path(parent));
         static std::atomic<uint64_t> sequence{0};
         for (int attempt = 0; attempt < 32; ++attempt) {
             std::string name =
@@ -29,7 +30,7 @@ struct Staging {
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
                 std::to_string(++sequence);
             fs::path candidate = confined_path(parent, name);
-            if (fs::create_directory(candidate)) {
+            if (fs::create_directory(platform::host_path(candidate))) {
                 path = candidate;
                 return;
             }
@@ -39,7 +40,7 @@ struct Staging {
     ~Staging() {
         if (!path.empty()) {
             std::error_code error;
-            fs::remove_all(path, error);
+            fs::remove_all(platform::host_path(path), error);
         }
     }
 };
@@ -48,8 +49,8 @@ void copy_package(const Package &package, const fs::path &target) {
          entry != package.manifest.at("files").end(); ++entry) {
         auto from = confined_path(package.root, entry.key()),
              to = confined_path(target, entry.key());
-        fs::create_directories(to.parent_path());
-        fs::copy_file(from, to, fs::copy_options::none);
+        fs::create_directories(platform::host_path(to.parent_path()));
+        fs::copy_file(platform::host_path(from), platform::host_path(to), fs::copy_options::none);
     }
     write_json_atomic(target / "pack.json", package.manifest);
 }
@@ -76,15 +77,15 @@ void extract(const fs::path &source, const fs::path &target) {
         if (entry.special)
             fail("unsafe-path", "Archive links and special files are not allowed", {}, {}, name);
         if (entry.dir) {
-            fs::create_directories(destination);
+            fs::create_directories(platform::host_path(destination));
             continue;
         }
         if (entry.size < 0 || entry.size > 8ll * 1024 * 1024 * 1024 ||
             total > 32ull * 1024 * 1024 * 1024 - static_cast<uint64_t>(entry.size))
             fail("archive-limit", "Expanded archive exceeds its size limits", {}, {}, name);
         total += static_cast<uint64_t>(entry.size);
-        fs::create_directories(destination.parent_path());
-        std::ofstream output(destination, std::ios::binary);
+        fs::create_directories(platform::host_path(destination.parent_path()));
+        std::ofstream output(platform::host_path(destination), std::ios::binary);
         std::array<uint8_t, 65536> buffer{};
         uint64_t copied = 0;
         while (true) {
@@ -108,7 +109,7 @@ void extract(const fs::path &source, const fs::path &target) {
         if (name != "pack.json") {
             // Directory entries have no file contents to admit; every file must be listed.
             auto file = confined_path(target, name);
-            if (fs::is_regular_file(file)) {
+            if (fs::is_regular_file(platform::host_path(file))) {
                 bool listed = false;
                 for (auto it = package.manifest.at("files").begin();
                      it != package.manifest.at("files").end(); ++it) {
@@ -150,24 +151,25 @@ struct ZipEntry {
 } // namespace
 fs::path install_package(const fs::path &source, const fs::path &store) {
     Staging staging(store);
-    if (fs::is_directory(source))
+    if (fs::is_directory(platform::host_path(source)))
         copy_package(load_package(source, true), staging.path);
     else
         extract(source, staging.path);
     Package package = load_package(staging.path, true);
     fs::path parent = confined_path(store, package.id + "/" + package.version);
-    fs::create_directories(parent);
+    fs::create_directories(platform::host_path(parent));
     fs::path target = confined_path(parent, package.digest);
-    if (fs::exists(target)) {
+    if (fs::exists(platform::host_path(target))) {
         if (load_package(target, true).digest != package.digest)
             fail("install-integrity",
                  "Installed manifest does not match its immutable store identity", package.id);
         return target;
     }
     std::error_code error;
-    fs::rename(staging.path, target, error);
+    fs::rename(platform::host_path(staging.path), platform::host_path(target), error);
     if (error) {
-        if (fs::exists(target) && load_package(target, true).digest == package.digest)
+        if (fs::exists(platform::host_path(target)) &&
+            load_package(target, true).digest == package.digest)
             return target;
         fail("install-activate", error.message(), package.id);
     }
@@ -176,7 +178,7 @@ fs::path install_package(const fs::path &source, const fs::path &store) {
 }
 void package_directory(const fs::path &source, const fs::path &output) {
     Package package = load_package(source, true);
-    if (fs::exists(output))
+    if (fs::exists(platform::host_path(output)))
         fail("output-exists", "Refusing to overwrite an existing package", package.id, {},
              output.generic_string());
     fs::path parent = output.parent_path().empty() ? fs::current_path() : output.parent_path();
@@ -185,7 +187,7 @@ void package_directory(const fs::path &source, const fs::path &output) {
     Staging snapshot(parent);
     copy_package(package, snapshot.path);
     package = load_package(snapshot.path, true);
-    std::ofstream zip(temporary, std::ios::binary);
+    std::ofstream zip(platform::host_path(temporary), std::ios::binary);
     std::vector<ZipEntry> entries;
     std::vector<std::string> names{"pack.json"};
     for (auto it = package.manifest.at("files").begin(); it != package.manifest.at("files").end();
@@ -195,13 +197,14 @@ void package_directory(const fs::path &source, const fs::path &output) {
         fail("zip-limit", "Stored ZIP packaging supports at most 65535 files", package.id);
     for (const auto &name : names) {
         fs::path file = confined_path(package.root, name);
-        uint64_t size = fs::file_size(file), offset = static_cast<uint64_t>(zip.tellp());
+        uint64_t size = fs::file_size(platform::host_path(file)),
+                 offset = static_cast<uint64_t>(zip.tellp());
         if (size > 0xffffffffull || offset + size + name.size() + 64 > 0xffffffffull ||
             name.size() > 65535)
             fail("zip-limit",
                  "This writer requires a package below 4 GiB; split it into dependent packages",
                  package.id, {}, name);
-        std::ifstream input(file, std::ios::binary);
+        std::ifstream input(platform::host_path(file), std::ios::binary);
         std::array<char, 65536> buffer{};
         uint32_t crc = 0xffffffffu;
         while (input) {
@@ -268,11 +271,12 @@ void package_directory(const fs::path &source, const fs::path &output) {
         fail("package-write", "Could not finish package", package.id);
     zip.close();
 #if defined(_WIN32)
-    if (!MoveFileExW(temporary.c_str(), output.c_str(), MOVEFILE_WRITE_THROUGH))
+    if (!MoveFileExW(platform::host_path(temporary).c_str(), platform::host_path(output).c_str(),
+                     MOVEFILE_WRITE_THROUGH))
         fail("package-activate", "Cannot activate package without overwriting another file",
              package.id);
 #else
-    fs::create_hard_link(temporary, output);
+    fs::create_hard_link(platform::host_path(temporary), platform::host_path(output));
 #endif
 }
 } // namespace cc::content

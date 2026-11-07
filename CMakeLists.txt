@@ -596,6 +596,9 @@ endif()
 add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
 add_executable(mw3content tools/content/main.cpp)
 target_link_libraries(mw3content PRIVATE mw3core)
+add_test(NAME mw3content_cli_unicode
+  COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mw3content>" "-DROOT=${CMAKE_BINARY_DIR}"
+          -P "${CMAKE_SOURCE_DIR}/tools/content/check_cli_unicode.cmake")
 
 add_executable(mw3tests
   tests/main.cpp

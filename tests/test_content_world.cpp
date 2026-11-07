@@ -587,6 +587,7 @@ TEST(content_world_mission_composition_serves_real_aiv_nav_and_objective_records
     EXPECT(nav.record_count() == 1);
     const auto *point = nav.node_raw(0, &name);
     EXPECT(point && point->pos[0] == 1.0f && point->pos[1] == 2.0f && point->pos[2] == 3.0f);
+    EXPECT(point && point->auxname && std::string(point->auxname) == "Able");
     nav.unload();
     mech3::ai::NetFile net(1, "net_01");
     net.tree = mech3::content_world_reader("net_01.zrd");

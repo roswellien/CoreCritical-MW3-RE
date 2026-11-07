@@ -3,6 +3,7 @@
 #include "mech3/content_campaign.h"
 #include "mech3/content_registry.h"
 #include "mech3/content_state.h"
+#include "platform/host_path.h"
 
 #include <cstring>
 #include <filesystem>
@@ -28,20 +29,23 @@ namespace fs = std::filesystem;
 std::FILE* open_existing(const std::string& path) {
   const std::string w = zutl::write_path(path.c_str());
   std::error_code ec;
-  if (!fs::is_regular_file(w, ec)) {
+  if (!fs::is_regular_file(platform::host_path(fs::u8path(w)), ec)) {
     const std::string src = zutl::find(path.c_str());
-    if (src.empty() || !fs::is_regular_file(src, ec)) return nullptr;
-    fs::create_directories(fs::path(w).parent_path(), ec);
-    if (!fs::copy_file(src, w, fs::copy_options::overwrite_existing, ec)) return nullptr;
+    if (src.empty() || !fs::is_regular_file(platform::host_path(fs::u8path(src)), ec))
+      return nullptr;
+    fs::create_directories(platform::host_path(fs::u8path(w).parent_path()), ec);
+    if (!fs::copy_file(platform::host_path(fs::u8path(src)), platform::host_path(fs::u8path(w)),
+                       fs::copy_options::overwrite_existing, ec))
+      return nullptr;
   }
-  return std::fopen(w.c_str(), "r+b");
+  return platform::file_open(fs::u8path(w), "r+b");
 }
 std::FILE* open_always(const std::string& path) {
   if (std::FILE* f = open_existing(path)) return f;
   const std::string w = zutl::write_path(path.c_str());
   std::error_code ec;
-  fs::create_directories(fs::path(w).parent_path(), ec);
-  return std::fopen(w.c_str(), "w+b");
+  fs::create_directories(platform::host_path(fs::u8path(w).parent_path()), ec);
+  return platform::file_open(fs::u8path(w), "w+b");
 }
 
 // FIX (A) for MoveFileA and DeleteFileA: in the write dir; MoveFileA fails
@@ -49,13 +53,16 @@ std::FILE* open_always(const std::string& path) {
 void move_file(const char* from, const char* to) {
   const std::string a = zutl::write_path(from), b = zutl::write_path(to);
   std::error_code ec;
-  if (!fs::exists(a, ec)) return;
-  if (fs::exists(b, ec) && !fs::equivalent(a, b, ec)) return;  // a new case of the same name moves
-  fs::rename(a, b, ec);
+  if (!fs::exists(platform::host_path(fs::u8path(a)), ec))
+    return;
+  if (fs::exists(platform::host_path(fs::u8path(b)), ec) &&
+      !fs::equivalent(platform::host_path(fs::u8path(a)), platform::host_path(fs::u8path(b)), ec))
+    return; // a new case of the same name moves
+  fs::rename(platform::host_path(fs::u8path(a)), platform::host_path(fs::u8path(b)), ec);
 }
 bool delete_file(const char* path) {
   std::error_code ec;
-  return fs::remove(zutl::write_path(path), ec);
+  return fs::remove(platform::host_path(fs::u8path(zutl::write_path(path))), ec);
 }
 
 // ReadFile / WriteFile of a 4-byte field: false on an error, not at the end
@@ -126,7 +133,7 @@ bool Pilot::open() {
   if (active_content()) {
     // Managed saves use a separate atomic writer. Reading must never repair an
     // incompatible header in place or manufacture a missing checkpoint index.
-    file = std::fopen(zutl::write_path(path.c_str()).c_str(), "rb");
+    file = platform::file_open(fs::u8path(zutl::write_path(path.c_str())), "rb");
     return file != nullptr;
   }
   bool create = false;
@@ -451,7 +458,7 @@ bool delete_pilot(const char* name) {
 // bytes are skipped (they crashed the exe, see the constructor).
 void load_pilots() {
   std::error_code ec;
-  fs::create_directories(zutl::write_path("pilots\\games"), ec);
+  fs::create_directories(platform::host_path(fs::u8path(zutl::write_path("pilots\\games"))), ec);
   for (const std::string& file : zutl::list("pilots\\*.mw3")) {
     std::string n = file;  // _splitpath's file name
     const size_t slash = n.find_last_of("\\/:");
