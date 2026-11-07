@@ -320,8 +320,13 @@ its asset instance placement once; descendants retain their source-local matrix.
 Imported mesh chunks name their owning `node` and keep node-local vertices.
 Native Object3d nodes carry those matrices and actual parent/child links, so
 rendering, ground/projectile queries and objective node paths use the same tree.
-The whole transform chain determines mirrored triangle winding. Matrix and TRS
-fields are mutually exclusive. Cycles, shared-parent source nodes, missing or
+The whole transform chain determines mirrored triangle winding. A mirrored bound
+chunk requires `reflection: true`: its local vertices include an X reflection,
+cancelled by the anonymous native mesh child's X scale. Authored node matrices
+and world positions stay intact while native ground and nearest-ray queries
+agree on the front face; the reverse ray remains culled. Unbound chunks cannot
+declare reflection compensation. Matrix and TRS fields are mutually exclusive.
+Cycles, shared-parent source nodes, missing or
 cross-instance bindings, singular/nonfinite transforms, out-of-bounds geometry,
 unknown compiled fields, more than 65,536 nodes or depth above 24 fail before
 native construction. Transform-only nodes count toward both budgets.
@@ -331,5 +336,9 @@ root and then traverse immediate imported child names, for example
 `["gate_01", "Building", "Door", "Latch"]`. An imported basename used as the
 first component fails with a path diagnostic. Managed path tags belong to live
 nodes and are copied with native tree copies; recycled node slots reset them.
+The explicit world prefix is also supported, for example
+`["world1", "gate_01", "Building", "Door", "Latch"]`; it cannot skip an instance
+or intermediate parent. Vehicle support/collision point lookups use the explicit
+actor-root markers, even when an imported descendant has the same name.
 Inline meshes, heightfields, old compiled files without `nodes`, existing
 per-instance markers, and stock native lookup retain their existing contracts.

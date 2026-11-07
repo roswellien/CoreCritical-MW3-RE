@@ -27,10 +27,10 @@ void validate_compiled_world_fields(const Json &world) {
             const auto &chunk = world["chunks"][i];
             const auto path = "world.chunks[" + std::to_string(i) + "]";
             fields(definition, chunk,
-                   {"name", "instance", "node", "vertices", "triangles", "uvs", "color", "alpha",
-                    "soil", "texture", "image", "collision", "ground", "visible"},
+                   {"name", "instance", "node", "reflection", "vertices", "triangles", "uvs",
+                    "color", "alpha", "soil", "texture", "image", "collision", "ground", "visible"},
                    path);
-            for (const char *key : {"collision", "ground", "visible"})
+            for (const char *key : {"collision", "ground", "visible", "reflection"})
                 if (chunk.contains(key) && !chunk[key].is_boolean())
                     fail("world-schema", "Compiled mesh flags must be boolean", {}, definition.id,
                          path + "." + key);

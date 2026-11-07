@@ -16,6 +16,9 @@ struct ContentHierarchy {
 // move twice. Imported scene roots carry instance placement in local_matrix.
 ContentHierarchy build_content_hierarchy(const cc::content::Json &world, zcls::Node *root,
                                          bool separate_instances);
+void apply_content_chunk_transform(zcls::Node *node, const cc::content::Json &chunk);
+// Explicit vehicle body points must bind the root markers, never imported aliases.
+bool content_vehicle_marker(zcls::Node *root, const char *name, zcls::Node **result);
 // Imported basenames require an explicit live instance/actor root first.
 bool content_hierarchy_root(const char *name, zcls::Node **result);
 // Managed hierarchy paths traverse immediate children. Legacy native lookups

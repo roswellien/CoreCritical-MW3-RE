@@ -252,6 +252,22 @@ struct Compiler {
             fail("world-mesh", "Mesh requires vertices and triangle indices", definition.owner,
                  definition.id, instance);
         const Json &vertices = mesh["vertices"];
+        const Matrix &orientation = world_placement ? *world_placement : placement;
+        const double determinant =
+            orientation[0] * (orientation[5] * orientation[10] - orientation[9] * orientation[6]) -
+            orientation[4] * (orientation[1] * orientation[10] - orientation[9] * orientation[2]) +
+            orientation[8] * (orientation[1] * orientation[6] - orientation[5] * orientation[2]);
+        const bool reflection = !node_id.empty() && determinant < 0;
+        Matrix geometry = placement;
+        if (reflection) {
+            // The native nearest-ray query culls in mesh-local space, while
+            // ground/render queries use world vertices. Bake an X reflection
+            // here and cancel it on the anonymous mesh child, so its effective
+            // basis is positive without changing the authored logical tree.
+            Matrix reflected = identity();
+            reflected[0] = -1;
+            geometry = multiply(placement, reflected);
+        }
         Json chunk;
         auto fresh = [&] {
             chunk = {{"name", instance + ":" + std::to_string(out["chunks"].size())},
@@ -269,15 +285,10 @@ struct Compiler {
                      {"visible", mesh.value("visible", true)}};
             if (!node_id.empty())
                 chunk["node"] = node_id;
+            if (reflection)
+                chunk["reflection"] = true;
         };
         fresh();
-        // Bound primitives keep local positions. Their complete ancestor chain
-        // still determines whether reflection reverses native triangle winding.
-        const Matrix &orientation = world_placement ? *world_placement : placement;
-        const double determinant =
-            orientation[0] * (orientation[5] * orientation[10] - orientation[9] * orientation[6]) -
-            orientation[4] * (orientation[1] * orientation[10] - orientation[9] * orientation[2]) +
-            orientation[8] * (orientation[1] * orientation[6] - orientation[5] * orientation[2]);
         for (Json triangle : mesh["triangles"]) {
             if (!triangle.is_array() || triangle.size() != 3)
                 fail("world-triangle", "Only triangle primitives are supported");
@@ -292,7 +303,7 @@ struct Compiler {
                 const auto index = triangle[k].get<int64_t>();
                 if (index < 0 || static_cast<uint64_t>(index) >= vertices.size())
                     fail("world-index", "Triangle index is outside its vertex array");
-                p[k] = transform(placement, point(vertices[static_cast<size_t>(index)]));
+                p[k] = transform(geometry, point(vertices[static_cast<size_t>(index)]));
             }
             const Point a{p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
             const Point b{p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};

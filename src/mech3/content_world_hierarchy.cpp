@@ -24,6 +24,10 @@ zcls::Node *ContentHierarchy::chunk_parent(const Json &chunk) const {
 ContentHierarchy build_content_hierarchy(const Json &world, zcls::Node *root,
                                          bool separate_instances) {
     ContentHierarchy result;
+    if (separate_instances && !world.value("nodes", Json::array()).empty()) {
+        root->content_hierarchy_parent = true;
+        root->content_hierarchy_root = true;
+    }
     auto instance = [&](const std::string &name) {
         if (result.instances.count(name))
             return;
@@ -71,6 +75,23 @@ ContentHierarchy build_content_hierarchy(const Json &world, zcls::Node *root,
     }
     return result;
 }
+void apply_content_chunk_transform(zcls::Node *node, const Json &chunk) {
+    if (chunk.value("reflection", false))
+        zcls::object3d_set_scale(node, -1.0f, 1.0f, 1.0f);
+}
+bool content_vehicle_marker(zcls::Node *root, const char *name, zcls::Node **result) {
+    if (!root || root->cls() != 5 || !root->content_hierarchy_root || !name)
+        return false;
+    const size_t size = std::strlen(name);
+    const bool support = size == 9 && std::strncmp(name, "support", 7) == 0 && name[7] == '0' &&
+                         name[8] >= '0' && name[8] <= '3';
+    const bool collide = size == 9 && std::strncmp(name, "collide", 7) == 0 && name[7] >= '0' &&
+                         name[7] <= '1' && name[8] >= '0' && name[8] <= '9' &&
+                         (name[7] == '0' || name[8] <= '1');
+    if (!support && !collide)
+        return false;
+    return content_hierarchy_child(root, name, result);
+}
 bool content_hierarchy_root(const char *name, zcls::Node **result) {
     *result = nullptr;
     if (!name)
@@ -78,7 +99,8 @@ bool content_hierarchy_root(const char *name, zcls::Node **result) {
     bool imported = false;
     for (auto *item = zcls::list_head(zcls::kAllNodes); item; item = item->next) {
         auto *node = item->node;
-        if (!node || node->cls() != 5 || !node->data || std::strcmp(node->name(), name) != 0)
+        if (!node || (node->cls() != 5 && node->cls() != 2) || !node->data ||
+            std::strcmp(node->name(), name) != 0)
             continue;
         if (node->content_hierarchy_root) {
             if (*result)
@@ -96,7 +118,8 @@ bool content_hierarchy_root(const char *name, zcls::Node **result) {
     return false;
 }
 bool content_hierarchy_child(zcls::Node *parent, const char *name, zcls::Node **result) {
-    if (!parent || parent->cls() != 5 || !parent->data || !parent->content_hierarchy_parent)
+    if (!parent || (parent->cls() != 5 && parent->cls() != 2) || !parent->data ||
+        !parent->content_hierarchy_parent)
         return false;
     *result = nullptr;
     if (!name)

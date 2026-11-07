@@ -15,6 +15,7 @@
 #include "mech3/content_world_hierarchy.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mission.h"
+#include "mech3/veh_controls.h"
 
 #include <cmath>
 #include <cstring>
@@ -240,6 +241,16 @@ TEST(content_world_hierarchy_rejects_invalid_graphs_matrices_and_bindings) {
     invalid["chunks"][0]["instance"] = "other";
     EXPECT(rejects([&] { cc::content::validate_compiled_world(invalid); }));
     invalid = good;
+    invalid["chunks"][0]["reflection"] = true;
+    EXPECT(rejects([&] { cc::content::validate_compiled_world(invalid); }));
+    invalid = good;
+    invalid["chunks"][0]["reflection"] = 1;
+    EXPECT(rejects([&] { cc::content::validate_compiled_world(invalid); }));
+    invalid = good;
+    invalid["chunks"][0].erase("node");
+    invalid["chunks"][0]["reflection"] = false;
+    EXPECT(rejects([&] { cc::content::validate_compiled_world(invalid); }));
+    invalid = good;
     invalid["nodes"] = Json::array();
     for (int i = 0; i < 25; ++i)
         invalid["nodes"].push_back(
@@ -328,7 +339,14 @@ TEST(content_world_hierarchy_mirrored_parent_preserves_native_ground_surface) {
     fixture.document["nodes"][0]["scale"] = {-1.0, 1.0, 1.0};
     fixture.write();
     const auto compiled = fixture.compile();
+    EXPECT(compiled["chunks"][0]["reflection"] == true);
+    EXPECT(compiled["chunks"][0]["vertices"][0] == Json({2.0, 0.0, 2.0}));
     EXPECT(compiled["chunks"][0]["vertices"][1] == Json({0.0, 0.0, -2.0}));
+    auto invalid = compiled;
+    invalid["chunks"][0].erase("reflection");
+    EXPECT(rejects([&] { cc::content::validate_compiled_world(invalid); }));
+    invalid["chunks"][0]["reflection"] = false;
+    EXPECT(rejects([&] { cc::content::validate_compiled_world(invalid); }));
     NativeScene scene(fixture);
     auto *world = zcls::list_find_by_name(zcls::kWorlds, "world1");
     zcls::GroundHits ground{};
@@ -340,10 +358,28 @@ TEST(content_world_hierarchy_mirrored_parent_preserves_native_ground_surface) {
     const float from[] = {-51, 20, -38}, to[] = {-51, -10, -38};
     zcls::segment_nearest(world, from, to, &line);
     EXPECT(line.total > 0 || line.count > 0);
+    line = {};
+    zcls::segment_nearest(world, to, from, &line);
+    EXPECT(line.total == 0 && line.count == 0);
+    if (ground.count) {
+        auto *geometry = ground.hit[0].node;
+        EXPECT(mech3::restore_content_node(geometry));
+        line = {};
+        zcls::segment_nearest(world, from, to, &line);
+        EXPECT(line.total > 0 || line.count > 0);
+        zcls::ground_point(world, -51.0f, 100.0f, -38.0f, &ground);
+        EXPECT(ground.count > 0 && std::abs(ground.hit[0].height - 7.0f) < 0.001f);
+    }
 }
 
 TEST(content_world_hierarchy_vehicle_asset_keeps_nodes_and_marker_bindings_under_actor) {
     Fixture fixture;
+    fixture.document["nodes"][1]["children"] = {2, 3, 4};
+    fixture.document["nodes"].push_back(
+        {{"name", "support00"}, {"translation", {1000.0, 1000.0, 1000.0}}});
+    fixture.document["nodes"].push_back(
+        {{"name", "collide00"}, {"translation", {1000.0, 1000.0, 1000.0}}});
+    fixture.write();
     fixture.content->definitions.push_back({"vehicle",
                                             "hierarchy:truck",
                                             "hierarchy",
@@ -369,7 +405,21 @@ TEST(content_world_hierarchy_vehicle_asset_keeps_nodes_and_marker_bindings_under
         zcls::node_world_position(latch, position);
     EXPECT(latch && std::abs(position[0] - 111.0f) < 0.001f &&
            std::abs(position[1] - 9.0f) < 0.001f && std::abs(position[2] - 17.0f) < 0.001f);
-    auto *marker = zcls::node_find_in_tree(actor, "support00");
+    zcls::Node *marker = nullptr, *imported_marker = nullptr;
+    EXPECT(mech3::content_hierarchy_child(actor, "support00", &marker) && marker);
+    EXPECT(mech3::content_hierarchy_child(deck, "support00", &imported_marker) && imported_marker);
+    EXPECT(marker != imported_marker);
+    mech3::VehControlsHooks controls;
+    EXPECT(controls.node_find(actor, "support00") == marker);
+    // Even if the root body point is removed, a deep imported alias is not a
+    // valid substitute for the explicit vehicle marker contract.
+    zcls::node_set_name(marker, "removed_support");
+    EXPECT(controls.node_find(actor, "support00") == nullptr);
+    zcls::node_set_name(marker, "support00");
+    zcls::Node *collision_marker = nullptr;
+    EXPECT(mech3::content_hierarchy_child(actor, "collide00", &collision_marker) &&
+           collision_marker);
+    EXPECT(controls.node_find(actor, "collide00") == collision_marker);
     if (marker)
         zcls::node_world_position(marker, position);
     EXPECT(marker && std::abs(position[0] - 100.0f) < 0.001f && std::abs(position[1]) < 0.001f &&
@@ -383,12 +433,23 @@ TEST(content_world_hierarchy_paths_require_instance_root_and_tags_follow_native_
     fixture.document["nodes"].push_back({{"name", "Latch"}, {"translation", {0.0, 1.0, 0.0}}});
     fixture.write();
     NativeScene scene(fixture);
-    zcls::Node *instance = nullptr, *root = nullptr, *deck = nullptr, *latch = nullptr;
+    zcls::Node *world = nullptr, *instance = nullptr, *root = nullptr, *deck = nullptr,
+               *latch = nullptr;
+    EXPECT(mech3::content_hierarchy_root("world1", &world) && world && world->cls() == 2);
+    EXPECT(mech3::content_hierarchy_child(world, "fixture", &instance) && instance);
+    EXPECT(mech3::content_hierarchy_child(world, "Deck", &deck) && !deck);
     EXPECT(mech3::content_hierarchy_root("fixture", &instance) && instance);
     EXPECT(rejects([&] { mech3::content_hierarchy_root("Latch", &root); }));
     EXPECT(mech3::content_hierarchy_child(instance, "Root", &root) && root);
     EXPECT(mech3::content_hierarchy_child(root, "Deck", &deck) && deck);
     EXPECT(mech3::content_hierarchy_child(deck, "Latch", &latch) && latch);
+    NativeObjectiveHooks hooks;
+    const auto world_handle = hooks.node_find("world1");
+    EXPECT(world_handle && hooks.subnode_find(world_handle, "Deck") == 0);
+    const auto instance_handle = hooks.subnode_find(world_handle, "fixture");
+    const auto root_handle = hooks.subnode_find(instance_handle, "Root");
+    const auto deck_handle = hooks.subnode_find(root_handle, "Deck");
+    EXPECT(hooks.handles.at(hooks.subnode_find(deck_handle, "Latch")) == latch);
     EXPECT(!mech3::content_hierarchy_child(root, "Latch", &latch) || !latch);
     EXPECT(mech3::content_hierarchy_child(deck, "Latch", &latch) && latch);
     auto *copied = zcls::node_copy(latch);

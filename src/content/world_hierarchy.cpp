@@ -157,21 +157,34 @@ std::set<std::string> validate(const Json &world) {
         if (!names[{instance, id}].insert(generated).second)
             fail("world-node-name",
                  "Imported node name collides with a generated native mesh node");
-        if (!bound)
+        if (!bound) {
+            if (chunk.contains("reflection"))
+                fail("world-node-reflection",
+                     "Reflection compensation requires a bound hierarchy node");
             continue;
+        }
         const auto found = nodes.find(id);
         if (found == nodes.end() || found->second.instance != instance)
             fail("world-node-binding",
                  "Chunk node binding is missing or belongs to another instance");
+        Matrix geometry = found->second.world;
+        const double determinant =
+            geometry[0] * (geometry[5] * geometry[10] - geometry[9] * geometry[6]) -
+            geometry[4] * (geometry[1] * geometry[10] - geometry[9] * geometry[2]) +
+            geometry[8] * (geometry[1] * geometry[6] - geometry[5] * geometry[2]);
+        const bool reflection = chunk.value("reflection", false);
+        if (reflection != (determinant < 0))
+            fail("world-node-reflection", "Bound chunk requires reflection compensation exactly "
+                                          "when its full node transform is mirrored");
+        if (reflection)
+            for (size_t row = 0; row < 3; ++row)
+                geometry[row] = -geometry[row];
         for (const auto &vertex : chunk.at("vertices"))
-            transformed(found->second.world, vertex);
+            transformed(geometry, vertex);
         for (const auto &triangle : chunk.at("triangles")) {
-            const auto a =
-                transformed(found->second.world, chunk["vertices"][triangle[0].get<size_t>()]);
-            const auto b =
-                transformed(found->second.world, chunk["vertices"][triangle[1].get<size_t>()]);
-            const auto c =
-                transformed(found->second.world, chunk["vertices"][triangle[2].get<size_t>()]);
+            const auto a = transformed(geometry, chunk["vertices"][triangle[0].get<size_t>()]);
+            const auto b = transformed(geometry, chunk["vertices"][triangle[1].get<size_t>()]);
+            const auto c = transformed(geometry, chunk["vertices"][triangle[2].get<size_t>()]);
             const double ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0],
                          vy = c[1] - a[1], vz = c[2] - a[2];
             const double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;

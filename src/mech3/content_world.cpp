@@ -418,6 +418,7 @@ bool load_content_world(int32_t index) {
         node->set_flags((node->flags() & ~(8u | 16u | 0x1000000u)) | 4u |
                         (chunk.value("ground", true) ? 8u : 0u) |
                         (chunk.value("collision", true) ? 16u : 0u));
+        apply_content_chunk_transform(node, chunk);
         zcls::node_set_model(node, make_model(chunk));
         if (!chunk.value("visible", true)) {
             zcls::object3d_set_opacity(node, 0);
@@ -554,6 +555,7 @@ zcls::Node *create_content_vehicle_node(const char *vehicle_type, const char *na
         zcls::node_set_name(node, name.c_str());
         node->set_flags((node->flags() & ~(8u | 16u | 0x1000000u)) | 4u |
                         (chunk.value("collision", true) ? 16u : 0u));
+        apply_content_chunk_transform(node, chunk);
         zcls::node_set_model(node, make_model(chunk));
         if (!chunk.value("visible", true)) {
             zcls::object3d_set_opacity(node, 0);
