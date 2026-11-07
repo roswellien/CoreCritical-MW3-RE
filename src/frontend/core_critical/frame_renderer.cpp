@@ -260,7 +260,7 @@ public:
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
-        prepared_(sanitize_prepared_assets(assets), assets.materials),
+        prepared_(sanitize_prepared_assets(assets)),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),
