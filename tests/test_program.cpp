@@ -184,6 +184,37 @@ std::string temp_dir(const char* name) {
   std::filesystem::create_directories(d, ec);
   return d;
 }
+
+// Mirrors an existing file or directory into a private test fixture.
+// Tries a symbolic link first (instant and zero-copy where privileges allow);
+// falls back to copying the file or directory when symlink creation is denied
+// (e.g. unprivileged Windows environments where create_symlink fails with error 1314).
+bool mirror_fixture_entry(const std::filesystem::path& src, const std::filesystem::path& dst, std::error_code& ec) {
+  namespace fs = std::filesystem;
+  ec.clear();
+  const fs::file_status status = fs::status(src, ec);
+  if (ec) return false;
+  if (dst.has_parent_path()) {
+    fs::create_directories(dst.parent_path(), ec);
+    if (ec) return false;
+  }
+  if (fs::is_directory(status)) {
+    fs::create_directory_symlink(src, dst, ec);
+    if (!ec) return true;
+    ec.clear();
+    fs::remove_all(dst, ec);
+    ec.clear();
+    fs::copy(src, dst, fs::copy_options::recursive, ec);
+    return !ec;
+  }
+  fs::create_symlink(src, dst, ec);
+  if (!ec) return true;
+  ec.clear();
+  fs::remove(dst, ec);
+  ec.clear();
+  fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+  return !ec;
+}
 void touch(const std::string& path) {
   std::filesystem::create_directories(std::filesystem::path(path).parent_path());
   std::FILE* f = std::fopen(path.c_str(), "wb");
@@ -11042,13 +11073,41 @@ TEST(mod_broken_motion_falls_back_or_refuses_the_mech_headless) {
     zutl_zar::destroy(in), zutl_zar::destroy(out);
   }
   const bool fell_back = ia_madcat_with(wd, install);
-  // An install of links without zbd/motion.zbd: the broken copy is the only one.
+  // An install mirror without zbd/motion.zbd: the broken copy is the only one.
   const std::string bare = temp_dir("mod_motion_install");
-  for (fs::directory_iterator it(install, ec), end; !ec && it != end; it.increment(ec))
-    if (it->path().filename() != "zbd") fs::create_symlink(it->path(), fs::path(bare) / it->path().filename(), ec);
+  bool setup_ok = true;
+  for (fs::directory_iterator it(install, ec), end; !ec && it != end; it.increment(ec)) {
+    if (it->path().filename() != "zbd") {
+      if (!mirror_fixture_entry(it->path(), fs::path(bare) / it->path().filename(), ec)) {
+        setup_ok = false;
+        break;
+      }
+    }
+  }
+  if (!setup_ok || ec) {
+    std::printf("  failed creating bare install root fixture: %s\n", ec.message().c_str());
+    EXPECT(!ec && setup_ok);
+    return;
+  }
   fs::create_directories(fs::path(bare) / "zbd", ec);
-  for (fs::directory_iterator it(fs::path(install) / "zbd", ec), end; !ec && it != end; it.increment(ec))
-    if (it->path().filename() != "motion.zbd") fs::create_symlink(it->path(), fs::path(bare) / "zbd" / it->path().filename(), ec);
+  if (ec) {
+    std::printf("  failed creating bare zbd dir: %s\n", ec.message().c_str());
+    EXPECT(!ec);
+    return;
+  }
+  for (fs::directory_iterator it(fs::path(install) / "zbd", ec), end; !ec && it != end; it.increment(ec)) {
+    if (it->path().filename() != "motion.zbd") {
+      if (!mirror_fixture_entry(it->path(), fs::path(bare) / "zbd" / it->path().filename(), ec)) {
+        setup_ok = false;
+        break;
+      }
+    }
+  }
+  if (!setup_ok || ec) {
+    std::printf("  failed populating bare zbd fixture: %s\n", ec.message().c_str());
+    EXPECT(!ec && setup_ok);
+    return;
+  }
   const bool refused_played = ia_madcat_with(wd, bare);
   std::printf("  a broken madcat_walk: with the install's copy the Mad Cat plays %d; with none it is refused (played %d), no crash\n",
               fell_back, refused_played);
@@ -11067,8 +11126,23 @@ TEST(mod_world_plays_in_instant_action_headless) {
   const fs::path mod = fs::path(wd) / "mods" / "mymap";
   std::error_code ec;
   fs::create_directories(mod / "zbd" / "mymap", ec);
-  for (fs::directory_iterator it(fs::path(MW3_GAME_DIR) / "zbd" / "c1", ec), end; !ec && it != end; it.increment(ec))
-    fs::create_symlink(it->path(), mod / "zbd" / "mymap" / it->path().filename(), ec);
+  if (ec) {
+    std::printf("  failed creating mod world directory: %s\n", ec.message().c_str());
+    EXPECT(!ec);
+    return;
+  }
+  bool setup_ok = true;
+  for (fs::directory_iterator it(fs::path(MW3_GAME_DIR) / "zbd" / "c1", ec), end; !ec && it != end; it.increment(ec)) {
+    if (!mirror_fixture_entry(it->path(), mod / "zbd" / "mymap" / it->path().filename(), ec)) {
+      setup_ok = false;
+      break;
+    }
+  }
+  if (!setup_ok || ec) {
+    std::printf("  failed populating mod world fixture: %s\n", ec.message().c_str());
+    EXPECT(!ec && setup_ok);
+    return;
+  }
   std::ofstream(mod / "mod.txt") << "name=My Map\nworld=mymap\nia_world=mymap My Map\nworld=c1\n";
   std::ofstream(mod / "mymap.gs") << "source c1.gs\n";
   zutl::mounts() = zutl::Mounts{};
