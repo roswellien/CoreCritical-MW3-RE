@@ -53,6 +53,11 @@ struct RendererBridgeConfig {
   bool fixture_atlas_audit{false};
   bool shadow_batch{false};
 
+  // Optional normal catalogs are captured once per renderer. Runtime lookups
+  // must not observe another renderer's later environment changes.
+  std::string surface_normal_catalog;
+  std::string world_normal_manifest;
+
   // Surface Detail
   std::optional<double> detail_fixed_time{std::nullopt};
 
@@ -73,6 +78,10 @@ struct RendererBridgeConfig {
 
   static RendererBridgeConfig from_diagnostic_env() {
     RendererBridgeConfig cfg;
+    if (const char *path = std::getenv("MW34_SURFACE_NORMALS"))
+      cfg.surface_normal_catalog = path;
+    if (const char *path = std::getenv("MW34_WORLD_NORMALS"))
+      cfg.world_normal_manifest = path;
     if (const char *v = std::getenv("MW34_VK_VALIDATION")) {
       cfg.vk_validation = (std::strcmp(v, "1") == 0);
     }

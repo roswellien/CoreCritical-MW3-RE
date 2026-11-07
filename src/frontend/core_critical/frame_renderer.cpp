@@ -271,6 +271,11 @@ public:
     if (backend == sdlfe::RendererBackend::sdl)
       throw std::runtime_error(
           "The Core Critical factory requires a Vulkan backend");
+    // Admit catalog paths and headers before native mission callbacks start.
+    // World pixel payloads remain lazy; failures here reach the window's normal
+    // initialization error boundary instead of unwinding legacy game loaders.
+    if (lighting_.normals)
+      surface_normals_load();
     initialize_renderer();
     if (assets.render_thread) {
       worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
@@ -315,7 +320,13 @@ public:
             retired_geometry_buffers_ + renderer_->retired_model_buffers,
             gpu_prepared_vertices_,
             early_prepared_models_,
-            prepared_cpu_fallback_batches_};
+            prepared_cpu_fallback_batches_,
+            surface_normals_.cache.world_bytes,
+            surface_normals_.peak_decoded_bytes,
+            std::uint64_t(
+                std::count_if(surface_normals_.cache.pages.begin(),
+                              surface_normals_.cache.pages.end(),
+                              [](const auto &page) { return page.loaded; }))};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
@@ -366,7 +377,11 @@ public:
   void reset_scene_resources() override {
     reset_pending_ = true;
     ++group_load_epoch_;
+    for (const auto &[index, handle] : surface_normal_textures_)
+      textures_.at(handle) = {};
     surface_normal_textures_.clear();
+    surface_normals_ = SurfaceNormalState{};
+    logged_first_normal_trace_ = false;
   }
 
   ~FrameRenderer() override {
@@ -458,6 +473,14 @@ public:
         static_cast<unsigned long long>(quality.anisotropic_samplers),
         static_cast<unsigned long long>(quality.mip_levels));
     const auto assets = asset_statistics();
+    if (lighting_.normals)
+      std::fprintf(
+          stderr,
+          "World normal pages: %llu decoded bytes, %llu peak decoded bytes, "
+          "%llu loaded pages (536870912-byte limit)\n",
+          (unsigned long long)assets.world_normal_decoded_bytes,
+          (unsigned long long)assets.world_normal_peak_decoded_bytes,
+          (unsigned long long)assets.world_normal_loaded_pages);
     const auto &cache = prepared_draw_cache_.statistics();
     if (cache.hits || cache.misses || cache.bypasses)
       std::fprintf(stderr,
@@ -766,22 +789,25 @@ private:
         draw.lit_normals = std::move(norms);
         if (norm_idx >= 0 && !logged_first_normal_trace_) {
           logged_first_normal_trace_ = true;
-          std::fprintf(stderr,
-                       "[SURFACE_NORMAL_TRACE] First authenticated surface "
-                       "normal bound: "
-                       "name=%s key={w=%u, h=%u, fmt=%u, hash=0x%llx} slot=%d "
-                       "normal_slot=%d uv_transform=[%d,%d] "
-                       "proj=[near=%f, fx_near=%f, fy_near=%f, cx=%f, cy=%f] "
-                       "viewport=[%d,%d,%d,%d] scene=[%u,%u] v0=[sx=%f, sy=%f, "
-                       "sz=%f, rhw=%f, u=%f, v=%f]\n",
-                       tex_name.c_str(), key.width, key.height, key.format,
-                       (unsigned long long)key.hash, draw.texture,
-                       draw.normal_texture, state.address_u, state.address_v,
-                       proj.near_z, proj.fx_near, proj.fy_near, proj.cx,
-                       proj.cy, viewport_[0], viewport_[1], viewport_[2],
-                       viewport_[3], scene_.width, scene_.height,
-                       vertices[0].sx, vertices[0].sy, vertices[0].sz,
-                       vertices[0].rhw, vertices[0].tu, vertices[0].tv);
+          std::fprintf(
+              stderr,
+              "[SURFACE_NORMAL_TRACE] First authenticated surface "
+              "normal bound: "
+              "name=%s key={w=%u, h=%u, fmt=%u, hash=0x%llx} slot=%d "
+              "normal_slot=%d normal_index=%d catalog=%s "
+              "uv_transform=[1,0,0,0,1,0] sampler_address=[%d,%d] "
+              "proj=[near=%f, fx_near=%f, fy_near=%f, cx=%f, cy=%f] "
+              "viewport=[%d,%d,%d,%d] scene=[%u,%u] v0=[sx=%f, sy=%f, "
+              "sz=%f, rhw=%f, u=%f, v=%f]\n",
+              tex_name.c_str(), key.width, key.height, key.format,
+              (unsigned long long)key.hash, draw.texture, draw.normal_texture,
+              norm_idx,
+              surface_normals_.cache.authored.count(key) ? "authored" : "world",
+              state.address_u, state.address_v, proj.near_z, proj.fx_near,
+              proj.fy_near, proj.cx, proj.cy, viewport_[0], viewport_[1],
+              viewport_[2], viewport_[3], scene_.width, scene_.height,
+              vertices[0].sx, vertices[0].sy, vertices[0].sz, vertices[0].rhw,
+              vertices[0].tu, vertices[0].tv);
         }
       }
     }
@@ -821,6 +847,9 @@ private:
           previous.texture == draw.texture &&
           previous.normal_texture == draw.normal_texture &&
           bool(previous.sun_tl) == bool(draw.sun_tl) &&
+          (!draw.sun_tl ||
+           (previous.sun_tl->camera_world == draw.sun_tl->camera_world &&
+            previous.sun_tl->projection == draw.sun_tl->projection)) &&
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.sampler == draw.sampler &&
           previous.key.packed() == draw.key.packed() &&

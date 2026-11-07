@@ -291,8 +291,9 @@ void load_texture(TextureEntry* entry, int32_t free_pixels) {
   } active_surface_scope;
   mw34::materials::clear_active_surface_key();
   if (img.pixels && img.palette_count == 0 && (img.flags & kTwoBytes) &&
-      img.width > 0 && img.height > 0 &&
-      img.pixel_count >= img.width * img.height) {
+      img.width > 0 && img.height > 0 && img.pixel_count > 0 &&
+      std::uint64_t(img.pixel_count) >=
+          std::uint64_t(img.width) * std::uint64_t(img.height)) {
     const uint32_t format = (img.flags & kAlpha) == 0 ? 1 : img.alpha ? 3 : 2;
     const uint64_t hash = mw34::materials::normal_hash(
         img.pixels, static_cast<size_t>(img.width) * img.height * 2);
