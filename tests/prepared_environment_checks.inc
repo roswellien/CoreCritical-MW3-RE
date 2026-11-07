@@ -251,6 +251,10 @@ void check_environment_packs() {
     mw34::materials::WorldNormalCache cache;
     cache.load_world_manifest(folder / "owner.txt");
     cache.load_world_manifest(folder / "later.txt");
+    env_test_write(folder / "empty-later.txt", "MW34SNP1\n");
+    env_test_reject(
+        [&] { cache.load_world_manifest(folder / "empty-later.txt"); },
+        "Empty later world-normal manifest accepted");
     const mw34::materials::SurfaceKey a{1, 1, 1, 73}, b{1, 1, 1, 74};
     const auto expected = cache.surface_normal_index(a);
     require(exclusion ? expected == -1 : expected >= 0,

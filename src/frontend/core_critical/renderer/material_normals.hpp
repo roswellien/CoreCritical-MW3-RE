@@ -408,8 +408,8 @@ class WorldNormalCache {
             }
             pages.push_back(std::move(page));
         }
-        if (!list.eof() || pages.empty())
-            throw std::runtime_error("Incomplete world-normal manifest");
+        if (!list.eof() || page_names.empty())
+          throw std::runtime_error("Incomplete world-normal manifest");
         world_package_bytes += package_bytes;
     }
 
