@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdio>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -14,6 +16,10 @@
 // order; the first holding the file wins. An absolute or ./-relative host path
 // that exists is used as it is (tools and tests pass those).
 namespace zutl {
+// App-owned immutable aliases for validated optional texture banks only.
+using BankOverrides = std::map<std::string, std::string>;
+std::shared_ptr<const BankOverrides>
+set_bank_overrides(std::shared_ptr<const BankOverrides> banks);
 
 struct Mounts {
   std::vector<std::string> read;   // searched in order

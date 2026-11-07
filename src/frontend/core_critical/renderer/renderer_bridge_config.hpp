@@ -5,6 +5,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace cc_mw3_re {
 
@@ -57,6 +58,8 @@ struct RendererBridgeConfig {
   // must not observe another renderer's later environment changes.
   std::string surface_normal_catalog;
   std::string world_normal_manifest;
+  std::vector<std::string> environment_authored_manifests,
+      environment_world_manifests;
   std::string native_material_sidecar;
   std::string native_material_asset_id;
   bool trace_native_bindings{false};

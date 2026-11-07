@@ -1304,6 +1304,15 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
                                       const sdlfe::CoreCriticalQuality &quality,
                                       const sdlfe::CoreCriticalAssets &assets) {
   auto config = RendererBridgeConfig::from_diagnostic_env();
+  if (assets.environment) {
+    std::fprintf(stderr,
+                 "Environment renderer catalogs: %zu authored, %zu world\n",
+                 assets.environment->authored_manifests.size(),
+                 assets.environment->world_manifests.size());
+    config.environment_authored_manifests =
+        assets.environment->authored_manifests;
+    config.environment_world_manifests = assets.environment->world_manifests;
+  }
   config.dxgi_present = (backend != sdlfe::RendererBackend::core_critical_wsi);
   config.window_mode = "windowed";
   config.world_scale_percent = 100;
