@@ -39,6 +39,27 @@ std::string env_test_page(bool compressed = false) {
   }
   return out;
 }
+std::string env_test_bank(bool global_palette = false) {
+  std::string bank;
+  for (unsigned value : {0U, 1U, global_palette ? 1U : 0U, 1U, 0U, 0U})
+    write_u32(bank, value);
+  std::string name = "sample";
+  name.resize(32, '\0');
+  bank += name;
+  write_u32(bank, 64U + (global_palette ? 512U : 0U));
+  write_u32(bank, global_palette ? 0U : 0xffffffffU);
+  if (global_palette)
+    bank.append(512, '\0');
+  std::string info(16, '\0');
+  info[0] = global_palette ? 0x11 : 1;
+  info[4] = 1;
+  info[6] = 1;
+  if (global_palette)
+    info[13] = 1; // 256 global palette colours, one indexed texel.
+  bank += info;
+  bank.append(global_palette ? 1 : 2, '\0');
+  return bank;
+}
 struct EnvironmentFixture {
   std::filesystem::path root;
   EnvJson manifest, registry;
@@ -58,10 +79,7 @@ struct EnvironmentFixture {
                 {"payload_profile", "prepared-environment-v1"},
                 {"operation", region},
                 {"banks", EnvJson::object()}};
-    std::string bank;
-    for (unsigned value : {0U, 1U, 0U, 1U, 0U, 0U})
-      write_u32(bank, value);
-    bank.resize(64, '\0'); // One complete native header + texture-table entry.
+    const auto bank = env_test_bank();
     put("environment/bank.bin", bank, "ZBD-texture-v1");
     std::vector<std::string> dirs = {
         region == "training" ? "t1" : "c" + region.substr(9)};
@@ -318,6 +336,14 @@ void check_environment_packs() {
     require(file != nullptr, "UTF-8 selected bank could not be opened");
     std::fclose(file);
   }
+  {
+    const auto output = unicode_parent / "new" / "nested" / "output.bin";
+    auto *file = zutl::open(output.u8string().c_str(), "wb");
+    require(file != nullptr, "UTF-8 output directories could not be created");
+    std::fclose(file);
+    require(std::filesystem::is_regular_file(output),
+            "UTF-8 output created at wrong path");
+  }
   mw34::materials::WorldNormalCache unicode_cache;
   unicode_cache.load_world_manifest(
       std::filesystem::u8path(unicode_selection.world_manifests.at(0)));
@@ -408,11 +434,7 @@ void check_environment_packs() {
                     "Negative native bank count admitted");
   }
   EnvironmentFixture palette(folder / "palette-bank");
-  std::string paletted(24 + 40 + 512, '\0');
-  paletted[4] = 1;
-  paletted[8] = 1;
-  paletted[12] = 1;
-  palette.put("environment/bank.bin", paletted, "ZBD-texture-v1");
+  palette.put("environment/bank.bin", env_test_bank(true), "ZBD-texture-v1");
   palette.save();
   require(!load_environment_packs({palette.path()}).banks.empty(),
           "Valid paletted bank rejected");
@@ -434,6 +456,74 @@ void check_environment_packs() {
     filename.save();
     env_test_reject([&] { load_environment_packs({filename.path()}); },
                     "Unsupported page filename admitted");
+  }
+  auto reject_bank = [&](const char *label, const std::string &data) {
+    EnvironmentFixture invalid(folder / label);
+    invalid.put("environment/bank.bin", data, "ZBD-texture-v1");
+    invalid.save();
+    env_test_reject([&] { load_environment_packs({invalid.path()}); },
+                    "Unreadable texture-bank entry admitted");
+  };
+  auto bank_word = [&](std::size_t offset, unsigned value) {
+    auto data = env_test_bank();
+    for (unsigned i = 0; i < 4; ++i)
+      data[offset + i] = char(value >> (8 * i));
+    return data;
+  };
+  reject_bank("offset-eof", bank_word(56, 82));
+  reject_bank("offset-table", bank_word(56, 24));
+  reject_bank("negative-palette", bank_word(60, 0xfffffffeU));
+  reject_bank("missing-palette", bank_word(60, 0));
+  auto short_info = env_test_bank();
+  short_info.resize(79);
+  reject_bank("short-info", short_info);
+  auto short_pixels = env_test_bank();
+  short_pixels.pop_back();
+  reject_bank("short-pixels", short_pixels);
+  for (unsigned offset : {68U, 70U, 76U}) {
+    auto negative = env_test_bank();
+    negative[offset] = negative[offset + 1] = char(0xff);
+    reject_bank(("negative-info-" + std::to_string(offset)).c_str(), negative);
+  }
+  auto huge = env_test_bank();
+  huge[68] = huge[70] = char(0xff);
+  huge[69] = huge[71] = 0x7f;
+  reject_bank("huge-pixels", huge);
+  for (bool alias : {false, true}) {
+    auto single = env_test_bank();
+    auto out = single.substr(0, 24);
+    out[12] = 2;
+    auto first = single.substr(24, 40), second = first;
+    const unsigned first_offset = alias ? 104 : 122;
+    for (unsigned i = 0; i < 4; ++i) {
+      first[32 + i] = char(first_offset >> (8 * i));
+      second[32 + i] = char(104U >> (8 * i));
+    }
+    out += first + second + single.substr(64);
+    if (!alias)
+      out += single.substr(64);
+    EnvironmentFixture ordered(folder /
+                               (alias ? "alias-offsets" : "unsorted-offsets"));
+    ordered.put("environment/bank.bin", out, "ZBD-texture-v1");
+    ordered.save();
+    require(!load_environment_packs({ordered.path()}).banks.empty(),
+            "Valid unsorted/alias texture entries rejected");
+  }
+  for (bool alpha : {false, true}) {
+    auto data = env_test_bank();
+    if (alpha) {
+      data[64] |= 8;
+      data += '\0';
+    } else {
+      data[76] = 1;
+      data += '\0';
+    } // Indexed texel plus one 16-bit local colour.
+    EnvironmentFixture payload(folder /
+                               (alpha ? "full-alpha" : "local-palette"));
+    payload.put("environment/bank.bin", data, "ZBD-texture-v1");
+    payload.save();
+    require(!load_environment_packs({payload.path()}).banks.empty(),
+            "Valid texture payload rejected");
   }
   EnvironmentFixture truncated(folder / "truncated-bank");
   std::string short_bank(24, '\0');

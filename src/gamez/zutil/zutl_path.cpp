@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -12,6 +13,17 @@ namespace zutl {
 namespace {
 Mounts g_mounts;
 std::shared_ptr<const BankOverrides> g_banks;
+std::set<std::string> g_bank_names;
+std::vector<std::string> g_bank_index_mounts;
+BankOverrides g_bank_index;
+std::string bank_path_key(const std::string &path) {
+  auto key =
+      std::filesystem::u8path(path).lexically_normal().generic_u8string();
+  for (auto &c : key)
+    if (c >= 'A' && c <= 'Z')
+      c += 'a' - 'A';
+  return key;
+}
 
 std::FILE *open_host_file(const std::string &path, const char *mode) {
 #if defined(_WIN32)
@@ -221,13 +233,32 @@ std::shared_ptr<const BankOverrides>
 set_bank_overrides(std::shared_ptr<const BankOverrides> banks) {
   auto previous = std::move(g_banks);
   g_banks = std::move(banks);
+  g_bank_names.clear();
+  g_bank_index.clear();
+  g_bank_index_mounts.clear();
+  if (g_banks)
+    for (const auto &bank : *g_banks)
+      g_bank_names.insert(bank.first.substr(bank.first.find_last_of('/') + 1));
   return previous;
 }
 
 std::string find(const char* path) {
   const std::string h = host(path);
   if (h.empty() || outside(h)) return {};
-  if (g_banks) {
+  auto basename = h.substr(h.find_last_of('/') + 1);
+  for (auto &c : basename)
+    if (c >= 'A' && c <= 'Z')
+      c += 'a' - 'A';
+  const bool selected_bank = g_banks && g_bank_names.count(basename);
+  if (selected_bank) {
+    if (g_bank_index_mounts != g_mounts.read) {
+      BankOverrides index;
+      for (const auto &root : g_mounts.read)
+        for (const auto &bank : *g_banks)
+          index.emplace(bank_path_key(join(root, bank.first)), bank.second);
+      g_bank_index = std::move(index);
+      g_bank_index_mounts = g_mounts.read;
+    }
     auto alias = h;
     for (auto &c : alias)
       if (c >= 'A' && c <= 'Z')
@@ -248,22 +279,14 @@ std::string find(const char* path) {
     // Native texture libraries ask for bare names through mission mounts.
     // Resolve that mount's exact logical bank path, rather than matching a
     // basename (which would confuse different missions and common banks).
-    if (g_banks) {
-      const auto candidate = std::filesystem::u8path(join(dir, h))
-                                 .lexically_normal()
-                                 .generic_string();
-      for (const auto &root : g_mounts.read)
-        for (const auto &bank : *g_banks) {
-          const auto logical = std::filesystem::u8path(join(root, bank.first))
-                                   .lexically_normal()
-                                   .generic_string();
-          if (same_letters(candidate, logical)) {
-            if (!is_file(bank.second))
-              throw std::runtime_error(
-                  "Selected environment bank disappeared: " + bank.first);
-            return bank.second;
-          }
-        }
+    if (selected_bank) {
+      const auto bank = g_bank_index.find(bank_path_key(join(dir, h)));
+      if (bank != g_bank_index.end()) {
+        if (!is_file(bank->second))
+          throw std::runtime_error("Selected environment bank disappeared: " +
+                                   h);
+        return bank->second;
+      }
     }
     const std::string p = in_mount(dir, h);
     if (!p.empty()) return p;
@@ -304,7 +327,8 @@ std::FILE* open(const char* path, const char* mode) {
     const std::string p = write_path(path);
     if (p.empty()) return nullptr;
     std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(p).parent_path(), ec);
+    std::filesystem::create_directories(
+        std::filesystem::u8path(p).parent_path(), ec);
     return open_host_file(p, m.c_str());
   }
   const std::string p = find(path);
