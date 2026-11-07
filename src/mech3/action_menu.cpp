@@ -466,19 +466,35 @@ void ActionScreen::accept() {
   if (!g) return;  // (the exe goes on unchecked)
   g->count = 0;  // 0x00436a80(0)
   int32_t sc = scenarios.value_at(scenarios.index);
-  if(authored_scenario(sc)) {
-    const auto content=active_content();const auto* mission=content?content->by_handle("mission",sc&0x3fffffff):nullptr;
-    if(!mission)cc::content::fail("mission-selection", "Selected Instant Action mission is unavailable");
-    auto& selected=select_content_standalone(*p,mission->id);
+  if (authored_scenario(sc)) {
+    const auto content = active_content();
+    const auto* mission = content ? content->by_handle("mission", sc & 0x3fffffff) : nullptr;
+    if (!mission)
+      cc::content::fail("mission-selection", "Selected Instant Action mission is unavailable");
+    auto& selected = select_content_standalone(*p, mission->id);
+    // Its campaign record owns the save; the standalone keeps Instant Action's inventory.
+    selected.store.fill_all();
+    selected.content_state["initialized"] = true;
     selected.slot.copy_from(g->slot);
-    const int32_t commander=allies[0].value_at(allies[0].index);
-    if(commander!=selected.slot.mech) {
-      const auto* loadouts=e.mech_loadouts(commander);
-      if(!loadouts || loadouts->configs.empty())cc::content::fail("mission-loadout", "Selected commander has no native loadout");
-      selected.slot.mech=commander;delete selected.slot.config;
-      selected.slot.config=pilot_hooks().config_copy(*loadouts->configs.front());selected.slot.skin=0;
+    const int32_t commander = allies[0].value_at(allies[0].index);
+    if (commander != selected.slot.mech || !selected.slot.config ||
+        selected.slot.config->mech != commander) {
+      const auto* loadouts = e.mech_loadouts(commander);
+      if (!loadouts || loadouts->configs.empty() || !loadouts->configs.front())
+        cc::content::fail("mission-loadout", "Selected commander has no native loadout");
+      Config* copy = pilot_hooks().config_copy(*loadouts->configs.front());
+      if (!copy) cc::content::fail("mission-loadout", "Cannot copy the selected commander loadout");
+      selected.slot.mech = commander;
+      delete selected.slot.config;
+      selected.slot.config = copy;
+      selected.slot.skin = 0;
     }
-    action_setup().g878=scenarios.index;keep_lineup();p->save();e.pop_state(0);e.replace_state(6);return;
+    action_setup().g878 = scenarios.index;
+    keep_lineup();
+    p->save();
+    e.pop_state(0);
+    e.replace_state(6);
+    return;
   }
   const char* dir = e.mission_dir(static_cast<uint32_t>(worlds.value_at(worlds.index)));
   char paths[2][0x100];

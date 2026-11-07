@@ -541,6 +541,10 @@ bool content_campaign_launch(CampaignGame &game, int32_t &world, int32_t &number
     }
     if (!mission)
         fail("mission-missing", "Saved mission content is not available: " + game.content_mission);
+    if (game.content_campaign.empty() && !game.content_state.value("initialized", false)) {
+        game.store.fill_all();
+        game.content_state["initialized"] = true;
+    }
     game.content_placeholder = false;
     const auto *definition = content->find("world", mission->data.at("world").get<std::string>());
     world = content_world_index(*definition);

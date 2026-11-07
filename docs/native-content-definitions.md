@@ -181,6 +181,10 @@ in the native campaign game list and Instant Action scenario list unless
 `selectable: false`. Graph campaigns appear alongside stock campaigns. Selecting
 an authored Instant Action entry runs its objective-based mission with the
 selected commander; its own actor placements determine the opposition.
+Standalone runs retain Instant Action's unlimited catalogue inventory and native
+briefing loadout rules. Their campaign record supplies durable content/run
+identities; campaign salvage capacity does not refit or discard their selected
+commander. Graph campaigns retain their declared inventory and persistence rules.
 
 `nav_points` contain unique `id`, `position`, `links` and optional `label`.
 They compile to the existing version-107 native waypoint network. `actors`

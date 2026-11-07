@@ -9,11 +9,11 @@ is [MW3Recomp-Private PR 264](https://github.com/roswellien/MW3Recomp-Private/pu
 
 - The Windows clang-cl build produces `mw3`, `mw3content` and the content/native
   tests with SDL and the Core Critical Vulkan backend.
-- 78 content tests pass. They exercise composition and dependency failures,
+- 79 content tests pass. They exercise composition and dependency failures,
   stable handles, real native readers and geometry queries, item/store/lance
   consumers, campaign reduction, transactional persistence/import, migration,
   multiplayer envelopes, HUD presentation and lazy resource integrity.
-- 133 focused content and existing stock regression tests pass, including
+- 134 focused content and existing stock regression tests pass, including
   pilot/configuration, Lab, lobby, resolution, weapons, mods and patch behavior.
 - All 31 presentation/CLI CTests pass: the Vulkan fixture matrix, renderer
   worker, prepared resources/staging, geometry, GPU HUD, SDL and the actual
@@ -70,6 +70,12 @@ peers use complete version/hash locks and the installed package store. The
 direct arena route does not establish production lobby UI,
 scoreboard or respawn acceptance.
 
+A separate production-menu run uses the managed profile on stock Beachhead:
+host/join, lock, ready, start, native play, a staged death followed by respawn,
+F12 network scores and return to matching lobby scores. Both peers exit zero
+with zero unknown calls. This proves that menu path with stock arena/loadouts;
+added-content peer play remains the separate direct-arena evidence above.
+
 The no-profile stock chain traverses all 20 missions, reaches credits and exits
 zero, with zero unknown original functions and zero skipped script-engine calls.
 All 15 fitted-weapon checks pass. A same-seed comparison with a verified baseline
@@ -86,8 +92,22 @@ weapon list. A separate live native run maximizes and restores its 1280x720
 window, keeps the selected HUD aligned, resumes through the displayed pause
 button at both sizes and toggles objectives through F12, then exits zero.
 This tests presentation resize and native input alignment; it does not change
-the logical mission resolution. The complete Studio/launcher interaction remains
-to be exercised; launcher UI follow-up is
+the logical mission resolution.
+
+Interactive Studio builds a starter world, mission and HUD, compiles/installs/
+exports it, saves and inspects an exact profile and enters native play. The real
+launcher window, hosted with a private test data root, installs that export,
+saves a named profile and selected HUD, activates Play, then reaches native
+Instant Action selection and the authored mission with a fresh pilot. Both
+native runs exit zero with zero unknown calls. This exposed and fixed a
+standalone adapter defect: campaign inventory fitting discarded the selected
+commander. Standalones now retain Instant Action's unlimited store and briefing
+rules while their native campaign record owns stable persistence. A regression
+exercises real briefing readiness and repeated fitting; restoring the old
+inventory/reallocation path makes it fail.
+
+The remaining Studio arena, optional artwork/appearance and negative UI checks
+are tracked in
 [issue 262](https://github.com/roswellien/MW3Recomp-Private/issues/262).
 
 ## Release boundary

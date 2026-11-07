@@ -19,6 +19,13 @@ namespace mech3 {
 namespace {
 // DIK codes the frame reads (0x00406440).
 constexpr int32_t kKeyL = 0x26, kKeyM = 0x32, kKeySpace = 0x39, kKeyS = 0x1f;
+
+// Standalone missions use campaign records for stable saves, while the briefing
+// retains Instant Action's unrestricted loadout selection.
+bool standalone_content_briefing() {
+  const auto* game = current_pilot() ? current_pilot()->campaign() : nullptr;
+  return game && !game->content_mission.empty() && game->content_campaign.empty();
+}
 }  // namespace
 
 int32_t& briefing_reached() {
@@ -430,7 +437,7 @@ void BriefingScreen::set_loaded(bool on) {
   if ((loaded != 0) == on) return;
   Engine& e = engine();
   bool lab = on, abort_on = on, replay = on, salvage = false, auto_launch = false;
-  switch (e.game_kind()) {
+  switch (standalone_content_briefing() ? kInstantAction : e.game_kind()) {
     case kMechLab:
       salvage = on;
       break;
@@ -756,11 +763,13 @@ Store* lab_store_build(Store& lab, Store* game, Store* salvage) {
 }
 Store* BriefingScreen::build_lab_store() {
   Engine& e = engine();
+  if (standalone_content_briefing()) return e.game_store();
   return lab_store_build(lab_store, e.game_store(), e.campaign_salvage());
 }
 
 // Mech3.exe 1.2 @ 0x00408bd0
 void BriefingScreen::refresh() {
+  if (standalone_content_briefing()) return;
   Engine& e = engine();
   Store* salvage = e.campaign_salvage();
   Store* game = e.game_store();
