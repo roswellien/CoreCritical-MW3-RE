@@ -1,5 +1,7 @@
 #pragma once
 
+#include "frontend/core_critical/renderer/surface_materials.hpp"
+
 #include <array>
 #include <cstdint>
 #include <istream>
@@ -70,8 +72,9 @@ Mesh read_mesh(std::istream &input);
 Textures read_textures(std::istream &input);
 Normals read_normals(std::istream &input, const Textures &textures);
 void validate_bindings(const Mesh &mesh, const Textures &textures);
-void validate_surface_materials(std::istream &input, const std::string &expected_asset_id,
-                                uint64_t expected_mesh_uv_hash,
-                                const std::vector<std::string> &expected_batch_materials);
+mw34::materials::SurfaceMaterialPack
+validate_surface_materials(std::istream &input, const std::string &expected_asset_id,
+                           uint64_t expected_mesh_uv_hash,
+                           const std::vector<std::string> &expected_batch_materials);
 
 } // namespace platform::prepared

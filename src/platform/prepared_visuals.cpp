@@ -336,11 +336,12 @@ void validate_bindings(const Mesh &mesh, const Textures &textures) {
         Reader::fail("mesh/texture batch mismatch");
 }
 
-void validate_surface_materials(std::istream &input, const std::string &expected_asset_id,
-                                uint64_t expected_mesh_uv_hash,
-                                const std::vector<std::string> &expected_batch_materials) {
-    mw34::materials::read_surface_materials(input, expected_asset_id, expected_mesh_uv_hash,
-                                            expected_batch_materials);
+mw34::materials::SurfaceMaterialPack
+validate_surface_materials(std::istream &input, const std::string &expected_asset_id,
+                           uint64_t expected_mesh_uv_hash,
+                           const std::vector<std::string> &expected_batch_materials) {
+    return mw34::materials::read_surface_materials(input, expected_asset_id, expected_mesh_uv_hash,
+                                                   expected_batch_materials);
 }
 
 } // namespace platform::prepared

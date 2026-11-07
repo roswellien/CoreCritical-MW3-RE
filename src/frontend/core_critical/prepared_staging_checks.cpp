@@ -1,5 +1,24 @@
+#include "../../../tests/prepared_visual_fixture.h"
+#include "gamez/zclass/cls_util.h"
+#include "gamez/zclass/object3d.h"
+#include "gamez/zmodel/gmod_draw.h"
 #include "prepared_draw_cache.hpp"
+#include "prepared_models.hpp"
+#include "renderer/normal_codec.hpp"
+#include "renderer/surface_materials.hpp"
+
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 void require(bool value, const char *message) {
@@ -194,11 +213,287 @@ void checks() {
     require(!first->vertices.empty() && !owned->vertices.empty(),
             "Eviction invalidated an owned result");
 }
+
+static std::filesystem::path make_private_staging_dir(const char *prefix) {
+    static std::atomic<std::uint32_t> s_seq{0};
+    const auto pid =
+#if defined(_WIN32)
+        ::_getpid();
+#else
+        ::getpid();
+#endif
+    const auto seq = ++s_seq;
+    const auto tick = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    const auto p = std::filesystem::temp_directory_path() /
+                   (std::string(prefix) + "_" + std::to_string(pid) + "_" + std::to_string(seq) +
+                    "_" + std::to_string(tick));
+    std::filesystem::create_directories(p);
+    return p;
+}
+
+static void write_u32(std::string &out, std::uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i)
+        out.push_back(static_cast<char>((value >> (i * 8)) & 0xffU));
+}
+static void write_u64(std::string &out, std::uint64_t value) {
+    write_u32(out, static_cast<std::uint32_t>(value & 0xffffffffU));
+    write_u32(out, static_cast<std::uint32_t>((value >> 32) & 0xffffffffU));
+}
+static void write_f32(std::string &out, float value) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &value, 4);
+    write_u32(out, bits);
+}
+static void write_str(std::string &out, const std::string &value) {
+    write_u32(out, static_cast<std::uint32_t>(value.size()));
+    out.append(value);
+}
+
+static std::string build_single_batch_bwsfm1(std::uint64_t mesh_hash, const std::string &asset_id,
+                                             const std::string &material_name,
+                                             float height_amp = -4.0f, float max_disp = 4.0f,
+                                             float height_ref = 0.5f, float roughness = 0.7f,
+                                             float reflectivity = 0.04f, float metallic = 0.0f) {
+    using namespace mw34::materials;
+    const std::array<unsigned char, 16> h_pixels{
+        32, 0, 0, 255, 96, 0, 0, 255, 160, 0, 0, 255, 224, 0, 0, 255,
+    };
+    std::string out("BWSFM1\0\0", 8);
+    write_u32(out, 1U);        // version
+    write_u32(out, 1U);        // batch_count = 1
+    write_u32(out, 1U);        // record_count = 1
+    write_u32(out, 1U);        // image_count = 1
+    write_u64(out, mesh_hash); // mesh_uv_hash
+
+    // Batch 0 -> record 0
+    write_u32(out, 0U);
+
+    // Record 0
+    write_str(out, asset_id);
+    write_str(out, material_name);
+    write_u32(out, 0U);               // height_image = 0
+    write_u32(out, no_surface_image); // thick_image = none
+    write_f32(out, height_ref);
+    write_f32(out, height_amp);
+    write_f32(out, max_disp);
+    write_u32(out, 1U);   // tess_cap
+    write_f32(out, 1.0f); // uv_scale[0]
+    write_f32(out, 1.0f); // uv_scale[1]
+    write_f32(out, 0.0f); // uv_offset[0]
+    write_f32(out, 0.0f); // uv_offset[1]
+    write_u32(out, surface_address_wrap);
+    write_u32(out, surface_address_wrap);
+    write_f32(out, 0.0f); // atlas_rect
+    write_f32(out, 0.0f);
+    write_f32(out, 1.0f);
+    write_f32(out, 1.0f);
+    write_f32(out, 0.0f); // sss_participation
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f); // sss_radius
+    write_f32(out, 0.0f); // thickness_scale
+    write_f32(out, roughness);
+    write_f32(out, reflectivity);
+    write_f32(out, metallic);
+
+    // Image 0
+    write_str(out, "h_img");
+    write_u32(out, surface_role_height);
+    write_u32(out, 2U);
+    write_u32(out, 2U);
+    write_u64(out, normal_hash(h_pixels.data(), h_pixels.size()));
+    out.append(reinterpret_cast<const char *>(h_pixels.data()), h_pixels.size());
+
+    return out;
+}
+
+void check_prepared_models_surface_materials() {
+    const auto temp_dir = make_private_staging_dir("mw34_pm_materials");
+    struct Cleanup {
+        std::filesystem::path p;
+        ~Cleanup() {
+            std::error_code ec;
+            std::filesystem::remove_all(p, ec);
+        }
+    } cleanup{temp_dir};
+
+    const auto mesh_path = temp_dir / "mesh.bin";
+    const auto tex_path = temp_dir / "textures.bin";
+    const auto mat_path = temp_dir / "materials.bin";
+
+    {
+        std::ofstream(mesh_path, std::ios::binary) << prepared_fixture::mesh(2);
+        std::ofstream(tex_path, std::ios::binary) << prepared_fixture::textures();
+    }
+
+    std::uint64_t mesh_uv_hash = 0;
+    {
+        std::ifstream mf(mesh_path, std::ios::binary);
+        const auto m = platform::prepared::read_mesh(mf);
+        mesh_uv_hash = mw34::materials::compute_mesh_uv_hash(m.batches, 0, m.batches.size());
+    }
+
+    {
+        std::ofstream f(mat_path, std::ios::binary);
+        f << build_single_batch_bwsfm1(mesh_uv_hash, "authored:close", "authored", -4.0f, 4.0f,
+                                       0.5f);
+    }
+
+    std::unique_ptr<zcls::Node, int (*)(zcls::Node *)> root(zcls::object3d_create(),
+                                                            zcls::tree_destroy);
+    auto *control = zcls::object3d_create(), *panel = zcls::object3d_create();
+    require(root && control && panel && zcls::object3d_add_child(root.get(), control) == 0 &&
+                zcls::object3d_add_child(control, panel) == 0,
+            "Node hierarchy setup failed");
+    zcls::node_set_name(root.get(), "actor");
+    zcls::node_set_name(control, "control");
+    zcls::node_set_name(panel, "panel");
+    auto asset = std::make_shared<zcls::SourceAsset>();
+    asset->name = "mech_authored.flt";
+    asset->nodes = {{"actor", 1}, {"control", 1}, {"panel", 1}};
+    root->source_asset = control->source_asset = panel->source_asset = asset;
+    root->source_asset_root = true;
+    zmod::Model model{};
+    const std::uint32_t count = 3;
+    std::memcpy(model.header + 0x14, &count, sizeof count);
+    panel->model = &model;
+    panel->source_model_vertices = count;
+    struct ModelPointer {
+        zcls::Node *node;
+        ~ModelPointer() { node->model = nullptr; }
+    } model_pointer{panel};
+
+    std::array<float, 12> matrix{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+    platform::ModelDrawContext context{};
+    context.node = panel;
+    context.ordinary = true;
+    context.source_vertices = count;
+    context.source_polygons = 1;
+    context.model_to_camera = context.model_to_world = matrix.data();
+    context.opacity = 1;
+
+    sdlfe::CoreCriticalAssets options;
+    options.models.push_back({"authored", "0", mesh_path.string(), tex_path.string()});
+
+    auto mat_binding = [](const std::string &c, const std::string &l,
+                          const std::filesystem::path &p) {
+        return std::vector<cc_mw3_re::PreparedMaterialBinding>{{c, l, p.string()}};
+    };
+
+    // 1. Positive test: PreparedModels loads valid BWSFM1 and exposes it on
+    // PreparedBatchDraw
+    {
+        cc_mw3_re::PreparedModels models(options, mat_binding("authored", "0", mat_path));
+        require(models.has_binding(context), "PreparedModels missing binding for authored node");
+        const auto draw = models.draw(context);
+        require(draw.batches.size() == 1, "Draw batches count mismatch");
+        require(draw.batches[0].surface_material != nullptr,
+                "surface_material pointer was null on positive draw");
+        require(draw.batches[0].surface_material->height_amplitude == -4.0f,
+                "height_amplitude mismatch");
+        require(draw.batches[0].surface_material->max_displacement == 4.0f,
+                "max_displacement mismatch");
+        require(draw.batches[0].surface_material->roughness == 0.7f, "Default roughness mismatch");
+        require(draw.batches[0].surface_material->reflectivity == 0.04f,
+                "Default reflectivity mismatch");
+        require(draw.batches[0].surface_material->metallic == 0.0f, "Default metallic mismatch");
+        require(draw.batches[0].surface_material->material_name == "authored",
+                "material_name mismatch");
+    }
+
+    // 2. Stock / No-Sidecar Control: surface_material must be nullptr
+    {
+        cc_mw3_re::PreparedModels stock_models(options);
+        const auto stock_draw = stock_models.draw(context);
+        require(stock_draw.batches.size() == 1, "Stock draw batches count mismatch");
+        require(stock_draw.batches[0].surface_material == nullptr,
+                "surface_material must be null for stock model without sidecar");
+    }
+
+    // 3. Wrong Asset ID Rejection
+    {
+        const auto bad_asset_path = temp_dir / "bad_asset.bin";
+        {
+            std::ofstream f(bad_asset_path, std::ios::binary);
+            f << build_single_batch_bwsfm1(mesh_uv_hash, "wrong_chassis:close", "authored");
+        }
+        bool rejected = false;
+        try {
+            cc_mw3_re::PreparedModels bad_models(options,
+                                                 mat_binding("authored", "0", bad_asset_path));
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        require(rejected, "PreparedModels accepted BWSFM1 with mismatched asset ID");
+    }
+
+    // 4. Wrong Mesh UV Hash Rejection
+    {
+        const auto bad_uv_path = temp_dir / "bad_uv.bin";
+        {
+            std::ofstream f(bad_uv_path, std::ios::binary);
+            f << build_single_batch_bwsfm1(mesh_uv_hash ^ 0xbadULL, "authored:close", "authored");
+        }
+        bool rejected = false;
+        try {
+            cc_mw3_re::PreparedModels bad_uv_models(options,
+                                                    mat_binding("authored", "0", bad_uv_path));
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        require(rejected, "PreparedModels accepted BWSFM1 with mismatched mesh UV hash");
+    }
+
+    // 5. Wrong Material Name Rejection
+    {
+        const auto bad_mat_path = temp_dir / "bad_mat.bin";
+        {
+            std::ofstream f(bad_mat_path, std::ios::binary);
+            f << build_single_batch_bwsfm1(mesh_uv_hash, "authored:close", "WrongMat");
+        }
+        bool rejected = false;
+        try {
+            cc_mw3_re::PreparedModels bad_mat_models(options,
+                                                     mat_binding("authored", "0", bad_mat_path));
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        require(rejected, "PreparedModels accepted BWSFM1 with mismatched batch material name");
+    }
+
+    // 6. Unmatched Sidecar Selection Rejection
+    {
+        bool rejected = false;
+        try {
+            cc_mw3_re::PreparedModels unmatched_models(
+                options, mat_binding("unmatched_chassis", "0", mat_path));
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        require(rejected, "PreparedModels accepted unmatched chassis selection");
+    }
+
+    // 7. Independent Effect Enablement: metadata populated regardless of lighting
+    // setting
+    {
+        sdlfe::CoreCriticalAssets off_options = options;
+        off_options.lighting = "off";
+        cc_mw3_re::PreparedModels off_models(off_options, mat_binding("authored", "0", mat_path));
+        const auto off_draw = off_models.draw(context);
+        require(off_draw.batches.size() == 1, "Off draw batches count mismatch");
+        require(off_draw.batches[0].surface_material != nullptr,
+                "surface_material metadata must be available when lighting is off");
+    }
+}
 } // namespace
+
 int main() {
     try {
         checks();
-        std::puts("Prepared staging cache invalidation, bytes, ownership and budget checks passed");
+        check_prepared_models_surface_materials();
+        std::puts("Prepared staging cache invalidation, bytes, ownership, "
+                  "materials and budget checks passed");
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "Prepared staging: %s\n", error.what());

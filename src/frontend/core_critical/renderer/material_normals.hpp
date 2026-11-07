@@ -32,34 +32,6 @@ inline constexpr std::size_t max_authored_catalog_pages = 16;
 inline constexpr std::size_t max_normal_batches = 256;
 inline constexpr std::size_t max_normal_images = 64;
 
-// Process-wide choice, captured on first use. Changing the environment after
-// materials have been initialized does not reload this switch or their pixels.
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-inline bool normal_maps_enabled() {
-    static const bool enabled = [] {
-        const char *value = std::getenv("MW34_NORMAL_MAPS");
-        if (!value || !std::strcmp(value, "1"))
-            return true;
-        if (!std::strcmp(value, "0"))
-            return false;
-        throw std::runtime_error("MW34_NORMAL_MAPS must be 0 or 1");
-    }();
-    return enabled;
-}
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-
 // FNV-1a over the entire byte sequence, shared with the Python sidecar writer.
 // This is a format/content key, not a cryptographic publisher-admission check.
 inline std::uint64_t normal_hash(const void *data, std::size_t size) {
@@ -371,9 +343,15 @@ class WorldNormalCache {
     std::uint64_t world_bytes{0};
     std::uint64_t world_clock{0};
 
+    bool normal_maps_enabled{true};
+
+    explicit WorldNormalCache(bool normal_maps_enabled = true)
+        : normal_maps_enabled(normal_maps_enabled) {}
+
     void register_authored(const SurfaceKey &key, int index) {
         authored.insert(key);
         bindings[key] = index;
+        world_bindings.erase(key);
     }
 
     void load_world_manifest(const std::filesystem::path &manifest_path) {
@@ -419,10 +397,9 @@ class WorldNormalCache {
                 if (!registered_keys.insert(entry.first).second || registered_keys.size() > 16384)
                     throw std::runtime_error("Duplicate/excess world-normal texture keys");
                 page.keys.insert(entry.first);
-                world_bindings.emplace(entry.first, pages.size());
                 // Authored catalog bindings/exclusions take precedence.
                 if (!authored.count(entry.first))
-                    bindings.emplace(entry.first, -1);
+                    world_bindings.emplace(entry.first, pages.size());
             }
             pages.push_back(std::move(page));
         }
@@ -531,8 +508,8 @@ class WorldNormalCache {
         page.loaded = true;
     }
 
-    int surface_normal_index(const SurfaceKey &key) {
-        if (!normal_maps_enabled())
+    int surface_normal_index(const SurfaceKey &key, bool enabled = true) {
+        if (!enabled || !normal_maps_enabled)
             return -1;
         const auto it = bindings.find(key);
         if (it != bindings.end()) {
@@ -543,13 +520,16 @@ class WorldNormalCache {
         const auto w_it = world_bindings.find(key);
         if (w_it != world_bindings.end()) {
             load_page(w_it->second);
-            return bindings[key];
+            const auto loaded_it = bindings.find(key);
+            if (loaded_it != bindings.end())
+                return loaded_it->second;
+            return -1;
         }
         return -1;
     }
 
     void require_image(int index) {
-        if (index < 0 || !normal_maps_enabled())
+        if (index < 0 || !normal_maps_enabled)
             return;
         const auto found = world_images.find(index);
         if (found != world_images.end())

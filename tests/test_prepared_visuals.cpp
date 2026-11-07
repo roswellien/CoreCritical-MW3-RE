@@ -13,6 +13,14 @@
 #include "frontend/core_critical/renderer/normal_codec.hpp"
 #include "frontend/core_critical/renderer/surface_materials.hpp"
 
+#include <atomic>
+#include <chrono>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -26,6 +34,23 @@
 #include <vector>
 
 namespace {
+static std::filesystem::path make_private_test_dir(const char *prefix) {
+    static std::atomic<std::uint32_t> s_seq{0};
+    const auto pid =
+#if defined(_WIN32)
+        ::_getpid();
+#else
+        ::getpid();
+#endif
+    const auto seq = ++s_seq;
+    const auto tick = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    const auto p = std::filesystem::temp_directory_path() /
+                   (std::string(prefix) + "_" + std::to_string(pid) + "_" + std::to_string(seq) +
+                    "_" + std::to_string(tick));
+    std::filesystem::create_directories(p);
+    return p;
+}
+
 void require(bool condition, const char *message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -483,10 +508,8 @@ void check_surface_materials_contract() {
 void check_world_normals_lru_and_precedence() {
     using namespace mw34::materials;
 
-    // 1. MW34SNA1 authored catalog tests
-    const auto temp_dir = std::filesystem::temp_directory_path() / "mw34_test_catalogs";
-    std::filesystem::create_directories(temp_dir);
-
+    // 1. MW34SNA1 authored catalog tests in private invocation directory
+    const auto temp_dir = make_private_test_dir("mw34_test_catalogs");
     struct Cleanup {
         std::filesystem::path p;
         ~Cleanup() {
@@ -557,7 +580,6 @@ void check_world_normals_lru_and_precedence() {
     {
         const auto huge_page = temp_dir / "huge_page.bin";
         {
-            // Create a file larger than 16 MiB
             std::ofstream f(huge_page, std::ios::binary);
             f.seekp(16ULL * 1024 * 1024 + 1);
             f.write("X", 1);
@@ -577,44 +599,47 @@ void check_world_normals_lru_and_precedence() {
         require(rejected, "Page exceeding 16 MiB limit was accepted");
     }
 
-    // Test LRU eviction with a bounded budget (8 bytes, each page has 4 pixel
-    // bytes)
+    // Test WP01-R01: Public lazy lookup without prior load_page call
     {
         WorldNormalCache cache;
         cache.load_world_manifest(manifest_path);
         require(cache.pages.size() == 3, "Manifest pages count mismatch");
+        SurfaceKey key0{1, 1, 1, 0x1000ULL};
+        require(!cache.pages[0].loaded, "Page 0 should not be loaded before first lookup");
 
-        // Set pixel budget to 8 bytes: can hold at most 2 pages simultaneously
+        // First public surface_normal_index call MUST lazily load the page
+        const auto lazy_index = cache.surface_normal_index(key0);
+        require(lazy_index >= 0, "Lazy lookup returned negative index on valid world page");
+        require(cache.pages[0].loaded,
+                "First public surface_normal_index call failed to load page");
+        require(cache.world_bytes == 4, "Resident byte accounting mismatch after lazy load");
+        require(cache.textures.at(static_cast<std::size_t>(lazy_index)).pixels32.size() == 1,
+                "Lazy lookup did not decode normal pixels into texture record");
+
+        // Verify bounded LRU eviction and reload through the public API
+        // Set budget to 8 bytes: fits 2 pages of 4 bytes each
         const std::uint64_t budget = 8;
-        cache.load_page(0, budget);
-        require(cache.pages[0].loaded && cache.world_bytes == 4, "Page 0 load mismatch");
+        SurfaceKey key1{1, 1, 1, 0x2000ULL};
+        const auto idx1 = cache.surface_normal_index(key1);
+        require(idx1 >= 0 && cache.pages[1].loaded, "Page 1 lazy load failed");
 
-        cache.load_page(1, budget);
-        require(cache.pages[0].loaded && cache.pages[1].loaded && cache.world_bytes == 8,
-                "Page 0 and 1 load mismatch");
-
-        // Touch page 0 to update its last_use clock
-        cache.load_page(0, budget);
-
-        // Load page 2: needs 4 bytes, budget is 8 -> must evict least recently used
-        // (page 1)
+        // Load page 2 with budget = 8 bytes -> evicts least recently used (page 0)
         cache.load_page(2, budget);
-        require(cache.pages[0].loaded, "Page 0 should be retained as recently used");
-        require(!cache.pages[1].loaded, "Page 1 should be evicted");
-        require(cache.pages[2].loaded, "Page 2 should be loaded");
-        require(cache.world_bytes == 8, "Resident world_bytes accounting mismatch");
-        require(cache.textures[cache.pages[1].normal_indices[0]].pixels32.empty(),
-                "Evicted page pixels were not freed");
+        require(cache.pages[2].loaded, "Page 2 load failed");
+        require(!cache.pages[0].loaded, "Page 0 should have been evicted under 8-byte budget");
+        require(cache.textures.at(static_cast<std::size_t>(lazy_index)).pixels32.empty(),
+                "Evicted page 0 pixels were not freed");
 
-        // Reload page 1: evicts page 0
-        cache.load_page(1, budget);
-        require(cache.pages[1].loaded, "Page 1 reload failed");
-        require(!cache.pages[0].loaded, "Page 0 should be evicted on page 1 reload");
+        // Public lookup on key0 must transparently reload page 0 and return stable
+        // index
+        const auto reloaded_index = cache.surface_normal_index(key0);
+        require(reloaded_index == lazy_index, "Reloaded normal index changed after eviction");
+        require(cache.pages[0].loaded, "Public lookup did not reload evicted page 0");
+        require(!cache.textures.at(static_cast<std::size_t>(reloaded_index)).pixels32.empty(),
+                "Reloaded page 0 pixels were not restored");
     }
 
-    // Test Authored-over-world precedence:
-    // When a key is registered by an authored catalog, world normal loading does
-    // NOT overwrite it
+    // Test WP01-R01: Authored-over-world precedence via public API
     {
         WorldNormalCache cache;
         SurfaceKey authored_key{1, 1, 1, 0x1000ULL}; // matches key in page 0
@@ -625,14 +650,44 @@ void check_world_normals_lru_and_precedence() {
                                 -1); // explicit authored exclusion (no_normal)
 
         cache.load_world_manifest(manifest_path);
-        // Page 0 has key 0x1000, page 1 has key 0x2000
-        cache.load_page(0, 512ULL * 1024 * 1024);
-        cache.load_page(1, 512ULL * 1024 * 1024);
+        // Public lookup must preserve authored precedence without loading pages
+        require(cache.surface_normal_index(authored_key) == 42,
+                "Authored binding was not preserved by public surface_normal_index");
+        require(cache.surface_normal_index(excluded_key) == -1,
+                "Explicit authored exclusion was not preserved by public "
+                "surface_normal_index");
+        require(!cache.pages[0].loaded, "Page 0 loaded despite authored binding override");
+        require(!cache.pages[1].loaded, "Page 1 loaded despite authored exclusion override");
 
-        require(cache.bindings[authored_key] == 42,
-                "Authored binding was overwritten by world normal page");
-        require(cache.bindings[excluded_key] == -1,
-                "Explicit authored exclusion was overwritten by world normal page");
+        // Third unauthored key in page 2 DOES lazily load page 2
+        SurfaceKey world_key{1, 1, 1, 0x3000ULL};
+        const auto world_idx = cache.surface_normal_index(world_key);
+        require(world_idx >= 0 && cache.pages[2].loaded,
+                "Unauthored world key failed to lazily load page 2");
+    }
+
+    // Test WP01-R03: Typed configuration ownership (independent per-instance &
+    // per-call choices)
+    {
+        SurfaceKey key0{1, 1, 1, 0x1000ULL};
+
+        // Typed ON instance:
+        WorldNormalCache cache_on(true);
+        cache_on.load_world_manifest(manifest_path);
+        require(cache_on.surface_normal_index(key0) >= 0, "Typed ON cache returned -1");
+
+        // Typed OFF instance:
+        WorldNormalCache cache_off(false);
+        cache_off.load_world_manifest(manifest_path);
+        require(cache_off.surface_normal_index(key0) == -1,
+                "Typed OFF cache returned normal index");
+        require(!cache_off.pages[0].loaded, "Typed OFF cache loaded page unexpectedly");
+
+        // Per-call typed parameter override:
+        require(cache_on.surface_normal_index(key0, false) == -1,
+                "Per-call disabled lookup returned normal index");
+        require(cache_on.surface_normal_index(key0, true) >= 0,
+                "Per-call enabled lookup failed to return normal index");
     }
 }
 
