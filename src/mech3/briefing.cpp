@@ -10,6 +10,7 @@
 #include "gamez/zutil/zfix.h"
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/mech_reader.h"
+#include "mech3/content_registry.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -815,14 +816,17 @@ void lance_slot(GameSlot& s, Store& store, bool keep) {
   int32_t mech = s.mech;
   if (mech == -1) return;
   const Config* cfg = s.config;
+  const int32_t count = chassis_count();
+  if (mech < 0 || mech >= count) mech = -1;
   if (!keep) {
-    while (!store.has_mech(mech)) {  // 0x00409f00
-      mech = (mech + 1) % 19;
-      if (mech == s.mech) {
-        mech = -1;
-        break;
-      }
+    // Search each session chassis once. A fixed stock modulus could never
+    // return to an added chassis, hanging when the store had no replacement.
+    int32_t checked = 0;
+    while (mech >= 0 && !store.has_mech(mech) && checked < count) {
+      mech = (mech + 1) % count;
+      ++checked;
     }
+    if (checked == count) mech = -1;
   }
   const MechDfn* dfn = mech_dfn(mech);  // 0x004846a0: none for -1
   if (!dfn || mech == -1) {

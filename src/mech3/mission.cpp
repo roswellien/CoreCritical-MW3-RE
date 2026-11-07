@@ -2,6 +2,7 @@
 
 
 #include "mech3/options.h"
+#include "mech3/content_world.h"
 #include "crt/msvc_string.h"
 
 #include <cstdarg>
@@ -123,6 +124,7 @@ bool Missions::load_world(int32_t index) {
     h.unload();
     return load_world(index);
   }
+  refresh_content_mission();
   const std::string name = mission_dir(index);
   h.interp_define("USEZBD");
   h.fn_484270(1);
@@ -180,7 +182,7 @@ bool Missions::load_world(int32_t index) {
   h.progress_text(format("Loading [ %s ]", name.c_str()).c_str());
   h.fn_535ed0(0.5f);
   const std::string script = format("%s.gs", name.c_str());
-  if (!h.interp_source(script.c_str())) {
+  if (!(content_world_is_authored(index) ? load_content_world(index) : h.interp_source(script.c_str()) != 0)) {
     h.zerr(0x800, "C:\\zipper\\Mech3\\mission.cpp", 0x261, "Failed to Interpret: %s -- Mission Load Aborted",
            script.c_str());
     h.cleanup(1);
@@ -233,7 +235,7 @@ bool Missions::load_world(int32_t index) {
   if (abort) return false;
   h.progress_text("Loading Animations");
   h.anim_set_world(world);
-  h.anim_load("anim.zrd");
+  if (!content_world_is_authored(index)) h.anim_load("anim.zrd");
   h.progress(0.6f);
   if (abort) return false;
   h.progress_text("Loading DEClient");
@@ -300,6 +302,7 @@ bool Missions::setup() {
   };
   Handle anim = 0;
   auto start_anim = [&](const char* fmt, const char* fallback) {
+    if (content_world_is_authored(index)) return;
     anim = h.anim_start(format(fmt, number).c_str());
     if (!anim) anim = h.anim_start(fallback);
   };
@@ -335,6 +338,7 @@ bool Missions::setup() {
     default:
       break;
   }
+  validate_content_mission_objectives();
   sounds[0] = h.sound_find("com_success");
   sounds[1] = h.sound_find("com_failed");
   sounds[2] = h.sound_find("obj_primary");
@@ -641,6 +645,7 @@ bool Missions::unload() {
   h.classes_free();
   h.models_free();
   h.textures_free();
+  clear_content_world();
   for (int i = 0; i < 25; ++i) h.hud_line_clear(i);  // vt+0x7c(line, 0x005f4c90)
   current = -1;
   return true;
@@ -650,6 +655,9 @@ bool Missions::unload() {
 // world (0x00490480); without it 0x005394c0(1, 1). Nothing when no mission
 // is up. The two calls to the empty 0x005ac5c0 are left out.
 bool Missions::cleanup(bool unload) {
+  // Content snapshots change only after the complete world lifecycle ends.
+  // A new authored mission never inherits stale native nodes or readers.
+  if (content_world_is_authored(current)) unload = true;
   MissionHooks& h = *g_hooks;
   if (!loaded) return false;
   const Handle saved = h.fn_4eb040();

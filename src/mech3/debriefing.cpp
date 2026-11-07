@@ -1,3 +1,5 @@
+#include "mech3/content_campaign.h"
+#include "mech3/content_stock_campaign.h"
 #include "mech3/debriefing.h"
 #include "mech3/options.h"
 
@@ -379,7 +381,11 @@ DebriefScreen::DebriefScreen(Engine& e, Handle state, int32_t campaign, int32_t 
     salvage.show_for(-1.0f);
     replay_btn.hide();
   } else if (kind == kCampaign) {
-    if (ztwod::Text* l = label(title, 2)) l->set_text_id(0x177, campaign, mission);
+    if (ztwod::Text* l = label(title, 2)) {
+      const auto* selected=current_pilot()?current_pilot()->campaign():nullptr;
+      if(selected && !selected->content_mission.empty())l->set_text_plain(e.game_text(0x0c));
+      else l->set_text_id(0x177, campaign, mission);
+    }
     if (ztwod::Text* l = label(title, 3)) l->set_text_plain(time);
     const bool failed = e.mission_failed();
     if (ztwod::Text* l = label(title, 1)) l->set_message(failed ? 0x180 : 0x181);
@@ -654,6 +660,12 @@ void DebriefScreen::on_button(int32_t id, int32_t a, int32_t b) {
     e.mission_cleanup(0);
   } else if (kind == kCampaign) {
     if (*won) {
+      const auto *game = current_pilot() ? current_pilot()->campaign() : nullptr;
+      if (content_campaign_terminal() && (!game || !content_stock_campaign(*game))) {
+        e.mission_cleanup(1);
+        e.replace_state(2);
+        return;
+      }
       e.replace_state_at(kWinMovieState);
       return;
     }

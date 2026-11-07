@@ -1,6 +1,9 @@
 #include "mech3/mp_lobby.h"
 #include "mech3/mission.h"
 #include "mech3/mods.h"
+#include "mech3/content_network.h"
+#include "mech3/content_registry.h"
+#include "mech3/content_world.h"
 
 #include <cctype>
 #include <iterator>
@@ -30,6 +33,22 @@ namespace {
 constexpr uint32_t kModsMark = 0x53444f4d;  // "MODS": our block in a player's lobby data (the mods check)
 LobbyScreen* g_lobby = nullptr;  // [0x006099d4]
 int32_t g_order_next = 1;        // [0x005e7920]
+
+ModsIdentity lobby_mods_identity() {
+  ModsIdentity result=mods_identity();
+  if(managed_gameplay_session()) {
+    auto content=active_content();
+    result.hash^=std::stoull(content->gameplay_digest.substr(0,16),nullptr,16);
+    result.names.push_back("Core Critical content protocol 1");
+  }
+  return result;
+}
+bool managed_world(int32_t value) {return (value&0x40000000)!=0;}
+int16_t legacy_world_field(int32_t value) {
+  if(managed_world(value))return -1;
+  if(value<0||value>32767)cc::content::fail("network-world","World is outside the legacy rules range");
+  return static_cast<int16_t>(value);
+}
 
 void set_labels(ztwod::Control& c, const char* text) {  // 0x00495240
   for (std::vector<ztwod::Text*>* l : {&c.activate_labels, &c.disable_labels, &c.rollover_labels, &c.labels})
@@ -313,7 +332,7 @@ void LobbyScreen::enter() {
   // hash (low, high), the gameplay mods' names (a count, then each one's
   // length and its bytes, four a word). The exe's readers stop at the worlds.
   {
-    const ModsIdentity& mods = mods_identity();
+    const ModsIdentity mods = lobby_mods_identity();
     data.push_back(kModsMark);
     data.push_back(static_cast<uint32_t>(mods.hash));
     data.push_back(static_cast<uint32_t>(mods.hash >> 32));
@@ -329,6 +348,7 @@ void LobbyScreen::enter() {
     }
   }
   mods_checked = 0;
+  append_content_session(data);
   znet::set_player_data(me, data.data(), static_cast<uint32_t>(data.size() * 4));
   // KILLS_LIST: 1, 5, 10, 20, 40 (doubled with teams) and unlimited (100).
   const int32_t unit = team ? 2 : 1;
@@ -344,6 +364,7 @@ void LobbyScreen::enter() {
   weight_list.clear_items();
   for (int32_t t = 30; t < 0x69; t += 5) weight_list.add_item(zutl::format_message_f(0x2bb, t).c_str(), t);
   weight_list.select_value(0x37);
+  for(const auto& entry:content_multiplayer_entries())worlds.add_item(entry.first.c_str(),entry.second);
   if (worlds.select_value(game->world()) == -1) {
     worlds.select(0);  // both, as the exe: BEACHHEAD in the end
     worlds.select(1);
@@ -409,11 +430,13 @@ void LobbyScreen::update(float dt) {
     std::vector<std::string> their_names;
     if (mods_of(player_data(znet::session().host_id), &theirs, &their_names)) {
       mods_checked = 1;
-      const ModsIdentity& mine = mods_identity();
-      if (theirs != mine.hash) {
+      const ModsIdentity mine = lobby_mods_identity();
+      std::string content_reason;
+      if (theirs != mine.hash || !content_sessions_match(player_data(znet::session().host_id),&content_reason)) {
         cursor_obj.erase();
         engine().message_box_plain(0x30, 0x2a8, "Your mods don't match the host's. The host uses: " + mods_text(their_names) +
-                                                     ". You use: " + mods_text(mine.names) + ".");
+                                                     ". You use: " + mods_text(mine.names) + "." +
+                                                     (content_reason.empty() ? "" : " " + content_reason));
         g_lobby_back = 1;
       }
     }
@@ -532,7 +555,7 @@ void LobbyScreen::refresh_lists() {
     if (p->team != 0) continue;
     std::string s = p->name;
     if (p->host) s += "++";
-    if ((chosen_world >> 8) > 2 && !has_world(p->id, chosen_world)) s += "**";
+    if (!managed_world(chosen_world) && (chosen_world >> 8) > 2 && !has_world(p->id, chosen_world)) s += "**";
     s += " ";
     if (p->state == 1) s += e.message(0x2bf);
     if (p->state == 3) s += e.message(0x2c0);
@@ -719,20 +742,22 @@ uint32_t box_flags(const LobbyScreen& l) {
   return (l.regen_box.checked ? 1u : 0u) | (l.mobile_box.checked ? 2u : 0u) | (l.stock_box.checked ? 4u : 0u) |
          (l.ammo_box.checked ? 8u : 0u) | (l.select_box.checked ? 0x10u : 0u) | (l.locked ? 0x20u : 0u);
 }
-bool no_mobile(int32_t world) { return (world & 0xff) == 4 && (world >> 8) > 2; }
+bool no_mobile(int32_t world) { return !managed_world(world) && (world & 0xff) == 4 && (world >> 8) > 2; }
 }  // namespace
 
 // Mech3.exe 1.2 @ 0x00499b10: the host's, to every player, guaranteed (the
 // screen's vt+0x10 before it is empty here).
 void LobbyScreen::send_rules() {
   if (!znet::is_host()) return;
-  uint8_t m[0x10] = {0x20, 0, 0x10, 0};
-  const uint32_t flags = box_flags(*this);
-  const int16_t v[4] = {static_cast<int16_t>(worlds.selected_value()), static_cast<int16_t>(kills_list.selected_value()),
+  const bool managed=managed_gameplay_session();
+  uint8_t m[0x14] = {0x20, 0, static_cast<uint8_t>(managed?0x14:0x10), 0};
+  const uint32_t flags = box_flags(*this)|(managed?0x80000000u:0);
+  const int16_t v[4] = {legacy_world_field(worlds.selected_value()), static_cast<int16_t>(kills_list.selected_value()),
                         static_cast<int16_t>(time_list.selected_value()), static_cast<int16_t>(weight_list.selected_value())};
   std::memcpy(m + 4, &flags, 4);
   std::memcpy(m + 8, v, 8);
-  znet::send(m, sizeof m, true, 0);
+  if(managed) {int32_t world=worlds.selected_value();std::memcpy(m+16,&world,4);}
+  znet::send(m, managed?20:16, true, 0);
 }
 
 // The game's rules block from the lists and the boxes (0x0049aca0's host
@@ -743,7 +768,7 @@ void LobbyScreen::keep_rules(bool seeded) {
   MultiplayerGame::Rules& r = game->rules;
   r = MultiplayerGame::Rules{};
   game->rules_crc = 0;
-  r.world = static_cast<int16_t>(worlds.selected_value());
+  r.world = legacy_world_field(worlds.selected_value());
   r.kills = static_cast<int16_t>(kills_list.selected_value());
   r.time = static_cast<int16_t>(time_list.selected_value());
   r.weight = static_cast<int16_t>(weight_list.selected_value());
@@ -755,6 +780,7 @@ void LobbyScreen::keep_rules(bool seeded) {
   std::memcpy(b + 4, &r.world, 2), std::memcpy(b + 6, &r.kills, 2), std::memcpy(b + 8, &r.time, 2);
   std::memcpy(b + 10, &r.weight, 2), std::memcpy(b + 12, &r.seed, 4);
   game->rules_crc = zutl_zar::crc32(0, b, sizeof b);
+  if(managed_gameplay_session()) {int32_t world=worlds.selected_value();game->rules_crc=zutl_zar::crc32(game->rules_crc,&world,4);}
 }
 
 // Mech3.exe 1.2 @ 0x00499cf0: the host's rules shown: a world not in our
@@ -771,7 +797,12 @@ void LobbyScreen::on_rules(uint32_t from, const uint8_t* msg, size_t size) {
   uint16_t v[4];
   std::memcpy(&flags, msg + 4, 4);
   std::memcpy(v, msg + 8, 8);
-  if (l->worlds.select_value(v[0]) == -1) l->worlds.select(0);
+  int32_t selected=v[0];
+  if(flags&0x80000000u) {
+    if(size!=20||!managed_gameplay_session()||!content_sessions_match(player_data(from)))return;
+    std::memcpy(&selected,msg+16,4);
+  } else if(managed_gameplay_session())return;
+  if (l->worlds.select_value(selected) == -1) l->worlds.select(0);
   l->kills_list.select_value(v[1]);
   l->time_list.select_value(v[2]);
   l->weight_list.select_value(v[3]);
@@ -816,7 +847,7 @@ void LobbyScreen::lock() {
   // Ours (the mods check): every player's gameplay mods the host's, as the
   // add-on world below, with their names.
   if (game) {
-    const ModsIdentity& mine = mods_identity();
+    const ModsIdentity mine = lobby_mods_identity();
     std::string lines;
     for (auto& p : game->lobby_players) {
       if (p->id == znet::local_id()) continue;
@@ -824,6 +855,8 @@ void LobbyScreen::lock() {
       std::vector<std::string> names;
       mods_of(player_data(p->id), &theirs, &names);
       if (theirs != mine.hash) lines += p->name + " uses: " + mods_text(names) + ". ";
+      std::string content_reason;
+      if (!content_sessions_match(player_data(p->id),&content_reason)) lines+=p->name+": "+content_reason+". ";
     }
     if (!lines.empty()) {
       e.message_box_plain(0, 0x1e3, "Every player needs the same mods. " + lines + "You use: " + mods_text(mine.names) + ".");
@@ -831,7 +864,7 @@ void LobbyScreen::lock() {
     }
   }
   const int32_t w = worlds.selected_value();
-  if ((w >> 8) > 2 && game) {
+  if (!managed_world(w) && (w >> 8) > 2 && game) {
     std::string names;
     int32_t n = 0;
     for (auto& p : game->lobby_players)
@@ -888,7 +921,7 @@ void LobbyScreen::lock_mech() {
   }
   int32_t best = -1;
   float best_mass = 0;
-  for (int32_t m = 0; m < 0x13; ++m) {
+  for (int32_t m = 0; m < chassis_count(); ++m) {
     if (m == 7) continue;  // 0x00426080, and the check again
     const float mass = max_mass(m);
     if (tons < mass) continue;
@@ -1018,7 +1051,7 @@ void LobbyScreen::start() {
   const int32_t minutes = time_list.selected_value();
   game->x74 = static_cast<float>(minutes);
   MultiplayerGame::Rules& r = game->rules;
-  r.world = static_cast<int16_t>(worlds.selected_value());
+  r.world = legacy_world_field(worlds.selected_value());
   r.kills = static_cast<int16_t>(kills);
   r.time = static_cast<int16_t>(minutes);
   r.weight = static_cast<int16_t>(game->x78);
@@ -1027,8 +1060,7 @@ void LobbyScreen::start() {
   const float t = static_cast<float>(minutes);
   program_net_clock(t >= 100.0f ? 0.0f : t * 60.0f, t < 100.0f);  // [0x00609920], [0x00609924]
   const int32_t w = worlds.selected_value();
-  game->x90 = w == 0 ? -1 : (w & 0xff);
-  game->x94 = w >> 8;
+  game->set_world(w);
   LobbyList& lines = multiplayer_team_play() ? teams_list : players_list;
   std::vector<std::string> roster;
   for (int32_t i = 0; i < lines.item_count(); ++i) roster.emplace_back(lines.items[static_cast<size_t>(i)]->text);

@@ -1,4 +1,5 @@
 #include "mech3/mech_parts.h"
+#include "mech3/content_registry.h"
 
 #include <cstring>
 #include <vector>
@@ -299,7 +300,7 @@ Handle Arm::fly_away(Vec3* velocity, bool stub) {
 bool MechPart::has_equipment(int kind) {
   if (!node) return false;
   for (EquipmentItem* it : equipment_in(*mech, id))
-    if (it->equipment == kind) return true;
+    if (equipment_family(it->equipment) == kind) return true;
   return false;
 }
 
@@ -313,9 +314,9 @@ void MechPart::lose_contents() {
   Mech& m = *mech;
   for (EquipmentItem* it : equipment_in(m, id)) {
     if (it->group != 0 || it->slots() <= 0) continue;  // group: destroyed by a critical
-    const int k = it->equipment;
+    const int k = equipment_family(it->equipment);
     if (k == kSink || k == kDoubleSink) m.heat_sinks.lose(it->count);
-    else if (m.equipment[k] > 0) --m.equipment[k];
+    else if (k >= 0 && k < 15 && m.equipment[k] > 0) --m.equipment[k];
   }
 }
 
@@ -389,7 +390,7 @@ bool MechPart::critical(int kind, int) {
       std::vector<float> weights;
       int32_t total = 0;
       for (EquipmentItem* it : equipment_in(m, id)) {
-        if (it->group != 0 || it->equipment == kSink || it->equipment == kDoubleSink) continue;
+        if (it->group != 0 || equipment_family(it->equipment) == kSink || equipment_family(it->equipment) == kDoubleSink) continue;
         const int32_t n = it->slots();
         if (n <= 0) continue;
         items.push_back(it);
@@ -414,8 +415,9 @@ bool MechPart::critical(int kind, int) {
           }
       }
       hit->group = 1;
-      if (m.equipment[hit->equipment] > 0) --m.equipment[hit->equipment];
-      if (player && g_calls.equip_voice) g_calls.equip_voice(hit->equipment);
+      const int32_t family = equipment_family(hit->equipment);
+      if (family >= 0 && family < 15 && m.equipment[family] > 0) --m.equipment[family];
+      if (player && g_calls.equip_voice) g_calls.equip_voice(equipment_family(hit->equipment));
       if (void* s = player_screen(m); s && g_calls.hud_weapons) g_calls.hud_weapons(s);
       ok = true;
       break;

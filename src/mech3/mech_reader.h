@@ -69,7 +69,7 @@ bool read_configurations(MechDfn& dfn, const HeadValues& head);  // 0x0046c1f0..
 bool read_dfn(MechDfn& dfn);                 // 0x0046ba40, the blocks in order
 MechDfn* load_dfn(int32_t mech);             // 0x0046b7a0, 0 when missing or bad
 MechDfn* mech_dfn(int32_t mech);             // 0x004846a0, loaded once per mech
-MechDfn*& mech_dfn_slot(int32_t mech);       // the cache's entry (0 <= mech < 19), for tests
+MechDfn*& mech_dfn_slot(int32_t mech);       // an owned cache entry (0 <= mech < chassis_count), for tests
 void free_dfns();                            // 0x004844b0's loop: each deleted (0x0046b9b0)
 
 // 0x00424b70 and 0x00424f60, the player's saved loadouts (docs/mechdef-head.md):

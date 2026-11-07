@@ -89,6 +89,12 @@ class Reader {
         if (count > remaining_)
             fail("declared records exceed payload");
     }
+    void skip(uint64_t count) {
+        need(count);
+        if (!input_.seekg(static_cast<std::streamoff>(count), std::ios::cur))
+            fail("cannot seek payload span");
+        remaining_ -= count;
+    }
     void finish() const {
         if (remaining_)
             fail("trailing payload data");
@@ -212,7 +218,8 @@ Mesh read_mesh(std::istream &input) {
     return mesh;
 }
 
-Textures read_textures(std::istream &input) {
+namespace {
+Textures texture_payload(std::istream &input, bool decode_pixels) {
     Reader reader(input);
     char magic[8];
     reader.bytes(magic, sizeof magic);
@@ -242,17 +249,23 @@ Textures read_textures(std::istream &input) {
             Reader::fail("invalid texture dimensions");
         const size_t count = size_t(image.width) * image.height;
         reader.need(uint64_t(count) * 2);
-        image.pixels.resize(count);
-        for (auto &pixel : image.pixels) {
-            uint8_t bytes[2];
-            reader.bytes(bytes, 2);
-            pixel = uint16_t(bytes[0]) | uint16_t(bytes[1]) << 8;
-        }
+        if (decode_pixels) {
+            image.pixels.resize(count);
+            for (auto &pixel : image.pixels) {
+                uint8_t bytes[2];
+                reader.bytes(bytes, 2);
+                pixel = uint16_t(bytes[0]) | uint16_t(bytes[1]) << 8;
+            }
+        } else
+            reader.skip(uint64_t(count) * 2);
         textures.images.push_back(std::move(image));
     }
     reader.finish();
     return textures;
 }
+} // namespace
+Textures read_textures(std::istream &input) { return texture_payload(input, true); }
+Textures read_texture_index(std::istream &input) { return texture_payload(input, false); }
 
 Normals read_normals(std::istream &input, const Textures &textures) {
     Reader reader(input);

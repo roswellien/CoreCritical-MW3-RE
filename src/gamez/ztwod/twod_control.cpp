@@ -87,6 +87,7 @@ void Control::dirty() {
 
 // Mech3.exe 1.2 @ 0x0059c050
 int32_t Control::hit(int32_t px, int32_t py) {
+  if (!can_present()) return 0;
   if (flags & kHidden) return 0;
   int32_t left = x, right = x;  // what an alignment outside 0..2 would leave (uninitialised)
   if (image) {

@@ -1,4 +1,5 @@
 #include "mech3/mods.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -233,9 +234,17 @@ std::vector<std::string> mods_apply_strings(std::map<int32_t, std::string>& text
                                             const std::map<std::string, int32_t>& ids) {
   std::vector<std::string> log;
   const std::vector<std::string>& mods = zutl::mounts().mods;
+  std::vector<std::string> strings;
+  for (const auto& mod : mods) {
+    if (std::find(zutl::mounts().managed_roots.begin(), zutl::mounts().managed_roots.end(), mod) != zutl::mounts().managed_roots.end()) continue;
+    strings.push_back((fs::path(mod) / "strings.txt").generic_string());
+  }
+  const auto managed = zutl::mounts().managed_files.find("strings.txt");
+  if (managed != zutl::mounts().managed_files.end()) strings.insert(strings.begin(), managed->second);
   // The last mod first, so the first one's lines are the ones left.
-  for (auto m = mods.rbegin(); m != mods.rend(); ++m) {
-    std::ifstream f(fs::path(*m) / "strings.txt");
+  for (auto m = strings.rbegin(); m != strings.rend(); ++m) {
+    zutl::verify_managed_read(*m);
+    std::ifstream f(platform::host_path(fs::u8path(*m)));
     if (!f) continue;
     int used = 0, n = 0;
     for (std::string line; std::getline(f, line);) {
@@ -267,18 +276,18 @@ std::vector<std::string> mods_apply_strings(std::map<int32_t, std::string>& text
         }
       }
       if (eq == std::string::npos || id < 0) {
-        log.push_back("  " + (fs::path(*m) / "strings.txt").generic_string() + " line " + std::to_string(n) + ": no id= here, left out");
+        log.push_back("  " + *m + " line " + std::to_string(n) + ": no id= here, left out");
         continue;
       }
       if (!zutl::game_text(value, &game)) {
-        log.push_back("  " + (fs::path(*m) / "strings.txt").generic_string() + " line " + std::to_string(n) +
+        log.push_back("  " + *m + " line " + std::to_string(n) +
                       ": a character the game cannot show, left out");
         continue;
       }
       text[id] = game.substr(0, 0x1ff);  // the original's 0x200-byte buffers
       ++used;
     }
-    log.insert(log.end() - 0, "mod strings: " + std::to_string(used) + " from " + (fs::path(*m) / "strings.txt").generic_string());
+    log.insert(log.end() - 0, "mod strings: " + std::to_string(used) + " from " + *m);
   }
   return log;
 }

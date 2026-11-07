@@ -1,4 +1,6 @@
 #include "mech3/app_hud.h"
+#include "mech3/content_registry.h"
+#include "mech3/content_world.h"
 #include "mech3/chat_panel.h"
 #include "mech3/cheats.h"
 #include "mech3/app_sensors.h"
@@ -606,6 +608,7 @@ struct ProgramHudHooks : HudHooks {
     return true;
   }
   const char* equipment_name(int32_t kind) override {  // 0x00484980
+    if (const char* label = content_label("equipment", kind)) return label;
     return kind >= 0 && kind < 15 ? message(0x1c6 + kind) : "none";
   }
   // The static (hud.md section 21): the mission's player, GameIntensity's
@@ -647,6 +650,9 @@ struct ProgramHudHooks : HudHooks {
     s.game_type = mission_game_type();
     s.operation = mission_operation();
     s.mission = mission_number_of_game();
+    if(const auto content=active_content())
+      if(const auto* mission=content->find("mission",content_selected_mission()))
+        s.content_name=mission->data.value("name",mission->id);
     if (s.game_type == 2) {  // 0x00446bb4: the game's vt+0x48 and vt+0x0c
       s.operation = mission_action_world();
       s.action_name = mission_action_name();
@@ -671,6 +677,7 @@ struct ProgramHudHooks : HudHooks {
     return c ? c->name : nullptr;
   }
   const char* mech_display_name(int32_t kind) override {  // 0x00484670
+    if (const char* label = content_label("chassis", kind)) return label;
     return kind >= 0 && kind < 19 ? message(0xd82 + kind) : "notmech";
   }
   int32_t mech_aim_part(Mech* m) override { return m->xf8; }
@@ -745,6 +752,7 @@ struct ProgramHudHooks : HudHooks {
   void* wm_current(void* w) override { return wm(w)->current(); }  // 0x004b04c0
   int32_t weapon_group(void* w) override { return wp(w)->group; }
   const char* weapon_name(void* w) override {  // the definition's DESC (+8)
+    if (const char* label = content_label("weapon", wp(w)->index)) return label;
     return wp(w)->def && wp(w)->def->desc ? wp(w)->def->desc : "";
   }
   void weapon_vt8(void* w) override { wp(w)->is_beam(); }
@@ -806,8 +814,7 @@ void hud_command(void* s, int32_t cmd) {
   switch (cmd) {
     case 0x15: h->reticle.zoom.toggle_lock(); break;  // keypad 0
     case 0x43:  // F12: the objectives' vt+0x60(-1) when hidden, else vt+0x64
-      if (h->objectives.flags & ztwod::kHidden) h->objectives.show_for(-1.0f);
-      else h->objectives.hide();
+      h->objectives.toggle();
       break;
     case 0x49: program_hud_target_set(h->mech); break;  // the target set (0x0041d890's HUD part)
     case 0x68: h->radar.toggle_zoom(); break;         // R
@@ -1322,8 +1329,7 @@ void program_hud_objectives_toggle() {
   Mech* t = program_view_mech();
   Hud* h = t && t->pilot ? pilot_hud(*t->pilot) : nullptr;
   if (!h) return;
-  if (h->objectives.flags & ztwod::kHidden) h->objectives.show_for(-1.0f);
-  else h->objectives.hide();
+  h->objectives.toggle();
 }
 void* program_mech_hud(void* mech) {
   Mech* m = static_cast<Mech*>(mech);

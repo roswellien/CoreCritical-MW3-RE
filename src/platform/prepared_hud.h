@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <vector>
@@ -15,6 +16,11 @@ struct HudImage {
   std::vector<uint32_t> pixels;
 };
 using HudArtwork = std::map<uint64_t, std::shared_ptr<const HudImage>>;
+// Selected package resources resolve through their immutable integrity table
+// when first used. No package directory is scanned by the HUD consumer.
+using HudArtworkSources = std::map<uint64_t, std::function<std::filesystem::path()>>;
+HudImage inspect_hud_sprite(const std::filesystem::path& path);
+std::shared_ptr<const HudImage> load_hud_sprite(const std::filesystem::path& path);
 HudArtwork load_hud_artwork(const std::filesystem::path& directory);
 uint64_t hud_identity(unsigned width, unsigned height, const uint16_t* opaque_pixels, size_t count);
 inline uint64_t hud_identity(unsigned width, unsigned height, const std::vector<uint16_t>& pixels) {

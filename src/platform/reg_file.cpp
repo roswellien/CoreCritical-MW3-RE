@@ -1,4 +1,5 @@
 #include "platform/reg_file.h"
+#include "platform/host_path.h"
 
 #include <cctype>
 #include <cstdio>
@@ -154,7 +155,7 @@ std::string RegFile::format(const std::string& key) const {
 
 void RegFile::load(const std::string& key) {
   key_ = key;
-  std::ifstream f(path_, std::ios::binary);
+  std::ifstream f(host_path(std::filesystem::u8path(path_)), std::ios::binary);
   if (!f) {
     keys_[0].clear();
     keys_[1].clear();
@@ -167,7 +168,7 @@ void RegFile::load(const std::string& key) {
 
 void RegFile::flush() {
   dirty_ = false;
-  std::ofstream f(path_, std::ios::binary | std::ios::trunc);
+  std::ofstream f(host_path(std::filesystem::u8path(path_)), std::ios::binary | std::ios::trunc);
   if (!f) {
     std::fprintf(stderr, "mw3: cannot write the settings file %s\n", path_.c_str());
     return;

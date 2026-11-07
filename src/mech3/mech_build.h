@@ -47,6 +47,7 @@ class MechBuildHooks : public zgame::Unported {
   // zClass: the scene nodes.
   virtual Handle node_find(Handle root, const char* name) { return h(unported("0x004f9d60", {low(root), name})); }
   virtual Handle node_clone(Handle node) { return h(unported("0x004f9af0", {low(node), 1, 1})); }
+  virtual void node_content_chassis(Handle node, const char* id);
   virtual void node_set_action(Handle node, uint32_t fn) { unported("0x004eb450", {low(node), fn}); }
   virtual void node_set_flag8(Handle node, int32_t on) { unported("0x004eb620", {low(node), on}); }
   virtual void node_set_active(Handle node, int32_t on) { unported("0x004eb170", {low(node), on}); }

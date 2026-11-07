@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "gamez/ztwod/twod_host.h"
+#include "gamez/ztwod/presentation.h"
 
 namespace zimg { struct Texture; }
 namespace zrdr { struct Node; }
@@ -48,6 +49,12 @@ class Object2D {
   zimg::Texture* background = nullptr;  // +0x1c  what erase() blits back
   Rect bg_rect;                      // +0x20  its part to blit
   uint16_t mouse = 0;                // +0x30  kHover, kPressed
+  // Host-only presentation policy, independent of native visibility/timers.
+  bool presentation_visible = true;
+  bool can_present() const { return presentation_visible && presentation_output_enabled(); }
+  void set_presentation_visible(bool visible) {
+    if (presentation_visible != visible) { presentation_visible = visible; dirty(); }
+  }
 
   Object2D(int32_t x, int32_t y);    // 0x0059fda0
   Object2D(const Object2D& o);       // 0x0059fdf0 (list links cleared)

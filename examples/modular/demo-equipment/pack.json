@@ -1,0 +1,33 @@
+{
+  "schema_version": 3,
+  "id": "demo-equipment",
+  "name": "Distinct Guardian ECM",
+  "version": "1.0.0",
+  "game_id": "mw3",
+  "description": "Project-authored modular content demonstration; original game assets are supplied by the player.",
+  "dependencies": [],
+  "required_capabilities": {
+    "equipment-definitions": 1
+  },
+  "definitions": [
+    {
+      "kind": "equipment",
+      "id": "demo-equipment:guardian",
+      "behavior": "mw3:equipment/ecm@1",
+      "data": {
+        "name": "demo_guardian",
+        "label": "Demo Guardian ECM",
+        "tech": 2,
+        "weight": [
+          2.25,
+          2.25
+        ],
+        "slots": [
+          3,
+          3
+        ]
+      }
+    }
+  ],
+  "files": {}
+}

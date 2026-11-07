@@ -89,6 +89,7 @@ class VehBasicHooks : public zgame::Unported {
   virtual void on_new(uint32_t size, const void* p) { (void)size, (void)p; }
 
   virtual Handle node_named(const char* name) { return h(unported("0x004f7fe0", {6, name})); }
+  virtual Handle node_in_tree(Handle node, const char* name);
   virtual Handle node_clone(Handle node) { return h(unported("0x004f9af0", {low(node), 0, 0})); }
   virtual void node_set_name(Handle node, const char* name) { unported("0x004eb300", {low(node), name}); }
   virtual void world_add(Handle node) { unported("world.vt+0x0", {low(node)}); }  // [0x00608c84]

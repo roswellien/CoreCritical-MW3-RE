@@ -7,6 +7,7 @@
 
 #include "crt/msvc_string.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/content_textures.h"
 
 namespace zimg {
 
@@ -101,9 +102,16 @@ void close(Library& lib) {
 
 // Mech3.exe 1.2 @ 0x00518d60
 Texture* find_in_list(int list, const char* name) {
+  if (!g_state.enabled) return nullptr;
   for (Library* lib : g_libraries[list])
-    if (Texture* t = load(*lib, name)) return t;
-  return nullptr;
+    if (Texture* t = load(*lib, name)) {
+      if (list == 0 && mech3::content_texture_named(name)) {
+        free_texture(t);
+        cc::content::fail("texture-name-conflict", "An authored texture name collides with an installed native texture", {}, name);
+      }
+      return t;
+    }
+  return list == 0 ? mech3::load_content_texture(name) : nullptr;
 }
 
 // Mech3.exe 1.2 @ 0x00518a30. Tries <name>.zbd for variant 0, else
@@ -320,6 +328,7 @@ void release_buffers(Texture& t) {
 // the renderer's and is not ported.
 void free_texture(Texture* t) {
   if (!t) return;
+  mech3::content_texture_released(t);
   release_buffers(*t);
   std::free(t);
 }

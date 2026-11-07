@@ -1,5 +1,7 @@
 #include "mech3/action_menu.h"
 
+#include "mech3/content_registry.h"
+#include "mech3/content_campaign.h"
 #include <cstdio>
 #include <string>
 
@@ -29,13 +31,27 @@ const ActionScenario kActionScenarios[6] = {
 namespace {
 ActionScreen* screen_of(ztwod::Layer* owner) { return dynamic_cast<ActionScreen*>(owner); }
 
+bool authored_scenario(int32_t value) { return value>=0 && (value & 0x40000000) != 0; }
+void show_authored_controls(ActionScreen& screen) {
+  const bool authored=authored_scenario(screen.scenarios.value_at(screen.scenarios.index));
+  if(authored) {
+    screen.worlds.hide();screen.waves.hide();screen.enemy_title.hide();
+    for(auto& enemy:screen.enemies)enemy.hide();
+    for(auto& config:screen.enemy_configs)config.hide();
+    for(int i=1;i<5;++i)screen.allies[i].hide();
+  } else {
+    screen.worlds.show_for(-1);screen.enemy_title.show_for(-1);
+    for(int i=1;i<5;++i)screen.allies[i].show_for(-1);
+  }
+}
 int32_t mode_of(int32_t scenario) {
   return scenario >= 0 && scenario < kActionScenarioCount ? kActionScenarios[scenario].mode : -1;
 }
 
 // 0x00484670: a mech's shown name, "notmech" out of range.
 const char* mech_label(Engine& e, int32_t mech) {
-  if (mech < 0 || mech >= 19) return "notmech";
+  if (mech < 0 || mech >= chassis_count()) return "notmech";
+  if (const char* label = content_label("chassis", mech)) return label;
   const char* s = e.message(mech_name_message(mech));
   return s ? s : "";
 }
@@ -93,6 +109,7 @@ void ScenarioList::step(int32_t by) {
   CycleButton::step(by);
   if (!s) return;
   s->descriptions.step(by);  // the cycle after this one in the screen (+0x42c)
+  show_authored_controls(*s);
   if (mode_of(value_at(index)) == 2) {
     int32_t best = 0;
     if (Pilot* p = current_pilot()) {
@@ -111,6 +128,7 @@ void ScenarioList::step(int32_t by) {
     l.step(0);
   }
   s->show_custom();
+  show_authored_controls(*s);
 }
 
 // Mech3.exe 1.2 @ 0x00489660
@@ -285,6 +303,13 @@ ActionScreen::ActionScreen(Engine& e, Handle s)
     scenarios.add_item(e.message(kActionScenarios[i].name), i);
     descriptions.add_item(e.message(kActionScenarios[i].desc), i);
   }
+  if(const auto content=active_content())for(const auto* mission:content->of_kind("mission")) {
+    if(mission->owner=="stock" || mission->data.value("multiplayer",false) || !mission->data.value("selectable",true))continue;
+    const auto name=mission->data.value("name",mission->id);
+    const auto description=mission->data.value("description",std::string("Authored mission: ")+name);
+    scenarios.add_item(name.c_str(),0x40000000|mission->handle);
+    descriptions.add_item(description.c_str(),0x40000000|mission->handle);
+  }
   worlds.set_arrows(1, 1, 1);
   scenarios.set_arrows(1, 1, 1);
   set_flags_all(0);
@@ -354,7 +379,7 @@ void ActionScreen::show_custom() {
   for (int i = 0; i < 6; ++i) {
     EnemyList& l = enemies[i];
     int32_t chosen = 0, n = 0;
-    for (int32_t mech = -1; mech < 0x13; ++mech) {
+    for (int32_t mech = -1; mech < chassis_count(); ++mech) {
       if (i == 0) {
         if (slot && mech == slot->mech) chosen = n;
         if (mech == -1) continue;
@@ -389,7 +414,7 @@ void ActionScreen::reset() {
   for (AllyList& l : allies) l.clear_items();
   for (EnemyList& l : enemies) l.clear_items();
   int32_t chosen = 0;
-  for (int32_t mech = 0; mech < 0x13; ++mech) {
+  for (int32_t mech = 0; mech < chassis_count(); ++mech) {
     if (mech == 7) continue;
     allies[0].add_item(e.message_format(0x18b, mech_label(e, mech)), mech);
     if (slot && mech == slot->mech) chosen = mech;
@@ -398,7 +423,7 @@ void ActionScreen::reset() {
   allies[1].add_item(e.message(0x28a), -1);  // Mobile Field Base: off
   allies[1].add_item(e.message(0x28b), 10);  // on
   for (int i = 2; i < 5; ++i) {
-    for (int32_t mech = -1; mech < 0x13; ++mech) {
+    for (int32_t mech = -1; mech < chassis_count(); ++mech) {
       if (mech == 7) continue;
       const std::string text =
           mech == -1 ? e.message_format_ints(0x28c, {}) : std::string(e.message_format(0x28d, mech_label(e, mech)));
@@ -425,6 +450,7 @@ void ActionScreen::reset() {
     waves.select(k.g87c < best ? best : k.g87c);
     waves.step(0);
   }
+  show_authored_controls(*this);
 }
 
 // Mech3.exe 1.2 @ 0x0048a140. The scenario's mission is looked for (its AI
@@ -440,6 +466,20 @@ void ActionScreen::accept() {
   if (!g) return;  // (the exe goes on unchecked)
   g->count = 0;  // 0x00436a80(0)
   int32_t sc = scenarios.value_at(scenarios.index);
+  if(authored_scenario(sc)) {
+    const auto content=active_content();const auto* mission=content?content->by_handle("mission",sc&0x3fffffff):nullptr;
+    if(!mission)cc::content::fail("mission-selection", "Selected Instant Action mission is unavailable");
+    auto& selected=select_content_standalone(*p,mission->id);
+    selected.slot.copy_from(g->slot);
+    const int32_t commander=allies[0].value_at(allies[0].index);
+    if(commander!=selected.slot.mech) {
+      const auto* loadouts=e.mech_loadouts(commander);
+      if(!loadouts || loadouts->configs.empty())cc::content::fail("mission-loadout", "Selected commander has no native loadout");
+      selected.slot.mech=commander;delete selected.slot.config;
+      selected.slot.config=pilot_hooks().config_copy(*loadouts->configs.front());selected.slot.skin=0;
+    }
+    action_setup().g878=scenarios.index;keep_lineup();p->save();e.pop_state(0);e.replace_state(6);return;
+  }
   const char* dir = e.mission_dir(static_cast<uint32_t>(worlds.value_at(worlds.index)));
   char paths[2][0x100];
   std::snprintf(paths[0], sizeof paths[0], "..\\data\\%s\\zrdr\\aipath\\ia%d", dir, kActionScenarios[sc].mission);

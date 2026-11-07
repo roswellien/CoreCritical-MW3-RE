@@ -134,11 +134,11 @@ void TextBase::draw() {
     int32_t w = font_width();
     if (align == 1) w >>= 1;
     x -= w;
-    host().font_draw(text, x, y, font);
+    if (can_present()) host().font_draw(text, x, y, font);
     x += w;
     return;
   }
-  host().font_draw(text, x, y, font);
+  if (can_present()) host().font_draw(text, x, y, font);
 }
 
 // Mech3.exe 1.2 @ 0x005a2f90
@@ -271,12 +271,12 @@ void FontText::draw() {
     x -= box;
     erase();
     x += box - w;
-    host().blit(image, x, y, 0, &text_rect);
+    if (can_present()) host().blit(image, x, y, 0, &text_rect);
     x += w;
     return;
   }
   erase();
-  host().blit(image, x, y, 0, &text_rect);
+  if (can_present()) host().blit(image, x, y, 0, &text_rect);
 }
 
 void FontText::changed_text() {

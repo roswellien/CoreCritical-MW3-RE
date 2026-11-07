@@ -1,4 +1,5 @@
 #include "prepared_models.hpp"
+#include "platform/host_path.h"
 
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zmodel/gmod_const.h"
@@ -18,7 +19,7 @@ using platform::prepared::Matrix;
 using zcls::Node;
 
 std::ifstream open(const std::string &path) {
-    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
+    std::ifstream input(platform::host_path(std::filesystem::u8path(path)), std::ios::binary);
     if (!input)
         throw std::runtime_error("Cannot open prepared visual payload: " + path);
     return input;
@@ -171,11 +172,22 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
     std::map<std::pair<std::string, std::string>, std::string> normals;
     std::map<std::pair<std::string, std::string>, std::string> surface_materials;
     for (const auto &binding : materials)
-        if (!surface_materials.emplace(std::make_pair(binding.chassis, binding.lod), binding.path)
+        if (!surface_materials
+                 .emplace(std::make_pair(binding.chassis + "\n" + binding.content_id, binding.lod),
+                          binding.path)
+                 .second)
+            throw std::runtime_error("Duplicate prepared surface-material selection");
+    for (const auto &binding : options.materials)
+        if (!surface_materials
+                 .emplace(std::make_pair(binding.chassis + "\n" + binding.content_id, binding.lod),
+                          binding.path)
                  .second)
             throw std::runtime_error("Duplicate prepared surface-material selection");
     for (const auto &binding : options.normals)
-        if (!normals.emplace(std::make_pair(binding.chassis, binding.lod), binding.path).second)
+        if (!normals
+                 .emplace(std::make_pair(binding.chassis + "\n" + binding.content_id, binding.lod),
+                          binding.path)
+                 .second)
             throw std::runtime_error("Duplicate prepared normal-map selection");
     for (const auto &binding : options.models) {
         if (binding.chassis.empty() || binding.chassis.size() > 32 ||
@@ -185,70 +197,30 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
             throw std::runtime_error("--cc-model requires a lowercase chassis ID and LOD 0 or 1");
         Model model;
         model.source_asset = "mech_" + binding.chassis + (binding.lod == "1" ? "_1.flt" : ".flt");
-        if (!selected.insert(model.source_asset).second)
+        if (!selected.insert(model.source_asset + "\n" + binding.content_id).second)
             throw std::runtime_error("Duplicate prepared model selection");
-        auto geometry = open(binding.mesh), textures = open(binding.textures);
-        model.mesh = platform::prepared::read_mesh(geometry);
-        model.textures = platform::prepared::read_textures(textures);
-        platform::prepared::validate_bindings(model.mesh, model.textures);
-        const auto normal = normals.find({binding.chassis, binding.lod});
+        model.content_id = binding.content_id;
+        model.chassis = binding.chassis;
+        model.lod = binding.lod;
+        model.mesh_path = binding.mesh;
+        model.texture_path = binding.textures;
+        model.validate_resource = binding.validate_resource;
+        const auto normal =
+            normals.find({binding.chassis + "\n" + binding.content_id, binding.lod});
         if (normal != normals.end()) {
-            auto input = open(normal->second);
-            model.normals = platform::prepared::read_normals(input, model.textures);
+            model.normal_path = normal->second;
             normals.erase(normal);
-            std::fprintf(stderr, "Prepared normals loaded: %s, %zu images\n",
-                         model.source_asset.c_str(), model.normals.images.size());
         }
-        const auto mat = surface_materials.find({binding.chassis, binding.lod});
-        if (mat != surface_materials.end()) {
-            auto input = open(mat->second);
-            std::vector<std::string> batch_materials;
-            batch_materials.reserve(model.mesh.batches.size());
-            for (std::size_t b = 0; b < model.mesh.batches.size(); ++b) {
-                if (b < model.textures.bindings.size()) {
-                    const auto img_idx = model.textures.bindings[b];
-                    if (img_idx < model.textures.images.size())
-                        batch_materials.push_back(model.textures.images[img_idx].name);
-                    else
-                        batch_materials.push_back({});
-                } else {
-                    batch_materials.push_back({});
-                }
-            }
-            const uint64_t uv_hash = mw34::materials::compute_mesh_uv_hash(
-                model.mesh.batches, 0, model.mesh.batches.size());
-            const std::string expected_asset_id =
-                binding.chassis + (binding.lod == "1" ? ":far" : ":close");
-            model.surface_materials = std::make_shared<mw34::materials::SurfaceMaterialPack>(
-                platform::prepared::validate_surface_materials(input, expected_asset_id, uv_hash,
-                                                               batch_materials));
-            surface_materials.erase(mat);
-            std::fprintf(stderr, "Prepared surface materials loaded: %s, %zu records\n",
-                         model.source_asset.c_str(), model.surface_materials->records.size());
+        const auto material =
+            surface_materials.find({binding.chassis + "\n" + binding.content_id, binding.lod});
+        if (material != surface_materials.end()) {
+            model.material_path = material->second;
+            surface_materials.erase(material);
         }
-        // Mesh colors are diagnostics from preparation. As in Core Critical's
-        // existing adapter, a bound albedo supplies the final material color.
-        for (auto &batch : model.mesh.batches)
-            batch.color = 0xffffffff;
-        if (model.mesh.version == 4) {
-            const auto rig = rig_for(model.mesh.rig);
-            std::set<std::string> names;
-            for (const auto &bone : rig.bones)
-                names.insert(bone.name);
-            for (const char *name : {"Pelvis", "Torso_Twist", "Upperarm_Left", "Upperarm_Right",
-                                     "Forearm_Left", "Forearm_Right", "Thigh_Left", "Thigh_Right",
-                                     "Calf_Left", "Calf_Right", "Foot0_Left", "Foot0_Right"})
-                if (!names.count(name))
-                    throw std::runtime_error("Prepared donor rig is missing a required joint");
-            for (const char *name : {"hip", "torso", "larm", "rarm", "lfoot", "rfoot", "lthigh",
-                                     "rthigh", "lcalf", "rcalf"})
-                if (!rig.reference.count(name))
-                    throw std::runtime_error(
-                        "Prepared donor rig is missing a required source reference");
-        }
-        std::fprintf(stderr, "Prepared model loaded: %s, BWMESH%u, %zu batches, %zu materials\n",
-                     model.source_asset.c_str(), model.mesh.version, model.mesh.batches.size(),
-                     model.textures.images.size());
+        // Legacy CLI bindings preserve eager validation. Modular profiles may
+        // select many chassis, so their owned payloads decode on first use.
+        if (model.content_id.empty())
+            load_model(model);
         models_.push_back(std::move(model));
     }
     if (!surface_materials.empty())
@@ -259,6 +231,75 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
         throw std::runtime_error("Prepared lighting requires at least one --cc-model selection");
     if (options.lighting == "normal" && options.normals.empty())
         throw std::runtime_error("Normal lighting requires --cc-model-normals");
+}
+
+void PreparedModels::load_model(Model &model) const {
+    if (model.loaded)
+        return;
+    auto open_resource = [&](const std::string &path) {
+        if (model.validate_resource)
+            model.validate_resource(path);
+        return open(path);
+    };
+    auto geometry = open_resource(model.mesh_path), textures = open_resource(model.texture_path);
+    model.mesh = platform::prepared::read_mesh(geometry);
+    model.textures = platform::prepared::read_textures(textures);
+    platform::prepared::validate_bindings(model.mesh, model.textures);
+    if (!model.normal_path.empty()) {
+        auto input = open_resource(model.normal_path);
+        model.normals = platform::prepared::read_normals(input, model.textures);
+        std::fprintf(stderr, "Prepared normals loaded: %s, %zu images\n",
+                     model.source_asset.c_str(), model.normals.images.size());
+    }
+    if (!model.material_path.empty()) {
+        auto input = open_resource(model.material_path);
+        std::vector<std::string> batch_materials;
+        batch_materials.reserve(model.mesh.batches.size());
+        for (std::size_t b = 0; b < model.mesh.batches.size(); ++b) {
+            if (b < model.textures.bindings.size()) {
+                const auto img_idx = model.textures.bindings[b];
+                if (img_idx < model.textures.images.size())
+                    batch_materials.push_back(model.textures.images[img_idx].name);
+                else
+                    batch_materials.push_back({});
+            } else {
+                batch_materials.push_back({});
+            }
+        }
+        const uint64_t uv_hash =
+            mw34::materials::compute_mesh_uv_hash(model.mesh.batches, 0, model.mesh.batches.size());
+        const std::string expected_asset_id =
+            model.chassis + (model.lod == "1" ? ":far" : ":close");
+        model.surface_materials = std::make_shared<mw34::materials::SurfaceMaterialPack>(
+            platform::prepared::validate_surface_materials(input, expected_asset_id, uv_hash,
+                                                           batch_materials));
+        std::fprintf(stderr, "Prepared surface materials loaded: %s, %zu records\n",
+                     model.source_asset.c_str(), model.surface_materials->records.size());
+    }
+    // Mesh colors are diagnostics from preparation. As in Core Critical's
+    // existing adapter, a bound albedo supplies the final material color.
+    for (auto &batch : model.mesh.batches)
+        batch.color = 0xffffffff;
+    if (model.mesh.version == 4) {
+        const auto rig = rig_for(model.mesh.rig);
+        std::set<std::string> names;
+        for (const auto &bone : rig.bones)
+            names.insert(bone.name);
+        for (const char *name : {"Pelvis", "Torso_Twist", "Upperarm_Left", "Upperarm_Right",
+                                 "Forearm_Left", "Forearm_Right", "Thigh_Left", "Thigh_Right",
+                                 "Calf_Left", "Calf_Right", "Foot0_Left", "Foot0_Right"})
+            if (!names.count(name))
+                throw std::runtime_error("Prepared donor rig is missing a required joint");
+        for (const char *name : {"hip", "torso", "larm", "rarm", "lfoot", "rfoot", "lthigh",
+                                 "rthigh", "lcalf", "rcalf"})
+            if (!rig.reference.count(name))
+                throw std::runtime_error(
+                    "Prepared donor rig is missing a required source reference");
+    }
+    std::fprintf(stderr, "Prepared model loaded: %s, BWMESH%u, %zu batches, %zu materials\n",
+                 model.source_asset.c_str(), model.mesh.version, model.mesh.batches.size(),
+                 model.textures.images.size());
+    model.loaded = true;
 }
 
 const platform::prepared::Image *PreparedModels::named_texture(const char *name) const {
@@ -281,12 +322,23 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
         return output;
     if (!node->model || node->model->count(0x14) != node->source_model_vertices)
         return output;
-    const Model *selected = nullptr;
-    for (const auto &model : models_)
-        if (model.source_asset == node->source_asset->name)
-            selected = &model;
+    const Node *identity_root = node;
+    for (unsigned depth = 0; !identity_root->source_asset_root; ++depth) {
+        if (depth >= 64 || identity_root->parent_count() != 1 ||
+            identity_root->parents[0]->source_asset != node->source_asset)
+            return output;
+        identity_root = identity_root->parents[0];
+    }
+    Model *selected = nullptr;
+    for (auto &model : models_)
+        if (model.source_asset == node->source_asset->name &&
+            (model.content_id.empty() || model.content_id == identity_root->content_chassis_id)) {
+            if (!selected || !model.content_id.empty())
+                selected = &model;
+        }
     if (!selected)
         return output;
+    load_model(*selected);
     // Admission must not run mixed-bone vertex deformation merely to discover
     // that this early GPU route cannot consume it.
     if (rigid_only && selected->mesh.version == 4)
@@ -376,7 +428,18 @@ bool PreparedModels::has_binding(const platform::ModelDrawContext &context) cons
     if (!node || !node->source_asset)
         return false;
     for (const auto &model : models_)
-        if (model.source_asset == node->source_asset->name)
+        if (model.source_asset == node->source_asset->name && model.content_id.empty())
+            return true;
+    const Node *root = node;
+    for (unsigned depth = 0; !root->source_asset_root; ++depth) {
+        if (depth >= 64 || root->parent_count() != 1 ||
+            root->parents[0]->source_asset != node->source_asset)
+            return false;
+        root = root->parents[0];
+    }
+    for (const auto &model : models_)
+        if (model.source_asset == node->source_asset->name &&
+            (model.content_id.empty() || model.content_id == root->content_chassis_id))
             return true;
     return false;
 }

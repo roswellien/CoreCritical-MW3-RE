@@ -13,6 +13,7 @@ struct HudOptions {
   std::string mode = "original";
   std::string artwork;
   bool text = true;
+  platform::HudArtworkSources package_artwork;
 };
 // An instance-owned HUD draw list. The original canvas remains a CPU shadow
 // for native reads; display uses owned GPU images and ordered primitives.
@@ -47,6 +48,7 @@ class GpuHud final : public zrndr::DrawObserver {
   };
   bool position(const uint16_t* pointer, int& x, int& y) const;
   int texture(const std::shared_ptr<const platform::HudImage>& image);
+  std::shared_ptr<const platform::HudImage> artwork_image(uint64_t identity);
   void rectangle(float x0, float y0, float x1, float y1, uint32_t colour, int texture = -1,
                  float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1);
   void append(platform::TLVertex vertex, int texture, platform::Primitive primitive, bool sharp);
