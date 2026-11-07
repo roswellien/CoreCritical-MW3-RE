@@ -173,6 +173,9 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
   }
   std::sort(offsets.begin(), offsets.end());
   offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+  // One bit per unique offset (at most 2 MiB under the offset metadata cap).
+  // Aliases still pass every per-entry check below, but scan pixels only once.
+  std::vector<bool> indices_valid(offsets.size(), false);
 
   // ---- pass 2: stream the table again; per-entry header + payload bounds ----
   {
@@ -199,6 +202,10 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
         const std::uint64_t end = (next != offsets.end())
                                       ? static_cast<std::uint64_t>(*next)
                                       : file_size;
+        if (next == offsets.begin() || *(next - 1) != offset)
+          fail("Entry offset changed during validation");
+        const auto offset_index =
+            static_cast<std::size_t>(next - offsets.begin() - 1);
 
         // 16-byte texture header at the entry offset.
         std::array<std::uint8_t, 16> th{};
@@ -254,7 +261,7 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
           fail("entry " + std::to_string(idx) + ": texture spans [" +
                std::to_string(offset) + ", " + std::to_string(payload_end) +
                ") but its payload ends at " + std::to_string(end));
-        if (lpc > 0 && lpc < 256) {
+        if (lpc > 0 && lpc < 256 && !indices_valid[offset_index]) {
           std::array<std::uint8_t, 64 * 1024> indices{};
           for (std::uint64_t at = 0; at < px;) {
             const auto count = std::min<std::uint64_t>(indices.size(), px - at);
@@ -265,6 +272,7 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
                 fail("Texture palette index exceeds declared colours");
             at += count;
           }
+          indices_valid[offset_index] = true;
         }
       }
       done += n;

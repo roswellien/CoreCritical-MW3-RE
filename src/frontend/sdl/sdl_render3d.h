@@ -47,10 +47,11 @@ struct CoreCriticalAssets {
   std::vector<PreparedModelBinding> models;
   std::vector<PreparedNormalBinding> normals;
   std::vector<PreparedMaterialBinding> materials;
+  bool sun_explicit = false;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool empty() const {
-    return environment_packs.empty() && !environment && !render_thread &&
-           geometry == "legacy" && !geometry_debug_normals &&
+    return environment_packs.empty() && !environment && !sun_explicit &&
+           !render_thread && geometry == "legacy" && !geometry_debug_normals &&
            textures.empty() && models.empty() && normals.empty() &&
            materials.empty() && lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";

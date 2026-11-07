@@ -416,6 +416,7 @@ bool parse(int argc, char** argv, Args& a) {
       a.cc_assets.geometry_debug_normals = true;
     }
     else if (s == "--cc-sun" && next(2)) {
+      a.cc_assets.sun_explicit = true;
       a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
     } else if (s == "--cc-environment-pack" && next(1)) {
       a.cc_assets.environment_packs.push_back(argv[++i]);

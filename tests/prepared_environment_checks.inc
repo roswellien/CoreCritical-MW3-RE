@@ -534,6 +534,40 @@ void check_environment_packs() {
     require(!load_environment_packs({ordered.path()}).banks.empty(),
             "Valid unsorted/alias texture entries rejected");
   }
+  {
+    constexpr unsigned alias_count = 4096;
+    constexpr unsigned texture_offset = 24 + alias_count * 40 + 512;
+    std::string bank;
+    for (unsigned value : {0U, 1U, 1U, alias_count, 0U, 0U})
+      write_u32(bank, value);
+    for (unsigned i = 0; i < alias_count; ++i) {
+      auto name = "alias" + std::to_string(i);
+      name.resize(32, '\0');
+      bank += name;
+      write_u32(bank, texture_offset);
+      write_u32(bank, 0xffffffffU);
+    }
+    bank.append(512, '\0');
+    std::string texture(16, '\0');
+    texture[0] = 1;
+    texture[5] = texture[7] = 4; // 1024 x 1024 indexed pixels.
+    texture[12] = 1;
+    texture.append(1024 * 1024 + 2, '\0');
+    bank += texture;
+    EnvironmentFixture aliases(folder / "cached-palette-aliases");
+    aliases.put("environment/bank.bin", bank, "ZBD-texture-v1");
+    aliases.save();
+    require(!load_environment_packs({aliases.path()}).banks.empty(),
+            "Valid aliased local indexed texture rejected");
+    auto bad_reference = bank;
+    constexpr unsigned last_reference = 24 + (alias_count - 1) * 40 + 36;
+    for (unsigned i = 0; i < 4; ++i)
+      bad_reference[last_reference + i] = 0;
+    reject_bank("cached-alias-bad-reference", bad_reference);
+    auto bad_index = bank;
+    bad_index[texture_offset + 16] = 1;
+    reject_bank("cached-alias-bad-index", bad_index);
+  }
   for (bool alpha : {false, true}) {
     auto data = env_test_bank();
     if (alpha) {
