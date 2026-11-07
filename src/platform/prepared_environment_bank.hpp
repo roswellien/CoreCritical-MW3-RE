@@ -17,7 +17,8 @@ namespace platform::prepared::detail {
 // pixel payload. Explicit little-endian reads, checked 64-bit arithmetic,
 // visible std::runtime_error failures. No FP arithmetic, no whole-file reads.
 inline void validate_environment_bank(const std::filesystem::path &bank_path,
-                                      std::uint64_t expected_bytes) {
+                                      std::uint64_t expected_bytes,
+                                      bool require_native_upload = true) {
   const std::string where = bank_path.u8string();
 
   // ---- explicit little-endian readers (host endianness independent) ----
@@ -222,6 +223,17 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
                ", h " + std::to_string(height) + ", lpc " +
                std::to_string(local_palette_count) + ")");
 
+        // Selected packs must not silently fall back in zvid::create_texture.
+        // False is for structural validation; selected packs use the default.
+        if (require_native_upload) {
+          if (local_palette_count != 0)
+            fail("Indexed environment textures are not supported by the native "
+                 "uploader");
+          if (width > 4096 || height > 4096 || width > 8 * height ||
+              height > 8 * width)
+            fail("Environment texture exceeds native upload dimension or "
+                 "aspect limits");
+        }
         const std::uint64_t w = static_cast<std::uint64_t>(width);
         const std::uint64_t h = static_cast<std::uint64_t>(height);
         const std::uint64_t lpc =

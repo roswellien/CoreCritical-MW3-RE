@@ -436,8 +436,8 @@ void check_environment_packs() {
   EnvironmentFixture palette(folder / "palette-bank");
   palette.put("environment/bank.bin", env_test_bank(true), "ZBD-texture-v1");
   palette.save();
-  require(!load_environment_packs({palette.path()}).banks.empty(),
-          "Valid paletted bank rejected");
+  env_test_reject([&] { load_environment_packs({palette.path()}); },
+                  "Indexed environment bank admitted");
   EnvironmentFixture embedded_cr(folder / "embedded-cr");
   embedded_cr.put("environment/world.txt", "MW34SNP1\nwo\rrld.bin\n",
                   "MW34SNP1");
@@ -470,6 +470,24 @@ void check_environment_packs() {
       data[offset + i] = char(value >> (8 * i));
     return data;
   };
+  auto direct_bank = [](unsigned width, unsigned height) {
+    auto data = env_test_bank();
+    data.resize(80 + std::size_t(width) * height * 2, '\0');
+    for (unsigned i = 0; i < 2; ++i) {
+      data[68 + i] = char(width >> (8 * i));
+      data[70 + i] = char(height >> (8 * i));
+    }
+    return data;
+  };
+  reject_bank("unsupported-aspect", direct_bank(9, 1));
+  reject_bank("unsupported-width", direct_bank(4097, 1024));
+  reject_bank("unsupported-height", direct_bank(1024, 4097));
+  EnvironmentFixture native_limit(folder / "native-limit");
+  native_limit.put("environment/bank.bin", direct_bank(4096, 512),
+                   "ZBD-texture-v1");
+  native_limit.save();
+  require(!load_environment_packs({native_limit.path()}).banks.empty(),
+          "Native upload dimension/aspect boundary rejected");
   reject_bank("offset-eof", bank_word(56, 82));
   reject_bank("offset-table", bank_word(56, 24));
   reject_bank("negative-palette", bank_word(60, 0xfffffffeU));
@@ -557,16 +575,31 @@ void check_environment_packs() {
     EnvironmentFixture aliases(folder / "cached-palette-aliases");
     aliases.put("environment/bank.bin", bank, "ZBD-texture-v1");
     aliases.save();
-    require(!load_environment_packs({aliases.path()}).banks.empty(),
-            "Valid aliased local indexed texture rejected");
+    const auto bank_path = aliases.root / "environment/bank.bin";
+    platform::prepared::detail::validate_environment_bank(bank_path,
+                                                          bank.size(), false);
+    env_test_reject([&] { load_environment_packs({aliases.path()}); },
+                    "Indexed environment bank admitted");
     auto bad_reference = bank;
     constexpr unsigned last_reference = 24 + (alias_count - 1) * 40 + 36;
     for (unsigned i = 0; i < 4; ++i)
       bad_reference[last_reference + i] = 0;
-    reject_bank("cached-alias-bad-reference", bad_reference);
+    env_test_write(bank_path, bad_reference);
+    env_test_reject(
+        [&] {
+          platform::prepared::detail::validate_environment_bank(
+              bank_path, bad_reference.size(), false);
+        },
+        "Aliased local palette accepted global reference");
     auto bad_index = bank;
     bad_index[texture_offset + 16] = 1;
-    reject_bank("cached-alias-bad-index", bad_index);
+    env_test_write(bank_path, bad_index);
+    env_test_reject(
+        [&] {
+          platform::prepared::detail::validate_environment_bank(
+              bank_path, bad_index.size(), false);
+        },
+        "Aliased texture accepted invalid pixel index");
   }
   for (bool alpha : {false, true}) {
     auto data = env_test_bank();
@@ -581,8 +614,12 @@ void check_environment_packs() {
                                (alpha ? "full-alpha" : "local-palette"));
     payload.put("environment/bank.bin", data, "ZBD-texture-v1");
     payload.save();
-    require(!load_environment_packs({payload.path()}).banks.empty(),
-            "Valid texture payload rejected");
+    if (alpha)
+      require(!load_environment_packs({payload.path()}).banks.empty(),
+              "Valid texture payload rejected");
+    else
+      env_test_reject([&] { load_environment_packs({payload.path()}); },
+                      "Indexed local bank admitted");
   }
   EnvironmentFixture truncated(folder / "truncated-bank");
   std::string short_bank(24, '\0');

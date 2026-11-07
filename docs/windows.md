@@ -146,6 +146,9 @@ member paths, sizes and SHA-256 pins before routing native mission/common textur
 banks and authored/world normal catalogs. Explicit normal catalogs take precedence,
 then operation1..4, training and shared-mechs. World pages remain lazy with a 512 MiB
 decoded resident budget. Missing or corrupt selected files fail visibly.
+Selected banks require direct 16-bit texels; global and local indexed textures
+are rejected because the native uploader does not support them. Texture edges
+must not exceed 4096 pixels and the aspect ratio must not exceed 8:1.
 
 Pack selection does not enable prepared model replacement or change the lighting
 mode. Use `--cc-lighting normal` to apply admitted normal maps. Lighting, effects,

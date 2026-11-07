@@ -6,6 +6,7 @@
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "platform/prepared_environment_bank.hpp"
 #include "platform/prepared_visuals.h"
 #include "platform/render3d.h"
 #include "platform/sha256.hpp"
