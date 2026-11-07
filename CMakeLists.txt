@@ -443,8 +443,10 @@ endif()
 # which rounds differently from the original (CLAUDE.md, FPU precision).
 if(NOT MSVC)
   target_compile_options(mw3core PRIVATE -ffp-contract=off)
+  target_compile_options(cc_content PRIVATE -ffp-contract=off)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")  # clang-cl
   target_compile_options(mw3core PRIVATE /clang:-ffp-contract=off)
+  target_compile_options(cc_content PRIVATE /clang:-ffp-contract=off)
 endif()
 
 # Linked into the shared probe below: position-independent (the Mac's default;

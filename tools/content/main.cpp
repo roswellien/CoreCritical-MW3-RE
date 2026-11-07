@@ -3,6 +3,7 @@
 #include "content/world.h"
 #include "mech3/content_registry.h"
 #include "mech3/source_archive.h"
+#include "platform/host_path.h"
 
 #include <chrono>
 #include <iostream>
@@ -23,7 +24,7 @@ ResolvedContentSet directory_content(const fs::path &directory, const fs::path &
         {"packages", Json::array({{{"id", package.id},
                                    {"version", package.version},
                                    {"sha256", package.digest},
-                                   {"path", fs::absolute(directory).generic_string()}}})}};
+                                   {"path", fs::absolute(directory).generic_u8string()}}})}};
     auto result =
         resolve(profile, directory, store, mech3::stock_content(), mech3::content_capabilities());
     mech3::validate_native_content(result);
@@ -32,39 +33,47 @@ ResolvedContentSet directory_content(const fs::path &directory, const fs::path &
 Json source_manifest(const fs::path &source) {
     Json manifest = read_json(source / "pack.json");
     manifest["files"] = Json::object();
-    for (const auto &entry : fs::recursive_directory_iterator(source)) {
+    for (const auto &entry : fs::recursive_directory_iterator(platform::host_path(source))) {
         if (entry.is_symlink())
             fail("unsafe-path", "Source packages cannot contain links");
         if (!entry.is_regular_file())
             continue;
-        auto name = entry.path().lexically_relative(source).generic_string();
+        auto name =
+            platform::logical_host_path(entry.path()).lexically_relative(source).generic_u8string();
         if (name == "pack.json")
             continue;
         auto file = confined_path(source, name);
         if (manifest["files"].size() >= 65536)
             fail("source-limit", "Too many source files");
-        manifest["files"][name] = {{"bytes", fs::file_size(file)}, {"sha256", file_sha256(file)}};
+        manifest["files"][name] = {{"bytes", fs::file_size(platform::host_path(file))},
+                                   {"sha256", file_sha256(file)}};
     }
     return manifest;
 }
 Json compile_directory(const fs::path &source, const fs::path &output, const fs::path &store) {
-    auto base = fs::weakly_canonical(source), destination = fs::weakly_canonical(output);
+    auto base = platform::logical_host_path(fs::weakly_canonical(platform::host_path(source))),
+         destination =
+             platform::logical_host_path(fs::weakly_canonical(platform::host_path(output)));
     auto relative = destination.lexically_relative(base);
     if (!relative.empty() && *relative.begin() != "..")
         fail("compile-output", "Build output must be outside the source package directory");
-    if (fs::exists(output) && (!fs::is_directory(output) || !fs::is_empty(output)))
+    if (fs::exists(platform::host_path(output)) &&
+        (!fs::is_directory(platform::host_path(output)) ||
+         !fs::is_empty(platform::host_path(output))))
         fail("output-exists", "Compile needs a fresh output directory");
     auto manifest = source_manifest(base);
-    fs::path stage = output.string() + ".building-" +
-                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    fs::create_directories(stage.parent_path());
-    if (!fs::create_directory(stage))
+    fs::path stage = output;
+    stage +=
+        ".building-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    fs::create_directories(platform::host_path(stage.parent_path()));
+    if (!fs::create_directory(platform::host_path(stage)))
         fail("compile-output", "Cannot reserve a build directory");
     try {
         for (auto it = manifest["files"].begin(); it != manifest["files"].end(); ++it) {
             auto target = confined_path(stage, it.key());
-            fs::create_directories(target.parent_path());
-            fs::copy_file(confined_path(base, it.key()), target);
+            fs::create_directories(platform::host_path(target.parent_path()));
+            fs::copy_file(platform::host_path(confined_path(base, it.key())),
+                          platform::host_path(target));
         }
         write_json_atomic(stage / "pack.json", manifest);
         auto content = directory_content(stage, store);
@@ -74,32 +83,36 @@ Json compile_directory(const fs::path &source, const fs::path &output, const fs:
                 definition.behavior == "authored")
                 worlds[definition.id] = compile_world(definition, content);
         for (auto &definition : manifest["definitions"]) {
+            if (definition.at("kind") != "world")
+                continue;
             auto found = worlds.find(definition.at("id").get<std::string>());
             if (found == worlds.end())
                 continue;
             std::string path = "compiled/world-" + sha256(found->first).substr(0, 24) + ".json";
             auto file = confined_path(stage, path);
             write_json_atomic(file, found->second);
-            manifest["files"][path] = {{"bytes", fs::file_size(file)},
+            manifest["files"][path] = {{"bytes", fs::file_size(platform::host_path(file))},
                                        {"sha256", file_sha256(file)},
                                        {"format", "CoreCriticalWorld-v1"}};
             definition["behavior"] = "compiled";
+            if (!found->second.value("nodes", Json::array()).empty())
+                manifest["required_capabilities"]["world.hierarchy"] = 1;
             definition["data"] = {{"resource", path},
                                   {"name", definition["data"].value("name", found->first)}};
         }
         write_json_atomic(stage / "pack.json", manifest);
         auto verified = directory_content(stage, store);
-        if (fs::exists(output))
-            fs::remove(output); // Only the empty directory checked above.
-        fs::rename(stage, output);
-        return {{"output", fs::absolute(output).generic_string()},
+        if (fs::exists(platform::host_path(output)))
+            fs::remove(platform::host_path(output)); // Only the empty directory checked above.
+        fs::rename(platform::host_path(stage), platform::host_path(output));
+        return {{"output", fs::absolute(output).generic_u8string()},
                 {"id", manifest.at("id")},
                 {"version", manifest.at("version")},
                 {"sha256", load_package(output).digest},
                 {"gameplay_digest", verified.gameplay_digest}};
     } catch (...) {
         std::error_code error;
-        fs::remove_all(stage, error);
+        fs::remove_all(platform::host_path(stage), error);
         throw;
     }
 }
@@ -154,7 +167,7 @@ int content_main(int argc, char **argv) {
             argument(1);
             auto path = install_package(fs::u8path(args[0]), store);
             auto package = load_package(path, true);
-            result["path"] = path.generic_string();
+            result["path"] = path.generic_u8string();
             result["id"] = package.id;
             result["version"] = package.version;
             result["sha256"] = package.digest;
@@ -162,12 +175,12 @@ int content_main(int argc, char **argv) {
             argument(2);
             directory_content(fs::u8path(args[0]), store);
             package_directory(fs::u8path(args[0]), fs::u8path(args[1]));
-            result["output"] = fs::absolute(fs::u8path(args[1])).generic_string();
+            result["output"] = fs::absolute(fs::u8path(args[1])).generic_u8string();
             result["sha256"] = file_sha256(fs::u8path(args[1]));
         } else if (command == "compile") {
             argument(2);
             fs::path source = fs::u8path(args[0]), output = fs::u8path(args[1]);
-            if (fs::is_directory(source))
+            if (fs::is_directory(platform::host_path(source)))
                 result.update(compile_directory(source, output, store));
             else {
                 auto value = read_json(source);
@@ -189,14 +202,14 @@ int content_main(int argc, char **argv) {
                 content.packages.push_back(package);
                 auto world = compile_world(definition, content);
                 write_json_atomic(output, world);
-                result["output"] = fs::absolute(output).generic_string();
+                result["output"] = fs::absolute(output).generic_u8string();
             }
         } else if (command == "migrate") {
             argument(4);
             auto content = profile_content(fs::u8path(args[2]), store);
             result["migration"] = migrate_bundle(fs::u8path(args[0]), fs::u8path(args[1]),
                                                  read_json(fs::u8path(args[3])), content, preview);
-            result["output"] = fs::absolute(fs::u8path(args[1])).generic_string();
+            result["output"] = fs::absolute(fs::u8path(args[1])).generic_u8string();
         } else
             fail("arguments", "Unknown command: " + command);
         std::cout << result.dump() << '\n';

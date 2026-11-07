@@ -1,6 +1,6 @@
 #include "content/world.h"
-#include "platform/host_path.h"
 #include "content/world_hierarchy.h"
+#include "platform/host_path.h"
 
 #include "miniz/miniz_tinfl.h"
 #include <algorithm>
