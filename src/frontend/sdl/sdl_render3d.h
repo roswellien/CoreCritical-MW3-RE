@@ -30,6 +30,9 @@ struct PreparedModelBinding {
 struct PreparedNormalBinding {
   std::string chassis, lod, path;
 };
+struct PreparedMaterialBinding {
+  std::string chassis, lod, path;
+};
 struct CoreCriticalAssets {
   bool render_thread = false;
   std::string geometry = "legacy";
@@ -37,10 +40,12 @@ struct CoreCriticalAssets {
   std::string textures;
   std::vector<PreparedModelBinding> models;
   std::vector<PreparedNormalBinding> normals;
+  std::vector<PreparedMaterialBinding> materials;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool empty() const {
-    return !render_thread && geometry == "legacy" && !geometry_debug_normals && textures.empty() &&
-           models.empty() && normals.empty() && lighting == "off" && sun_azimuth == "45" &&
+    return !render_thread && geometry == "legacy" && !geometry_debug_normals &&
+           textures.empty() && models.empty() && normals.empty() &&
+           materials.empty() && lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";
   }
 };

@@ -608,6 +608,23 @@ void draw_polygon(Model& m, Polygon& p, uint32_t needs, bool receiver, int32_t p
   }
   if (!(mat.flags & 1)) return draw_untextured(m, p, needs, fogged, per_vertex, cache, count, n);
   if (mat.flags & 4) material_cycle(mat);
+  struct MaterialScope {
+    platform::Render3D *renderer = nullptr;
+    ~MaterialScope() {
+      if (renderer)
+        renderer->end_material_draw();
+    }
+  } material_scope;
+  if (auto *renderer = zvid::render3d();
+      renderer && renderer->wants_material_context()) {
+    platform::MaterialDrawContext context;
+    context.model = &m;
+    context.material = &mat;
+    context.texture_entry = mat.texture;
+    context.polygon = static_cast<uint32_t>(&p - m.polygons);
+    material_scope.renderer = renderer;
+    renderer->begin_material_draw(context);
+  }
   int32_t spot = projected && !texture_alpha(mat) ? 1 : 0;
   if (strip && spot) spot = g_hooks.projected_strip ? g_hooks.projected_strip(g_hooks.ctx, count) : 0;
   if (needs & 6) {

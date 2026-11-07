@@ -279,12 +279,7 @@ void load_texture(TextureEntry* entry, int32_t free_pixels) {
     entry->state = 1;
     return;
   }
-  if (entry->state == 3) {
-    if (g_hooks.reload) g_hooks.reload(entry->surface, &img);
-    entry->state = 1;
-    return;
-  }
-  // Texture creation can throw; never let one upload's identity leak into the
+  // Creation and reload can throw; never leak one upload's identity into the
   // next.
   struct ActiveSurfaceScope {
     ~ActiveSurfaceScope() { mw34::materials::clear_active_surface_key(); }
@@ -301,6 +296,12 @@ void load_texture(TextureEntry* entry, int32_t free_pixels) {
                                           static_cast<uint32_t>(img.height),
                                           format, hash};
     mw34::materials::set_active_surface_key(key);
+  }
+  if (entry->state == 3) {
+    if (g_hooks.reload)
+      g_hooks.reload(entry->surface, &img);
+    entry->state = 1;
+    return;
   }
   if (!entry->surface) {
     // [0x0072f364] = 0x0057b130 (zvid_ddd3d).
