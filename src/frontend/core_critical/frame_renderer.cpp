@@ -11,6 +11,7 @@
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "render_worker.hpp"
+#include "renderer/campaign_sun_settings.hpp"
 #include "renderer/geometry/reference.hpp"
 #include "renderer/material_normals.hpp"
 #include "renderer/native_surface_identity.hpp"
@@ -260,6 +261,8 @@ public:
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
+        base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
+        sun_explicit_(assets.sun_explicit),
         prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
@@ -438,7 +441,49 @@ public:
                        : "Core Critical Vulkan/DXGI";
   }
   void set_shape(const sdlfe::FrameShape *shape) override { shape_ = shape; }
+  // Typed mission-change callback from the native missions object: owns the
+  // canonical mission ID and the resolved campaign lighting/policy. Unknown or
+  // failed identities clear any prior state (no stale profile).
+  void mission_changed(const ::platform::MissionIdentity &identity) override {
+    VisualFloatScope fp_guard;
+    // Drain packets queued for the previous mission before switching state.
+    drain();
+    const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
+                                                         identity.number);
+    mw34::campaign::ResolvedMissionLighting resolved{};
+    if (!id.empty())
+      resolved = mw34::campaign::resolve_mission_lighting(id);
+    lighting_ = mw34::campaign::mission_sun_settings(
+        base_lighting_, resolved, campaign_enabled_, sun_explicit_);
+    if (renderer_)
+      renderer_->update_lighting_settings(lighting_);
+    const bool identity_changed =
+        identity.world_index != current_mission_identity_.world_index ||
+        identity.number != current_mission_identity_.number;
+    current_mission_identity_ = identity;
+    if (id != current_mission_id_ || identity_changed) {
+      current_mission_id_ = id;
+      current_mission_lighting_ = resolved;
+      if (lighting_.enabled && identity.world_index >= 0 &&
+          identity.number > 0 && !resolved.has_profile)
+        std::fprintf(stderr,
+                     "[MISSION_CHANGED] warning=unknown-mission world_index=%d "
+                     "number=%d; configured stock lighting restored\n",
+                     identity.world_index, identity.number);
+      else if (lighting_.enabled)
+        std::fprintf(
+            stderr,
+            "[MISSION_CHANGED] id=%s world_index=%d number=%d has_profile=%d\n",
+            current_mission_id_.c_str(), static_cast<int>(identity.world_index),
+            static_cast<int>(identity.number), resolved.has_profile ? 1 : 0);
+    } else {
+      current_mission_lighting_ = resolved;
+    }
+  }
   void reset_scene_resources() override {
+    // Reset the owned mission identity/result via the callback with the empty
+    // identity before the scene resources are reset.
+    mission_changed(::platform::MissionIdentity{});
     reset_pending_ = true;
     ++group_load_epoch_;
     for (const auto &[index, handle] : surface_normal_textures_)
@@ -1239,7 +1284,15 @@ private:
   HWND hwnd_;
   const bool native_wsi_;
   const vk::Renderer::Quality quality_;
-  const mw34::sun::Settings lighting_;
+  mw34::sun::Settings lighting_;
+  const mw34::sun::Settings base_lighting_;
+  const bool campaign_enabled_, sun_explicit_;
+  // Owned current-mission state: canonical mission ID plus resolved campaign
+  // lighting/policy. The profile pointer refers only to the static campaign
+  // profile database (no borrowed native pointers).
+  ::platform::MissionIdentity current_mission_identity_{};
+  std::string current_mission_id_;
+  mw34::campaign::ResolvedMissionLighting current_mission_lighting_{};
   PreparedModels prepared_;
   const cc::geometry::Mode geometry_mode_;
   const bool geometry_debug_;

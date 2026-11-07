@@ -1944,6 +1944,15 @@ private:
   }
 
 public:
+  // The frontend drains its render worker before updating this CPU snapshot.
+  // Pipeline topology is fixed at construction; only mission uniforms change.
+  void update_lighting_settings(const mw34::sun::Settings &next) {
+    if (next.enabled != lighting_settings.enabled ||
+        next.normals != lighting_settings.normals)
+      throw std::runtime_error(
+          "Mission lighting cannot change pipeline topology");
+    lighting_settings = next;
+  }
   // Copies the resident target images into s.color/s.depth (s sized to the
   // target).
   void fetch_resident(Scene &s) {
@@ -2092,7 +2101,7 @@ private:
   const WindowSurface surface_source;
   const Quality quality_settings;
   const bool use_gpu_models;
-  const mw34::sun::Settings lighting_settings;
+  mw34::sun::Settings lighting_settings;
   cc_mw3_re::RendererBridgeConfig bridge_config{};
   mw34::effects::Settings effects_settings{};
   DxgiPresent dxgi;

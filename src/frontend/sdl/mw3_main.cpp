@@ -414,6 +414,7 @@ bool parse(int argc, char** argv, Args& a) {
       a.cc_assets.geometry_debug_normals = true;
     }
     else if (s == "--cc-sun" && next(2)) {
+      a.cc_assets.sun_explicit = true;
       a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
     } else if (s == "--cc-model-materials" && next(3)) {
       sdlfe::PreparedMaterialBinding binding;
