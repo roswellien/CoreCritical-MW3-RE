@@ -189,6 +189,7 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
         const std::uint8_t *e = buf.data() + static_cast<std::size_t>(k) * 40;
         const std::uint64_t idx = done + k;
         const std::uint32_t offset = u32le(e + 32);
+        const std::int32_t entry_palette = s32le(e + 36);
 
         // Payload ends at the minimum strictly greater entry offset, else EOF.
         // Offsets need not be sorted in the table; aliases/equal offsets are
@@ -208,7 +209,7 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
         const std::int16_t height = s16le(th.data() + 6); // s16 at 6
         const std::int16_t local_palette_count =
             s16le(th.data() + 12); // s16 at 12
-        if (width < 0 || height < 0 || local_palette_count < 0)
+        if (width <= 0 || height <= 0 || local_palette_count < 0)
           fail("entry " + std::to_string(idx) +
                ": negative dimension/count (w " + std::to_string(width) +
                ", h " + std::to_string(height) + ", lpc " +
@@ -220,6 +221,21 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
             static_cast<std::uint64_t>(local_palette_count);
         const std::uint64_t bpp =
             (flags & 0x01u) ? 2u : 1u; // flags&1: two bytes per pixel, else 1
+        // Mip linking divides by width; direct uploads read uint16_t texels.
+        // Indexed paths need an actual palette with correctly sized colours.
+        if (lpc == 0) {
+          if (bpp != 2 || entry_palette != -1)
+            fail("Direct texture requires 16-bit texels and no palette "
+                 "reference");
+        } else {
+          if (flags & 0x10U) {
+            if (entry_palette < 0)
+              fail("Global indexed texture has no global palette");
+          } else if (entry_palette != -1 || bpp != 2) {
+            fail("Local indexed texture requires 16-bit palette colours and no "
+                 "global reference");
+          }
+        }
         const std::uint64_t px = checked_mul(w, h, "pixel count");
         // Required payload bytes, matching native read_texture:
         // (lpc != 0 ? px : bpp*px) + (flags&8 ? px : 0) + (!(flags&16) && lpc
@@ -238,6 +254,18 @@ inline void validate_environment_bank(const std::filesystem::path &bank_path,
           fail("entry " + std::to_string(idx) + ": texture spans [" +
                std::to_string(offset) + ", " + std::to_string(payload_end) +
                ") but its payload ends at " + std::to_string(end));
+        if (lpc > 0 && lpc < 256) {
+          std::array<std::uint8_t, 64 * 1024> indices{};
+          for (std::uint64_t at = 0; at < px;) {
+            const auto count = std::min<std::uint64_t>(indices.size(), px - at);
+            read_exact(offset + 16 + at, indices.data(), count,
+                       "palette indices");
+            for (std::size_t i = 0; i < count; ++i)
+              if (indices[i] >= lpc)
+                fail("Texture palette index exceeds declared colours");
+            at += count;
+          }
+        }
       }
       done += n;
     }

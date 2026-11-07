@@ -474,6 +474,31 @@ void check_environment_packs() {
   reject_bank("offset-table", bank_word(56, 24));
   reject_bank("negative-palette", bank_word(60, 0xfffffffeU));
   reject_bank("missing-palette", bank_word(60, 0));
+  for (unsigned offset : {68U, 70U}) {
+    auto zero = env_test_bank();
+    zero[offset] = zero[offset + 1] = 0;
+    reject_bank(("zero-dimension-" + std::to_string(offset)).c_str(), zero);
+  }
+  auto direct_byte = env_test_bank();
+  direct_byte[64] = 0;
+  reject_bank("direct-byte-storage", direct_byte);
+  auto missing_global = env_test_bank();
+  missing_global[64] = 0x11;
+  missing_global[76] = 1;
+  reject_bank("missing-global-colours", missing_global);
+  auto byte_palette = env_test_bank();
+  byte_palette[64] = 0;
+  byte_palette[76] = 1;
+  reject_bank("byte-palette-colours", byte_palette);
+  auto bad_local_index = env_test_bank();
+  bad_local_index[76] = 1;
+  bad_local_index[80] = 1;
+  bad_local_index += '\0';
+  reject_bank("bad-local-index", bad_local_index);
+  auto bad_global = env_test_bank(true);
+  bad_global[576] &= ~0x10;
+  bad_global.append(512, '\0');
+  reject_bank("conflicting-global-reference", bad_global);
   auto short_info = env_test_bank();
   short_info.resize(79);
   reject_bank("short-info", short_info);
