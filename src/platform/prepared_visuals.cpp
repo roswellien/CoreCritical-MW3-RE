@@ -1,4 +1,6 @@
 #include "platform/prepared_visuals.h"
+#include "frontend/core_critical/renderer/normal_codec.hpp"
+#include "frontend/core_critical/renderer/surface_materials.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -256,8 +258,12 @@ Normals read_normals(std::istream &input, const Textures &textures) {
     Reader reader(input);
     char magic[8];
     reader.bytes(magic, sizeof magic);
-    if (std::string_view(magic, 8) != std::string_view("BWNRM2\0\0", 8))
-        Reader::fail("unsupported normal-map format (expected BWNRM2)");
+    const bool is_bwnrm3 = (std::memcmp(magic, "BWNRM3\0\0", 8) == 0);
+    const bool is_bwnrm2 = (std::memcmp(magic, "BWNRM2\0\0", 8) == 0);
+    const bool is_bwnrm1 = (std::memcmp(magic, "BWNRM1\0\0", 8) == 0);
+    if (!is_bwnrm1 && !is_bwnrm2 && !is_bwnrm3)
+        Reader::fail("unsupported normal-map format (expected BWNRM1, BWNRM2, or BWNRM3)");
+    const bool version2 = is_bwnrm2 || is_bwnrm3;
     const auto batches = reader.u32(), count = reader.u32();
     if (!batches || batches > 256 || batches != textures.bindings.size() || count > 64)
         Reader::fail("invalid normal-map counts");
@@ -266,6 +272,8 @@ Normals read_normals(std::istream &input, const Textures &textures) {
     for (unsigned i = 0; i < batches; ++i) {
         const auto index = reader.u32();
         if (index != no_normal && index >= count)
+            Reader::fail("invalid normal-map binding");
+        if (!version2 && index == no_normal)
             Reader::fail("invalid normal-map binding");
         normals.bindings.push_back(index);
     }
@@ -282,30 +290,43 @@ Normals read_normals(std::istream &input, const Textures &textures) {
         if (!image.width || !image.height || image.width > 4096 || image.height > 4096)
             Reader::fail("invalid normal-map dimensions");
         const auto pixels = size_t(image.width) * image.height;
-        total += uint64_t(pixels) * 4;
+        const auto pixel_bytes = uint64_t(pixels) * 4;
+        total += pixel_bytes;
         if (total > 256ULL * 1024 * 1024)
             Reader::fail("normal-map decoded budget exceeded");
-        reader.need(uint64_t(pixels) * 4);
-        image.pixels.reserve(pixels);
-        uint64_t hash = 0xcbf29ce484222325ULL;
-        for (size_t pixel = 0; pixel < pixels; ++pixel) {
-            const auto rgba = reader.u32();
-            for (unsigned shift = 0; shift < 32; shift += 8) {
-                hash ^= uint8_t(rgba >> shift);
-                hash *= 0x100000001b3ULL;
-            }
-            image.pixels.push_back(rgba);
+        image.pixels.resize(pixels);
+        if (is_bwnrm3) {
+            const auto encoded_size = reader.u64();
+            if (!encoded_size || encoded_size > pixel_bytes * 2)
+                Reader::fail("invalid compressed normal payload size");
+            reader.need(encoded_size);
+            std::vector<unsigned char> encoded(static_cast<size_t>(encoded_size));
+            reader.bytes(encoded.data(), encoded.size());
+            mw34::materials::decode_normal_pixels(
+                encoded, reinterpret_cast<unsigned char *>(image.pixels.data()),
+                static_cast<size_t>(pixel_bytes));
+        } else {
+            reader.need(pixel_bytes);
+            reader.bytes(image.pixels.data(), static_cast<size_t>(pixel_bytes));
         }
-        if (hash != image.hash)
-            Reader::fail("normal-map content hash mismatch");
+        if (version2) {
+            const auto computed_hash =
+                mw34::materials::normal_hash(image.pixels.data(), static_cast<size_t>(pixel_bytes));
+            if (computed_hash != image.hash)
+                Reader::fail("normal-map content hash mismatch");
+        }
         normals.images.push_back(std::move(image));
     }
     reader.finish();
     for (size_t i = 0; i < batches; ++i) {
-        const auto index = normals.bindings[i];
-        if (index != no_normal &&
-            normals.images[index].name != textures.images.at(textures.bindings[i]).name)
+        auto &index = normals.bindings[i];
+        if (index == no_normal)
+            continue;
+        const auto &mat_name = normals.images[index].name;
+        if (mat_name != textures.images.at(textures.bindings[i]).name)
             Reader::fail("normal-map/albedo material mismatch");
+        if (is_bwnrm1 && (mat_name == "Window" || mat_name == "Glass"))
+            index = no_normal;
     }
     return normals;
 }
@@ -313,6 +334,14 @@ Normals read_normals(std::istream &input, const Textures &textures) {
 void validate_bindings(const Mesh &mesh, const Textures &textures) {
     if (mesh.batches.size() != textures.bindings.size())
         Reader::fail("mesh/texture batch mismatch");
+}
+
+mw34::materials::SurfaceMaterialPack
+validate_surface_materials(std::istream &input, const std::string &expected_asset_id,
+                           uint64_t expected_mesh_uv_hash,
+                           const std::vector<std::string> &expected_batch_materials) {
+    return mw34::materials::read_surface_materials(input, expected_asset_id, expected_mesh_uv_hash,
+                                                   expected_batch_materials);
 }
 
 } // namespace platform::prepared

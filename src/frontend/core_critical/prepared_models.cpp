@@ -66,8 +66,8 @@ Hierarchy hierarchy(const Node *root) {
                     local = from_native(values);
                 }
             } else if (next->cls() != 6) {
-                throw std::runtime_error(
-                    "Prepared source hierarchy contains an unsupported transform class");
+                throw std::runtime_error("Prepared source hierarchy contains an "
+                                         "unsupported transform class");
             }
             if (!output.nodes.emplace(next, math::product(current, local)).second)
                 throw std::runtime_error("Prepared source hierarchy is shared or cyclic");
@@ -129,7 +129,8 @@ math::Pose donor_pose(const math::Rig &rig, const Poses &poses) {
         if (rig.reference.count(name))
             display.emplace(name, math::product(math::product(axis, matrix), inverse_axis));
     // Detached controls are reconstructed only for the visual solver. Actual
-    // visibility still comes from native draws; no reconstructed control is emitted.
+    // visibility still comes from native draws; no reconstructed control is
+    // emitted.
     for (const auto &[name, reference] : rig.reference)
         if (!display.count(name)) {
             const std::string side = name.front() == 'l' ? "l" : name.front() == 'r' ? "r" : "";
@@ -160,13 +161,19 @@ math::Pose donor_pose(const math::Rig &rig, const Poses &poses) {
 
 } // namespace
 
-PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options) {
+PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options,
+                               const std::vector<PreparedMaterialBinding> &materials) {
     if (!options.textures.empty()) {
         auto input = open(options.textures);
         named_ = platform::prepared::read_textures(input);
     }
     std::set<std::string> selected;
     std::map<std::pair<std::string, std::string>, std::string> normals;
+    std::map<std::pair<std::string, std::string>, std::string> surface_materials;
+    for (const auto &binding : materials)
+        if (!surface_materials.emplace(std::make_pair(binding.chassis, binding.lod), binding.path)
+                 .second)
+            throw std::runtime_error("Duplicate prepared surface-material selection");
     for (const auto &binding : options.normals)
         if (!normals.emplace(std::make_pair(binding.chassis, binding.lod), binding.path).second)
             throw std::runtime_error("Duplicate prepared normal-map selection");
@@ -191,6 +198,33 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options) {
             normals.erase(normal);
             std::fprintf(stderr, "Prepared normals loaded: %s, %zu images\n",
                          model.source_asset.c_str(), model.normals.images.size());
+        }
+        const auto mat = surface_materials.find({binding.chassis, binding.lod});
+        if (mat != surface_materials.end()) {
+            auto input = open(mat->second);
+            std::vector<std::string> batch_materials;
+            batch_materials.reserve(model.mesh.batches.size());
+            for (std::size_t b = 0; b < model.mesh.batches.size(); ++b) {
+                if (b < model.textures.bindings.size()) {
+                    const auto img_idx = model.textures.bindings[b];
+                    if (img_idx < model.textures.images.size())
+                        batch_materials.push_back(model.textures.images[img_idx].name);
+                    else
+                        batch_materials.push_back({});
+                } else {
+                    batch_materials.push_back({});
+                }
+            }
+            const uint64_t uv_hash = mw34::materials::compute_mesh_uv_hash(
+                model.mesh.batches, 0, model.mesh.batches.size());
+            const std::string expected_asset_id =
+                binding.chassis + (binding.lod == "1" ? ":far" : ":close");
+            model.surface_materials = std::make_shared<mw34::materials::SurfaceMaterialPack>(
+                platform::prepared::validate_surface_materials(input, expected_asset_id, uv_hash,
+                                                               batch_materials));
+            surface_materials.erase(mat);
+            std::fprintf(stderr, "Prepared surface materials loaded: %s, %zu records\n",
+                         model.source_asset.c_str(), model.surface_materials->records.size());
         }
         // Mesh colors are diagnostics from preparation. As in Core Critical's
         // existing adapter, a bound albedo supplies the final material color.
@@ -217,6 +251,8 @@ PreparedModels::PreparedModels(const sdlfe::CoreCriticalAssets &options) {
                      model.textures.images.size());
         models_.push_back(std::move(model));
     }
+    if (!surface_materials.empty())
+        throw std::runtime_error("A prepared surface-material selection has no matching model/LOD");
     if (!normals.empty())
         throw std::runtime_error("A prepared normal-map selection has no matching model/LOD");
     if (options.lighting != "off" && models_.empty())
@@ -236,7 +272,8 @@ const platform::prepared::Image *PreparedModels::named_texture(const char *name)
 PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context,
                                        bool rigid_only) const {
     sdlfe::CpuInterval interval(cpu_profile_ ? &cpu_statistics_.selection_ticks : nullptr);
-    if (cpu_profile_) ++cpu_statistics_.calls;
+    if (cpu_profile_)
+        ++cpu_statistics_.calls;
     PreparedModelDraw output;
     const auto *node = static_cast<const Node *>(context.node);
     if (!node || !node->source_asset || !context.ordinary || context.morphing || context.overlay ||
@@ -293,6 +330,12 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
             if (normal != platform::prepared::no_normal)
                 draw.normal = &selected->normals.images.at(normal);
         }
+        if (selected->surface_materials && !selected->surface_materials->bindings.empty()) {
+            const auto sm_index = selected->surface_materials->bindings[index];
+            if (sm_index != ::mw34::materials::no_surface_material &&
+                sm_index < selected->surface_materials->records.size())
+                draw.surface_material = selected->surface_materials->records[sm_index].get();
+        }
         if (selected->mesh.version != 4) {
             draw.camera = placed(root_camera, live.poses, batch);
             draw.world = placed(root_world, live.poses, batch);
@@ -328,11 +371,13 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
     return output;
 }
 
-bool PreparedModels::has_binding(const platform::ModelDrawContext& context) const {
-    const auto* node = static_cast<const Node*>(context.node);
-    if (!node || !node->source_asset) return false;
-    for (const auto& model : models_)
-        if (model.source_asset == node->source_asset->name) return true;
+bool PreparedModels::has_binding(const platform::ModelDrawContext &context) const {
+    const auto *node = static_cast<const Node *>(context.node);
+    if (!node || !node->source_asset)
+        return false;
+    for (const auto &model : models_)
+        if (model.source_asset == node->source_asset->name)
+            return true;
     return false;
 }
 
