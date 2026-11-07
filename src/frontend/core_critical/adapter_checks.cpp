@@ -1001,6 +1001,85 @@ void check_terrain_surface_normals(SDL_Window *window,
   }
 }
 
+void check_sealed_environment(SDL_Window *window,
+                              sdlfe::RendererBackend backend) {
+  require(SDL_SetWindowSize(window, 32, 32) && SDL_SyncWindow(window),
+          SDL_GetError());
+  const uint8_t green[4] = {0, 255, 0, 255};
+  for (const char *mode : {"flat", "off"}) {
+    sdlfe::CoreCriticalAssets assets;
+    assets.lighting = mode;
+    auto renderer = make_check_renderer(window, backend, {}, assets);
+    renderer->set_viewport(0, 0, 32, 32);
+    auto read = [&]() {
+      std::vector<uint32_t> px;
+      int w = 0, h = 0;
+      require(renderer->read_back(&px, &w, &h),
+              "Sealed environment readback failed");
+      require(w == 32 && h == 32 && px.size() == 1024,
+              "Sealed environment size mismatch");
+      return px;
+    };
+    auto px_at = [&](const std::vector<uint32_t> &px, int x, int y) {
+      return px[y * 32 + x];
+    };
+    const platform::MissionIdentity sealed_ids[] = {{1, 2}, {1, 4}, {2, 5}};
+    for (auto id : sealed_ids) {
+      renderer->mission_changed(id);
+      renderer->clear(true, 37, 89, 143);
+      renderer->begin_scene();
+      renderer->end_scene();
+      auto px = read();
+      uint32_t expected = (mode[0] == 'f') ? 0xFF000000 : 0xFF25598F;
+      require(px_at(px, 30, 2) == expected, "sealed clear");
+      renderer->begin_scene();
+      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000);
+      auto green_handle = renderer->create_texture(1, 1, green, 4);
+      platform::DrawState ds;
+      ds.texture = green_handle;
+      quad(*renderer, 8.0f, 24.0f, 0.00015f, 0xFFFFFFFF, ds);
+      platform::DrawState hud;
+      hud.sharp = true;
+      hud.depth_write = false;
+      hud.depth_always = true;
+      quad(*renderer, 0.0f, 6.0f, 0.0f, 0xFF0000FF, hud);
+      renderer->end_scene();
+      px = read();
+      uint32_t sky_expected = (mode[0] == 'f') ? 0xFF000000 : 0xFFFF0000;
+      require(px_at(px, 30, 2) == sky_expected, "sealed sky");
+      require(px_at(px, 16, 16) == 0xFF00FF00, "terrain");
+      require(px_at(px, 2, 2) == 0xFF0000FF, "hud");
+      renderer->clear(false, 255, 0, 0);
+      renderer->begin_scene();
+      renderer->end_scene();
+      auto px2 = read();
+      require(px_at(px2, 16, 16) == 0xFF00FF00, "depth clear preserve");
+      renderer->release_texture(green_handle);
+    }
+    const platform::MissionIdentity outdoor_ids[] = {{5, 1}, {9, 1}, {}};
+    for (auto id : outdoor_ids) {
+      renderer->mission_changed(id);
+      renderer->clear(true, 37, 89, 143);
+      renderer->begin_scene();
+      renderer->end_scene();
+      auto px = read();
+      require(px_at(px, 30, 2) == 0xFF25598F, "outdoor clear");
+      renderer->begin_scene();
+      quad(*renderer, 0.0f, 32.0f, 0.0001f, 0xFFFF0000);
+      renderer->end_scene();
+      auto px2 = read();
+      require(px_at(px2, 30, 2) == 0xFFFF0000, "outdoor sky");
+    }
+    renderer->mission_changed({1, 2});
+    renderer->reset_scene_resources();
+    renderer->clear(true, 37, 89, 143);
+    renderer->begin_scene();
+    renderer->end_scene();
+    auto px = read();
+    require(px_at(px, 30, 2) == 0xFF25598F, "reset clear");
+  }
+}
+
 void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality,
                     bool materials = false) {
@@ -1882,9 +1961,11 @@ int main(int argc, char **argv) {
                     "mismatch");
       }
       check_gpu_prepared(window, backend);
-    } else if (prepared_check)
+    } else if (prepared_check) {
+      if (material_check && threaded_checks)
+        check_sealed_environment(window, backend);
       check_prepared(window, backend, quality, material_check);
-    else if (quality_check)
+    } else if (quality_check)
       check_quality(window, backend, quality);
     else
       check_scene(window, backend);

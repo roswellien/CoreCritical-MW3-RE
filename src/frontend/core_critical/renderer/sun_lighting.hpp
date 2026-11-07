@@ -30,6 +30,7 @@ struct Settings {
   // brightness, glow (colour, strength, focus), anti-sun brightness and
   // saturation, anti-sun haze brightness, horizon blend height.
   bool sky_shading{};
+  bool suppress_sky{};
   float sky_brightness{1}, glow_strength{0}, glow_focus{2.5f},
       anti_brightness{1}, anti_saturation{1}, anti_haze{1}, horizon_low{.03f},
       horizon{.28f};
