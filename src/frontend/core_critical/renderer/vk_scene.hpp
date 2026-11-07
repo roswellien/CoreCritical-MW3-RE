@@ -2489,7 +2489,8 @@ private:
   void apply_atmosphere(Scene &s, const mw34::sun::Settings &sun) {
     skyEyeValid = false;
     if (!sun.enabled || s.hud ||
-        (!sun.sky_active && !sun.haze_active && !sun.sky_shading))
+        (!sun.sky_active && !sun.haze_active && !sun.sky_shading &&
+         !sun.suppress_sky))
       return;
     // Sky shading: each far draw takes the camera of the nearest TL/model
     // receiver in submission order (the same view), else the next one after it.
@@ -2573,8 +2574,10 @@ private:
         continue;
       }
       if (d.model || d.sun_tl || d.key.blend || !d.count ||
-          (d.texture >= 0 && !sun.sky_active && !sun.sky_shading) ||
-          (d.texture < 0 && !sun.haze_active && !sun.sky_shading))
+          (d.texture >= 0 && !sun.sky_active && !sun.sky_shading &&
+           !sun.suppress_sky) ||
+          (d.texture < 0 && !sun.haze_active && !sun.sky_shading &&
+           !sun.suppress_sky))
         continue;
       const bool distant = mw34::sky::backdrop(
           s.vertices.data() + size_t(d.first) * 32, size_t(d.count) * 32,
@@ -2585,6 +2588,10 @@ private:
           d.sun_tl = view[at];
           ++haze_routed;
         }
+        continue;
+      }
+      if (sun.suppress_sky) {
+        d.count = 0;
         continue;
       }
       if (sun.sky_shading && view[at]) {

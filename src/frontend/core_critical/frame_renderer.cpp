@@ -744,7 +744,10 @@ public:
 
   void clear(bool color, uint8_t red, uint8_t green, uint8_t blue) override {
     ensure_extent();
-    append_clear(color, red, green, blue);
+    if (color && lighting_.enabled && lighting_.suppress_sky)
+      append_clear(true, 0, 0, 0);
+    else
+      append_clear(color, red, green, blue);
   }
 
   void set_fog_color(uint8_t red, uint8_t green, uint8_t blue) override {
