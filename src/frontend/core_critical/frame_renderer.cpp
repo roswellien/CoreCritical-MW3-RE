@@ -1,12 +1,25 @@
 #include "frame_renderer.hpp"
 #include "frontend/sdl/cpu_interval.h"
+#include "gamez/zclass/cls_node.h"
+#include "gamez/zimage/zimg_texture.h"
+#include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
+#include "gamez/zutil/zutl_path.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 #include "prepared_draw.hpp"
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "render_worker.hpp"
 #include "renderer/geometry/reference.hpp"
+#include "renderer/material_normals.hpp"
+#include "renderer/native_surface_identity.hpp"
+
+namespace mw34::materials {
+void set_active_surface_key(const SurfaceKey &key);
+void clear_active_surface_key();
+bool get_active_surface_key(SurfaceKey *out);
+} // namespace mw34::materials
 
 #include "frontend/sdl/sdl_child.h"
 #include "platform/wsi_surface.hpp"
@@ -174,6 +187,9 @@ struct Texture {
   const ::platform::prepared::Image *replacement{};
   unsigned source_width{}, source_height{};
   std::vector<std::uint32_t> pixels;
+  std::string name;
+  mw34::materials::SurfaceKey surface_key{};
+  std::uint64_t group_load_epoch{0};
 };
 
 std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
@@ -216,6 +232,15 @@ cc::geometry::Mode parse_geometry(const std::string &mode) {
       "--cc-geometry supports legacy, partial, gpu or cpu-reference");
 }
 
+sdlfe::CoreCriticalAssets
+sanitize_prepared_assets(sdlfe::CoreCriticalAssets assets) {
+  if (assets.models.empty()) {
+    assets.lighting = "off";
+    assets.normals.clear();
+  }
+  return assets;
+}
+
 class FrameRenderer final : public VulkanFrameRenderer {
 public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
@@ -235,7 +260,8 @@ public:
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
-        prepared_(assets), geometry_mode_(parse_geometry(assets.geometry)),
+        prepared_(sanitize_prepared_assets(assets), assets.materials),
+        geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),
         prepared_cache_enabled_(bridge_config_.prepared_cache) {
@@ -249,6 +275,11 @@ public:
     if (backend == sdlfe::RendererBackend::sdl)
       throw std::runtime_error(
           "The Core Critical factory requires a Vulkan backend");
+    // Admit catalog paths and headers before native mission callbacks start.
+    // World pixel payloads remain lazy; failures here reach the window's normal
+    // initialization error boundary instead of unwinding legacy game loaders.
+    if (lighting_.normals)
+      surface_normals_load();
     initialize_renderer();
     if (assets.render_thread) {
       worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
@@ -293,22 +324,102 @@ public:
             retired_geometry_buffers_ + renderer_->retired_model_buffers,
             gpu_prepared_vertices_,
             early_prepared_models_,
-            prepared_cpu_fallback_batches_};
+            prepared_cpu_fallback_batches_,
+            surface_normals_.cache.world_bytes,
+            surface_normals_.peak_decoded_bytes,
+            std::uint64_t(
+                std::count_if(surface_normals_.cache.pages.begin(),
+                              surface_normals_.cache.pages.end(),
+                              [](const auto &page) { return page.loaded; })),
+            binding_rejected_mismatch_,
+            native_fingerprint_evaluations_};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
 #include "prepared_gpu_adapter.inc"
+#include "renderer/surface_normals_stage.inc"
 
-  bool wants_model_context() const override { return !prepared_.empty(); }
+  int32_t surface_normal_texture(int normal_index) {
+    const auto found = surface_normal_textures_.find(normal_index);
+    if (found != surface_normal_textures_.end()) {
+      return found->second;
+    }
+    const auto &norm_img = surface_normal_image(normal_index);
+    const auto handle = create_texture(
+        int(norm_img.width), int(norm_img.height),
+        reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), 1);
+    surface_normal_textures_.emplace(normal_index, handle);
+    return handle;
+  }
+
+  std::shared_ptr<const ::platform::DeferredMaterialBinding>
+  capture_deferred_material_binding(int32_t texture) override {
+    if (!lighting_.normals || bridge_config_.native_material_sidecar.empty() ||
+        texture < 0 || std::size_t(texture) >= textures_.size())
+      return {};
+    surface_normals_load(); // Reset clears catalogs; deferred admission can be
+                            // first.
+    const auto &key = textures_[texture].surface_key;
+    const auto &cache = surface_normals_.cache;
+    if (!cache.bindings.count(key) && !cache.world_bindings.count(key))
+      return {};
+    auto receipt = std::make_shared<NativeDeferredBinding>();
+    receipt->owner = material_binding_owner_;
+    receipt->key = textures_[texture].surface_key;
+    receipt->epoch = group_load_epoch_;
+    receipt->version = textures_[texture].version;
+    receipt->texture = texture;
+    receipt->normal_index = surface_normal_index(receipt->key, true, texture);
+    return receipt;
+  }
+  void begin_deferred_material_draw(
+      std::shared_ptr<const ::platform::DeferredMaterialBinding> receipt)
+      override {
+    deferred_material_binding_ = std::move(receipt);
+  }
+  void end_deferred_material_draw() noexcept override {
+    deferred_material_binding_.reset();
+  }
+  void invalidate_material_geometry() noexcept override {
+    native_context_.fingerprint_computed = false;
+    native_context_.fingerprint.reset();
+  }
+  bool wants_material_context() const override {
+    return lighting_.normals &&
+           (!bridge_config_.native_material_sidecar.empty() ||
+            bridge_config_.trace_native_bindings);
+  }
+  bool wants_model_context() const override {
+    return !prepared_.empty() || wants_material_context();
+  }
+  void
+  begin_material_draw(const ::platform::MaterialDrawContext &context) override {
+    native_context_.material = context;
+    native_context_.material_active = true;
+  }
+  void end_material_draw() noexcept override {
+    native_context_.material = {};
+    native_context_.material_active = false;
+  }
   bool replaces_model_geometry() const override {
     return suppress_model_draws_;
   }
-  void end_model_draw() noexcept override { suppress_model_draws_ = false; }
+  void end_model_draw() noexcept override {
+    suppress_model_draws_ = false;
+    native_context_ = {};
+  }
   void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
     // into the native polygon producer that resumes after this callback.
     VisualFloatScope float_scope;
     suppress_model_draws_ = false;
+    native_context_ = {};
+    if (wants_material_context()) {
+      native_context_.node = static_cast<const zcls::Node *>(context.node);
+      native_context_.model =
+          native_context_.node ? native_context_.node->model : nullptr;
+      native_context_.epoch = group_load_epoch_;
+    }
     ensure_extent();
     const auto draws = prepared_.draw(context);
     if (!draws.replace)
@@ -327,7 +438,24 @@ public:
                        : "Core Critical Vulkan/DXGI";
   }
   void set_shape(const sdlfe::FrameShape *shape) override { shape_ = shape; }
-  void reset_scene_resources() override { reset_pending_ = true; }
+  void reset_scene_resources() override {
+    reset_pending_ = true;
+    ++group_load_epoch_;
+    for (const auto &[index, handle] : surface_normal_textures_)
+      textures_.at(handle) = {};
+    surface_normal_textures_.clear();
+    surface_normals_ = SurfaceNormalState{};
+    deferred_material_binding_.reset();
+    native_context_ = {};
+    logged_first_normal_trace_ = false;
+    if (bridge_config_.trace_native_bindings)
+      std::fprintf(stderr,
+                   "[SURFACE_EPOCH_RESET] epoch=%llu decoded_bytes=%llu "
+                   "normal_handles=%zu\n",
+                   (unsigned long long)group_load_epoch_,
+                   (unsigned long long)surface_normals_.cache.world_bytes,
+                   surface_normal_textures_.size());
+  }
 
   ~FrameRenderer() override {
     try {
@@ -418,6 +546,14 @@ public:
         static_cast<unsigned long long>(quality.anisotropic_samplers),
         static_cast<unsigned long long>(quality.mip_levels));
     const auto assets = asset_statistics();
+    if (lighting_.normals)
+      std::fprintf(
+          stderr,
+          "World normal pages: %llu decoded bytes, %llu peak decoded bytes, "
+          "%llu loaded pages (536870912-byte limit)\n",
+          (unsigned long long)assets.world_normal_decoded_bytes,
+          (unsigned long long)assets.world_normal_peak_decoded_bytes,
+          (unsigned long long)assets.world_normal_loaded_pages);
     const auto &cache = prepared_draw_cache_.statistics();
     if (cache.hits || cache.misses || cache.bypasses)
       std::fprintf(stderr,
@@ -475,6 +611,11 @@ public:
     auto &entry = textures_[handle];
     entry.width = unsigned(width);
     entry.height = unsigned(height);
+    mw34::materials::SurfaceKey active_key{};
+    if (mw34::materials::get_active_surface_key(&active_key)) {
+      entry.surface_key = active_key;
+    }
+    entry.group_load_epoch = group_load_epoch_;
     update_texture(handle, width, height, rgba);
     return handle;
   }
@@ -482,6 +623,11 @@ public:
   void update_texture(int32_t handle, int width, int height,
                       const uint8_t *rgba) override {
     auto &entry = textures_.at(handle);
+    // Refresh from the original texel producer on every upload. An arbitrary
+    // RGBA update has no authenticated 16-bit source identity and must not keep
+    // a normal binding merely because it reuses the same renderer handle.
+    mw34::materials::SurfaceKey source_key{};
+    mw34::materials::get_active_surface_key(&source_key);
     std::vector<uint32_t> replacement;
     if (entry.replacement) {
       if (!rgba || unsigned(width) != entry.source_width ||
@@ -505,14 +651,25 @@ public:
     entry.pixels.resize(std::size_t(width) * height);
     std::memcpy(entry.pixels.data(), rgba,
                 entry.pixels.size() * sizeof(std::uint32_t));
+    entry.surface_key = source_key;
+    entry.group_load_epoch = group_load_epoch_;
     entry.version = ++texture_version_;
   }
 
   int32_t create_named_texture(const char *name, int width, int height,
                                const uint8_t *rgba, uint8_t type) override {
+    mw34::materials::SurfaceKey active_key{};
+    mw34::materials::get_active_surface_key(&active_key);
     const auto *replacement = prepared_.named_texture(name);
-    if (!replacement)
-      return create_texture(width, height, rgba, type);
+    if (!replacement) {
+      int32_t handle = create_texture(width, height, rgba, type);
+      auto &entry = textures_[handle];
+      if (name)
+        entry.name = name;
+      entry.surface_key = active_key;
+      entry.group_load_epoch = group_load_epoch_;
+      return handle;
+    }
     if (!rgba || width <= 0 || height <= 0)
       throw std::runtime_error("Invalid named texture input");
     const auto pixels =
@@ -524,6 +681,10 @@ public:
     entry.replacement = replacement;
     entry.source_width = unsigned(width);
     entry.source_height = unsigned(height);
+    if (name)
+      entry.name = name;
+    entry.surface_key = active_key;
+    entry.group_load_epoch = group_load_epoch_;
     ++named_textures_;
     return handle;
   }
@@ -562,7 +723,8 @@ public:
     if (suppress_model_draws_)
       return;
     append_draw(primitive, vertices, count, state,
-                state.sharp || state.depth_always);
+                state.sharp || (state.depth_always &&
+                                !authenticated_deferred_world_draw()));
   }
 
   void clear_depth_rect(int left, int top, int right, int bottom) override {
@@ -664,6 +826,74 @@ private:
     draw.count = drawn;
     draw.texture =
         state.texture < 0 ? -1 : int(bind_texture(state.texture, state.sharp));
+    if (lighting_.enabled && state.texture >= 0) {
+      const auto &tex_entry = textures_.at(state.texture);
+      const auto key = tex_entry.surface_key;
+      const auto epoch = tex_entry.group_load_epoch;
+      const auto tex_name = tex_entry.name;
+      if (epoch == group_load_epoch_ && key.hash != 0) {
+        int norm_idx = lighting_.normals
+                           ? deferred_surface_normal_index(key, state.texture)
+                           : -1;
+        if (norm_idx >= 0) {
+          int norm_handle = surface_normal_texture(norm_idx);
+          draw.normal_texture = int(bind_texture(norm_handle, false));
+        } else {
+          draw.normal_texture = -1;
+        }
+        auto tl = std::make_shared<mw34::sun::Tl>();
+        const auto &proj = zmth::projection();
+        if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
+            viewport_[2] > 0 && viewport_[3] > 0) {
+          tl->projection = {
+              proj.near_z,
+              proj.fx_near * float(scene_.width) / float(viewport_[2]),
+              proj.fy_near * float(scene_.height) / float(viewport_[3]),
+              (proj.cx - float(viewport_[0])) * float(scene_.width) /
+                  float(viewport_[2]),
+              (proj.cy - float(viewport_[1])) * float(scene_.height) /
+                  float(viewport_[3]),
+              proj.far_z > 0 ? proj.far_z : 1000.0f};
+          const float *m = zmth::view().camera.m;
+          tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
+                              m[7], m[10], m[2], m[5], m[8], m[11]};
+        } else {
+          tl->projection = {1.0f,
+                            float(scene_.width),
+                            float(scene_.height),
+                            float(scene_.width) * .5f,
+                            float(scene_.height) * .5f,
+                            1000.0f};
+          tl->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        }
+        draw.sun_tl = std::move(tl);
+        auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
+            drawn, std::array<float, 3>{0, 0, 0});
+        draw.lit_normals = std::move(norms);
+        if (norm_idx >= 0 && !logged_first_normal_trace_) {
+          logged_first_normal_trace_ = true;
+          std::fprintf(
+              stderr,
+              "[SURFACE_NORMAL_TRACE] First authenticated surface "
+              "normal bound: "
+              "name=%s key={w=%u, h=%u, fmt=%u, hash=0x%llx} slot=%d "
+              "normal_slot=%d normal_index=%d catalog=%s "
+              "uv_transform=[1,0,0,0,1,0] sampler_address=[%d,%d] "
+              "proj=[near=%f, fx_near=%f, fy_near=%f, cx=%f, cy=%f] "
+              "viewport=[%d,%d,%d,%d] scene=[%u,%u] v0=[sx=%f, sy=%f, "
+              "sz=%f, rhw=%f, u=%f, v=%f]\n",
+              tex_name.c_str(), key.width, key.height, key.format,
+              (unsigned long long)key.hash, draw.texture, draw.normal_texture,
+              norm_idx,
+              surface_normals_.cache.authored.count(key) ? "authored" : "world",
+              state.address_u, state.address_v, proj.near_z, proj.fx_near,
+              proj.fy_near, proj.cx, proj.cy, viewport_[0], viewport_[1],
+              viewport_[2], viewport_[3], scene_.width, scene_.height,
+              vertices[0].sx, vertices[0].sy, vertices[0].sz, vertices[0].rhw,
+              vertices[0].tu, vertices[0].tv);
+        }
+      }
+    }
     const bool sharp = state.sharp && state.texture >= 0 &&
                        !textures_.at(state.texture).held_copy;
     draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
@@ -698,9 +928,24 @@ private:
       auto &previous = scene_.draws.back();
       if (!previous.model && previous.depth_only == draw.depth_only &&
           previous.texture == draw.texture &&
+          previous.normal_texture == draw.normal_texture &&
+          bool(previous.sun_tl) == bool(draw.sun_tl) &&
+          (!draw.sun_tl ||
+           (previous.sun_tl->camera_world == draw.sun_tl->camera_world &&
+            previous.sun_tl->projection == draw.sun_tl->projection)) &&
+          bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.sampler == draw.sampler &&
           previous.key.packed() == draw.key.packed() &&
           std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
+        if (previous.lit_normals && draw.lit_normals) {
+          auto merged_normals =
+              std::make_shared<std::vector<std::array<float, 3>>>(
+                  *previous.lit_normals);
+          merged_normals->insert(merged_normals->end(),
+                                 draw.lit_normals->begin(),
+                                 draw.lit_normals->end());
+          previous.lit_normals = std::move(merged_normals);
+        }
         previous.count += drawn;
         return;
       }
@@ -865,7 +1110,8 @@ private:
                               : vk::Renderer::WindowSurface{};
     renderer_ = std::make_unique<vk::Renderer>(
         vk::Renderer::ColorTarget::rgba8, std::move(source), quality_,
-        !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy,
+        !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy ||
+            lighting_.enabled,
         lighting_, geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
     texture_limit_ = renderer_->max_texture_dimension(native_window_);
@@ -1028,6 +1274,9 @@ private:
   std::map<const ::platform::prepared::Batch *,
            std::shared_ptr<const vk::ModelGeometry>>
       prepared_geometry_;
+  std::uint64_t group_load_epoch_{1};
+  std::map<int, int32_t> surface_normal_textures_;
+  bool logged_first_normal_trace_{false};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
       cpu_clipped_triangles_{}, named_textures_{};
   bool suppress_model_draws_{};

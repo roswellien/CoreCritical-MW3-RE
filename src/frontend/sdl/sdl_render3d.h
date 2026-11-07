@@ -35,8 +35,9 @@ struct PreparedNormalBinding {
   std::string chassis, lod, path;
   std::string content_id;
 };
-struct PreparedSurfaceBinding {
-  std::string chassis, lod, path, content_id;
+struct PreparedMaterialBinding {
+  std::string chassis, lod, path;
+  std::string content_id;
 };
 struct CoreCriticalAssets {
   // Shared native HUD compositor resources also work on the SDL renderer;
@@ -48,11 +49,12 @@ struct CoreCriticalAssets {
   std::string textures;
   std::vector<PreparedModelBinding> models;
   std::vector<PreparedNormalBinding> normals;
-  std::vector<PreparedSurfaceBinding> materials;
+  std::vector<PreparedMaterialBinding> materials;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool empty() const {
-    return !render_thread && geometry == "legacy" && !geometry_debug_normals && textures.empty() &&
-           models.empty() && normals.empty() && materials.empty() && lighting == "off" && sun_azimuth == "45" &&
+    return !render_thread && geometry == "legacy" && !geometry_debug_normals &&
+           textures.empty() && models.empty() && normals.empty() &&
+           materials.empty() && lighting == "off" && sun_azimuth == "45" &&
            sun_elevation == "35";
   }
 };
