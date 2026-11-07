@@ -1209,6 +1209,12 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
         require(
             profile_changed,
             "Live mission profile fixture produced no visible lighting change");
+      evolving->mission_changed({0, 1});
+      const auto known_before_reset = frame(evolving.get());
+      if (variant != 2)
+        require(
+            known_before_reset != configured_pixels,
+            "Reset control must start from distinct known-profile lighting");
       frame(evolving.get(), false);
       evolving->reset_scene_resources();
       require(frame(evolving.get()) == configured_pixels,
