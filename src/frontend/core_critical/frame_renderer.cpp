@@ -9,6 +9,8 @@
 #include "renderer/geometry/reference.hpp"
 
 #include "frontend/sdl/sdl_child.h"
+#include "platform/wsi_surface.hpp"
+#include "platform/wsi_win32_dxgi.hpp"
 #include "vk_scene.hpp"
 #include <SDL3/SDL_vulkan.h>
 
@@ -31,9 +33,9 @@ namespace cc_mw3_re {
 namespace {
 
 namespace vk = mw34::vkscene;
-using platform::DrawState;
-using platform::Primitive;
-using platform::TLVertex;
+using ::platform::DrawState;
+using ::platform::Primitive;
+using ::platform::TLVertex;
 
 // Wall durations on the calling CPU thread, including waits inside the measured
 // operation. Disabled intervals do not read a clock or change rendering inputs.
@@ -102,27 +104,62 @@ mw34::sun::Settings parse_lighting(const sdlfe::CoreCriticalAssets &options) {
   return result;
 }
 
-vk::Renderer::WindowSurface sdl_surface(SDL_Window *window) {
-  if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_VULKAN))
-    throw std::runtime_error(
-        "SDL Vulkan surface: window requires SDL_WINDOW_VULKAN");
-  Uint32 count = 0;
-  const auto *extensions = SDL_Vulkan_GetInstanceExtensions(&count);
-  if (!extensions)
-    throw std::runtime_error(std::string("SDL Vulkan extensions: ") +
-                             SDL_GetError());
+vk::Renderer::WindowSurface
+sdl_surface(SDL_Window *window,
+            const std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
+                &tracker) {
   vk::Renderer::WindowSurface source;
-  source.extensions.assign(extensions, extensions + count);
+  source.extensions = cc_mw3_re::platform::get_instance_extensions();
   source.create = [window](VkInstance instance) {
-    VkSurfaceKHR surface{};
-    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
-      throw std::runtime_error(std::string("SDL Vulkan surface: ") +
-                               SDL_GetError());
-    return surface;
+    return cc_mw3_re::platform::create_surface(window, instance);
   };
   source.destroy = [](VkInstance instance, VkSurfaceKHR surface) {
-    SDL_Vulkan_DestroySurface(instance, surface, nullptr);
+    cc_mw3_re::platform::destroy_surface(instance, surface);
   };
+  source.is_visible = [tracker](cc_mw3_re::platform::NativeWindowHandle w) {
+    if (!w)
+      return false;
+    if (tracker) {
+      if (tracker->is_owner_thread()) {
+        tracker->sample_owner();
+        return tracker->current_state().visible;
+      }
+      return tracker->worker_visible();
+    }
+    return true;
+  };
+  source.get_drawable_size =
+      [tracker](cc_mw3_re::platform::NativeWindowHandle w, long *width,
+                long *height) {
+        if (!w) {
+          if (width)
+            *width = 0;
+          if (height)
+            *height = 0;
+          return;
+        }
+        if (tracker) {
+          if (tracker->is_owner_thread()) {
+            tracker->sample_owner();
+            const auto &state = tracker->current_state();
+            if (width)
+              *width = state.drawable_width;
+            if (height)
+              *height = state.drawable_height;
+          } else {
+            const auto state = tracker->worker_state();
+            if (width)
+              *width = state.drawable_width;
+            if (height)
+              *height = state.drawable_height;
+          }
+          return;
+        }
+        if (width)
+          *width = 0;
+        if (height)
+          *height = 0;
+      };
   return source;
 }
 
@@ -134,12 +171,12 @@ struct Texture {
   unsigned scene_index = no_binding;
   unsigned sharp_index = no_binding;
   bool held_copy{};
-  const platform::prepared::Image *replacement{};
+  const ::platform::prepared::Image *replacement{};
   unsigned source_width{}, source_height{};
   std::vector<std::uint32_t> pixels;
 };
 
-std::vector<uint32_t> image_pixels(const platform::prepared::Image &image,
+std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
                                    const uint8_t *source = nullptr,
                                    unsigned source_width = 0,
                                    unsigned source_height = 0) {
@@ -184,9 +221,18 @@ public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
                          const sdlfe::CoreCriticalQuality &quality,
                          const sdlfe::CoreCriticalAssets &assets)
-      : window_(window), hwnd_(static_cast<HWND>(SDL_GetPointerProperty(
-                             SDL_GetWindowProperties(window),
-                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))),
+      : window_(window),
+        window_state_tracker_(
+            backend == sdlfe::RendererBackend::core_critical_wsi
+                ? std::make_shared<cc_mw3_re::platform::SdlWindowStateTracker>(
+                      window)
+                : nullptr),
+        native_window_(
+            backend == sdlfe::RendererBackend::core_critical_wsi
+                ? cc_mw3_re::platform::get_window_native_handle(window)
+                : static_cast<cc_mw3_re::platform::NativeWindowHandle>(
+                      cc_mw3_re::platform::get_window_hwnd(window))),
+        hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         prepared_(assets), geometry_mode_(parse_geometry(assets.geometry)),
@@ -196,8 +242,9 @@ public:
     if (geometry_debug_ && geometry_mode_ == cc::geometry::Mode::legacy)
       throw std::runtime_error(
           "Geometry normal debug requires an explicit geometry mode");
-    if (!hwnd_) {
-      throw std::runtime_error("SDL window has no Win32 handle");
+    if (!native_wsi_ && !hwnd_) {
+      throw std::runtime_error(
+          "Direct3D presentation requires a Win32 window handle");
     }
     if (backend == sdlfe::RendererBackend::sdl)
       throw std::runtime_error(
@@ -207,9 +254,7 @@ public:
       worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
         // Process only synchronous window messages, without consuming
         // input or reentering the game. DXGI may send one while waiting.
-        MSG message{};
-        ::PeekMessageW(&message, nullptr, 0, 0,
-                       PM_NOREMOVE | PM_QS_SENDMESSAGE);
+        cc_mw3_re::platform::pump_presentation_messages();
       });
       std::fprintf(stderr,
                    "Core Critical render worker: enabled (8 jobs, 128 MiB)\n");
@@ -259,7 +304,7 @@ public:
     return suppress_model_draws_;
   }
   void end_model_draw() noexcept override { suppress_model_draws_ = false; }
-  void begin_model_draw(const platform::ModelDrawContext &context) override {
+  void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
     // into the native polygon producer that resumes after this callback.
     VisualFloatScope float_scope;
@@ -397,6 +442,7 @@ public:
           "Prepared materials: %llu per-pixel draws, %llu normal-map draws\n",
           static_cast<unsigned long long>(assets.lit_draws),
           static_cast<unsigned long long>(assets.normal_draws));
+    cc_mw3_re::platform::unregister_window_handle(native_window_);
   }
 
   void capture_next(const char *path) override { capture_path_ = path; }
@@ -537,7 +583,7 @@ public:
   }
 
 private:
-  int32_t prepared_normal(const platform::prepared::NormalImage &image) {
+  int32_t prepared_normal(const ::platform::prepared::NormalImage &image) {
     const auto found = prepared_normals_.find(&image);
     if (found != prepared_normals_.end())
       return found->second;
@@ -746,7 +792,7 @@ private:
 #include "frame_presentation.inc"
 
 private:
-  int32_t prepared_texture(const platform::prepared::Image &image) {
+  int32_t prepared_texture(const ::platform::prepared::Image &image) {
     const auto found = prepared_textures_.find(&image);
     if (found != prepared_textures_.end())
       return found->second;
@@ -759,7 +805,7 @@ private:
   }
 
   std::shared_ptr<const vk::ModelGeometry>
-  prepared_geometry(const platform::prepared::Batch &batch) {
+  prepared_geometry(const ::platform::prepared::Batch &batch) {
     const auto found = prepared_geometry_.find(&batch);
     if (found != prepared_geometry_.end())
       return found->second;
@@ -783,7 +829,7 @@ private:
   }
 
   void emit_prepared(const PreparedBatchDraw &source,
-                     const platform::ModelDrawContext &context) {
+                     const ::platform::ModelDrawContext &context) {
     CpuInterval interval(cpu_profile_ ? &prepared_emit_ticks_ : nullptr);
     if (geometry_mode_ != cc::geometry::Mode::legacy &&
         source.deformed.empty()) {
@@ -815,14 +861,14 @@ private:
     }
   }
   void initialize_renderer() {
-    auto source =
-        native_wsi_ ? sdl_surface(window_) : vk::Renderer::WindowSurface{};
+    auto source = native_wsi_ ? sdl_surface(window_, window_state_tracker_)
+                              : vk::Renderer::WindowSurface{};
     renderer_ = std::make_unique<vk::Renderer>(
         vk::Renderer::ColorTarget::rgba8, std::move(source), quality_,
         !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy,
         lighting_, geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
-    texture_limit_ = renderer_->max_texture_dimension(hwnd_);
+    texture_limit_ = renderer_->max_texture_dimension(native_window_);
     if (!native_wsi_ && !renderer_->dxgi_presenting()) {
       throw std::runtime_error("Core Critical DXGI transport is unavailable");
     }
@@ -853,7 +899,13 @@ private:
       return;
     }
     int width = 0, height = 0;
-    SDL_GetWindowSizeInPixels(window_, &width, &height);
+    if (native_wsi_ && window_state_tracker_) {
+      const auto state = window_state_tracker_->sample_and_get();
+      width = state.drawable_width;
+      height = state.drawable_height;
+    } else {
+      SDL_GetWindowSizeInPixels(window_, &width, &height);
+    }
     if (width <= 0 || height <= 0) {
       width = resident_width_ ? int(resident_width_) : 640;
       height = resident_height_ ? int(resident_height_) : 480;
@@ -935,6 +987,9 @@ private:
   }
 
   SDL_Window *window_;
+  std::shared_ptr<cc_mw3_re::platform::SdlWindowStateTracker>
+      window_state_tracker_;
+  cc_mw3_re::platform::NativeWindowHandle native_window_;
   HWND hwnd_;
   const bool native_wsi_;
   const vk::Renderer::Quality quality_;
@@ -967,9 +1022,10 @@ private:
   std::atomic<std::uint64_t> presented_frames_{}, resident_draws_{};
   std::uint64_t retired_geometry_buffers_{};
   QualityStatistics retired_quality_{};
-  std::map<const platform::prepared::Image *, int32_t> prepared_textures_;
-  std::map<const platform::prepared::NormalImage *, int32_t> prepared_normals_;
-  std::map<const platform::prepared::Batch *,
+  std::map<const ::platform::prepared::Image *, int32_t> prepared_textures_;
+  std::map<const ::platform::prepared::NormalImage *, int32_t>
+      prepared_normals_;
+  std::map<const ::platform::prepared::Batch *,
            std::shared_ptr<const vk::ModelGeometry>>
       prepared_geometry_;
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
@@ -979,7 +1035,7 @@ private:
   std::uint64_t retired_lit_draws_{}, retired_normal_draws_{};
   unsigned texture_limit_{}, resident_width_{}, resident_height_{};
   int held_width_{}, held_height_{};
-  LONG present_window_width_{}, present_window_height_{};
+  int32_t present_window_width_{}, present_window_height_{};
   bool window_bound_{}, presented_{}, reported_resident_{}, reset_pending_{};
   const bool cpu_profile_ = cpu_profile_requested();
   std::uint64_t render_ticks_{}, transport_ticks_{};

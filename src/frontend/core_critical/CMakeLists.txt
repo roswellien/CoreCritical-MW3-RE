@@ -6,18 +6,20 @@ add_library(mw3ccvulkan OBJECT frame_renderer.cpp prepared_models.cpp)
 target_compile_features(mw3ccvulkan PRIVATE cxx_std_20)
 target_compile_definitions(mw3ccvulkan PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_include_directories(mw3ccvulkan PRIVATE
-  "${PROJECT_SOURCE_DIR}/src" "${MW3_VULKAN_HEADERS}" renderer "${CMAKE_CURRENT_BINARY_DIR}")
+  "${PROJECT_SOURCE_DIR}/src" "${MW3_VULKAN_HEADERS}" . platform renderer "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(mw3ccvulkan PRIVATE SDL3::SDL3 user32 gdi32 dxgi d3d11)
 if(MSVC)
   target_compile_options(mw3ccvulkan PRIVATE /EHsc)
 endif()
 
+set(MW3_CC_SHADER_HEADERS "")
 function(mw3_cc_shader name source)
   set(shader "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${source}")
   set(header "${CMAKE_CURRENT_BINARY_DIR}/${name}.h")
   add_custom_command(OUTPUT "${header}"
     COMMAND "${GLSLANG}" -V --quiet --vn "${name}_spv" ${ARGN} -o "${header}" "${shader}"
     DEPENDS "${shader}" VERBATIM)
+  set(MW3_CC_SHADER_HEADERS ${MW3_CC_SHADER_HEADERS} "${header}" PARENT_SCOPE)
   target_sources(mw3ccvulkan PRIVATE "${header}")
 endfunction()
 
@@ -35,10 +37,28 @@ mw3_cc_shader(sun_tl_vert sun_tl.vert)
 mw3_cc_shader(sun_world_vert sun_world.vert)
 mw3_cc_shader(world_coverage_frag world_coverage.frag)
 mw3_cc_shader(world_scene_vert world_scene.vert)
+mw3_cc_shader(native_geometry_vert ../renderer/geometry/shaders/native_geometry.vert)
 
-add_executable(mw3ccvulkan_checks adapter_checks.cpp)
-target_link_libraries(mw3ccvulkan_checks PRIVATE mw3sdl)
-target_include_directories(mw3ccvulkan_checks PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" renderer "${CMAKE_CURRENT_BINARY_DIR}")
+add_custom_target(mw3_cc_shaders DEPENDS ${MW3_CC_SHADER_HEADERS})
+add_dependencies(mw3ccvulkan mw3_cc_shaders)
+
+add_library(mw3platform_nonwin_check OBJECT platform_nonwin_contract.cpp)
+target_compile_features(mw3platform_nonwin_check PRIVATE cxx_std_20)
+target_compile_definitions(mw3platform_nonwin_check PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_include_directories(mw3platform_nonwin_check PRIVATE
+  "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" "${MW3_VULKAN_HEADERS}" . platform renderer "${CMAKE_CURRENT_BINARY_DIR}")
+if(MSVC)
+  target_compile_options(mw3platform_nonwin_check PRIVATE /EHsc)
+endif()
+add_dependencies(mw3platform_nonwin_check mw3_cc_shaders)
+target_sources(mw3platform_nonwin_check PRIVATE ${MW3_CC_SHADER_HEADERS})
+
+add_executable(mw3ccvulkan_checks adapter_checks.cpp platform_portable_contract.cpp)
+
+target_compile_definitions(mw3ccvulkan_checks PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(mw3platform_nonwin_check PRIVATE SDL3::SDL3)
+target_link_libraries(mw3ccvulkan_checks PRIVATE mw3sdl mw3platform_nonwin_check)
+target_include_directories(mw3ccvulkan_checks PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}" "${MW3_VULKAN_HEADERS}" . platform renderer "${CMAKE_CURRENT_BINARY_DIR}")
 if(MSVC)
   target_compile_options(mw3ccvulkan_checks PRIVATE /EHsc)
 endif()
@@ -76,8 +96,6 @@ add_test(NAME mw3ccvulkan_material_wsi COMMAND mw3ccvulkan_checks --wsi --materi
 add_test(NAME mw3ccvulkan_material_dxgi COMMAND mw3ccvulkan_checks --materials)
 add_test(NAME mw3ccvulkan_material_fxaa COMMAND mw3ccvulkan_checks --wsi --materials --quality fxaa)
 add_test(NAME mw3ccvulkan_material_ssaa COMMAND mw3ccvulkan_checks --wsi --materials --quality ssaa4)
-
-mw3_cc_shader(native_geometry_vert ../renderer/geometry/shaders/native_geometry.vert)
 
 add_test(NAME mw3ccvulkan_thread_dxgi COMMAND mw3ccvulkan_checks --render-thread)
 add_test(NAME mw3ccvulkan_thread_wsi COMMAND mw3ccvulkan_checks --render-thread --wsi)

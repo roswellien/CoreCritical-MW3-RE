@@ -22,7 +22,6 @@
 #include "d3d_scene_frag.h"
 #include "d3d_scene_vert.h"
 #include "draw_emissions.hpp"
-#include "dxgi_present.hpp"
 #include "effect_lighting_settings.hpp"
 
 #include "effect_scene_frag.h"
@@ -37,6 +36,9 @@
 #include "launcher_display.hpp"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
+#include "platform/vk_loader.hpp"
+#include "platform/wsi_surface.hpp"
+#include "platform/wsi_win32_dxgi.hpp"
 #include "renderer_bridge_config.hpp"
 #include "status_model_fit.hpp"
 #include "sun_lighting.hpp"
@@ -67,8 +69,6 @@
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan_core.h>
-#include <vulkan/vulkan_win32.h>
-#include <windows.h>
 
 namespace mw34::vkscene {
 // rgba8888: host-composed straight-alpha RGBA (GPU HUD images: RGB565 colour
@@ -206,6 +206,9 @@ public:
     std::vector<const char *> extensions;
     std::function<VkSurfaceKHR(VkInstance)> create;
     std::function<void(VkInstance, VkSurfaceKHR)> destroy;
+    std::function<bool(cc_mw3_re::platform::NativeWindowHandle)> is_visible;
+    std::function<void(cc_mw3_re::platform::NativeWindowHandle, long *, long *)>
+        get_drawable_size;
   };
   struct Quality {
     unsigned samples_x, samples_y, anisotropy;
@@ -275,9 +278,13 @@ public:
   // Presents a 16-bit RGB565 frame (rows of `pitch` bytes) to the window. False
   // when this device cannot present to the window (no surface/swapchain
   // support); the caller then uses its other presenter.
-  bool present(HWND hwnd, const std::uint8_t *pixels, unsigned w, unsigned h,
+  bool present(cc_mw3_re::platform::NativeWindowHandle hwnd,
+               const std::uint8_t *pixels, unsigned w, unsigned h,
                unsigned pitch, bool wide_world = false, bool rgba32 = false) {
-    if (!::IsWindowVisible(hwnd))
+    const bool visible = surface_source.is_visible
+                             ? surface_source.is_visible(hwnd)
+                             : cc_mw3_re::platform::is_window_visible(hwnd);
+    if (!visible)
       return true; // hidden: nothing to present
     // SDL owns the native WSI surface. The legacy presenter uses a disabled,
     // hit-test-transparent child covering the game window's client area.
@@ -287,8 +294,10 @@ public:
         dropSurface();
       }
       if (child)
-        ::DestroyWindow(child);
-      child = surface_source.create ? nullptr : makeChild(hwnd);
+        cc_mw3_re::platform::destroy_present_child(child);
+      child = surface_source.create
+                  ? nullptr
+                  : cc_mw3_re::platform::make_present_child(hwnd);
       presentParent = hwnd;
       if (!child && bridge_config.dxgi_present)
         throw std::runtime_error(
@@ -315,13 +324,7 @@ public:
       presentInFlight = false;
     }
     if (child) {
-      RECT rc{};
-      ::GetClientRect(hwnd, &rc);
-      RECT cc{};
-      ::GetClientRect(child, &cc);
-      if (cc.right != rc.right || cc.bottom != rc.bottom)
-        ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                       SWP_NOZORDER | SWP_NOACTIVATE);
+      cc_mw3_re::platform::sync_present_child_size(hwnd, child);
     }
     if (!swapchainReady())
       return true; // minimized: nothing to present
@@ -410,8 +413,8 @@ public:
     blit.dstOffsets[0] = {destination.left, destination.top, 0};
     blit.dstOffsets[1] = {destination.right, destination.bottom, 1};
     if (destination.left || destination.top ||
-        destination.right != LONG(swapExtent.width) ||
-        destination.bottom != LONG(swapExtent.height)) {
+        destination.right != int32_t(swapExtent.width) ||
+        destination.bottom != int32_t(swapExtent.height)) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
       f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -497,20 +500,18 @@ public:
   // windows, where no image needs to be presented. Call on the window owner,
   // with submissions drained, before asynchronous presentation. SetWindowPos
   // can synchronously message the owning thread.
-  void resize_present_window(HWND hwnd) {
+  void resize_present_window(cc_mw3_re::platform::NativeWindowHandle hwnd) {
     if (child) {
-      RECT rc{}, cc{};
-      ::GetClientRect(hwnd, &rc);
-      ::GetClientRect(child, &cc);
-      if (cc.right != rc.right || cc.bottom != rc.bottom)
-        ::SetWindowPos(child, nullptr, 0, 0, rc.right, rc.bottom,
-                       SWP_NOZORDER | SWP_NOACTIVATE);
+      cc_mw3_re::platform::sync_present_child_size(hwnd, child);
     }
   }
-  bool present_resident(HWND hwnd, unsigned w, unsigned h,
-                        bool manage_window = true) {
+  bool present_resident(cc_mw3_re::platform::NativeWindowHandle hwnd,
+                        unsigned w, unsigned h, bool manage_window = true) {
     finish_world();
-    if (!::IsWindowVisible(hwnd))
+    const bool visible = surface_source.is_visible
+                             ? surface_source.is_visible(hwnd)
+                             : cc_mw3_re::platform::is_window_visible(hwnd);
+    if (!visible)
       return true;
     if (hwnd != presentParent || (!child && !surface_source.create) ||
         !presentable || (!windowSurface && !dxgi.active()) ||
@@ -593,8 +594,8 @@ public:
     const int dw = destination.right - destination.left;
     const int dh = destination.bottom - destination.top;
     if (destination.left || destination.top ||
-        destination.right != LONG(swapExtent.width) ||
-        destination.bottom != LONG(swapExtent.height)) {
+        destination.right != int32_t(swapExtent.width) ||
+        destination.bottom != int32_t(swapExtent.height)) {
       const VkClearColorValue black{};
       const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
       f.vkCmdClearColorImage(presentCmd, swap_target,
@@ -972,15 +973,20 @@ public:
   std::uint64_t emission_draw_records{}, emission_payloads{};
   // Query the actual scene/presenter device, avoiding a throwaway render device
   // when enhanced texture banks need dimensions beyond the original 256 cap.
-  unsigned max_texture_dimension(HWND window) {
+  unsigned
+  max_texture_dimension(cc_mw3_re::platform::NativeWindowHandle window) {
     // The explicit bridge selects by adapter identity and needs no WSI window.
     if (!device && bridge_config.dxgi_present)
       init();
     if (!device) {
       // Capability queries can precede the first Flip. Select against the
       // actual window now, before texture banks bind us to an adapter.
-      if (::IsWindow(window)) {
-        child = surface_source.create ? nullptr : makeChild(window);
+      if (surface_source.create
+              ? (window != nullptr)
+              : cc_mw3_re::platform::is_window_valid(window)) {
+        child = surface_source.create
+                    ? nullptr
+                    : cc_mw3_re::platform::make_present_child(window);
         if (!child && !surface_source.create)
           throw std::runtime_error(
               "Cannot create Vulkan capability-query window");
@@ -2020,22 +2026,17 @@ private:
   // adapter supports, without creating a device before presentation can choose.
   static unsigned unbound_texture_dimension() {
     struct Probe {
-      HMODULE library{};
+      cc_mw3_re::platform::VulkanLoader loader;
       VkInstance instance{};
       PFN_vkDestroyInstance destroy{};
       ~Probe() {
         if (instance && destroy)
           destroy(instance, nullptr);
-        if (library)
-          ::FreeLibrary(library);
       }
     } probe;
-    probe.library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr,
-                                     LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!probe.library)
+    if (!probe.loader.load())
       throw std::runtime_error("Vulkan capability loader unavailable");
-    const auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
-        ::GetProcAddress(probe.library, "vkGetInstanceProcAddr"));
+    const auto get = probe.loader.get_instance_proc_addr();
     if (!get)
       throw std::runtime_error("Vulkan capability entry point unavailable");
     const auto create = reinterpret_cast<PFN_vkCreateInstance>(
@@ -2100,7 +2101,12 @@ private:
     struct Fns {
 #define MW34_VK_FNS(X) X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceFeatures) \
     X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties) X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkEnumerateDeviceExtensionProperties)
-#define MW34_VK_WSI_FNS(X) X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
+#if defined(_WIN32)
+#define MW34_VK_WIN32_WSI_FNS(X) X(vkCreateWin32SurfaceKHR)
+#else
+#define MW34_VK_WIN32_WSI_FNS(X)
+#endif
+#define MW34_VK_WSI_FNS(X) MW34_VK_WIN32_WSI_FNS(X) X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
     X(vkGetPhysicalDeviceSurfaceFormatsKHR) X(vkGetPhysicalDeviceSurfacePresentModesKHR)
 #define MW34_VK_SWAP_FNS(X) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) X(vkAcquireNextImageKHR) X(vkQueuePresentKHR) \
     X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage) X(vkCmdClearColorImage)
@@ -2142,7 +2148,7 @@ private:
     std::uint64_t hash{};
     bool valid{};
   };
-  void *library{};
+  cc_mw3_re::platform::VulkanLoader loader;
   VkInstance instance{};
   VkPhysicalDevice gpu{};
   VkPhysicalDeviceMemoryProperties memory{};
@@ -2719,7 +2725,8 @@ private:
   VkFence fence{};
   // presentation
   bool presentable{};
-  HWND presentWindow{}, presentParent{}, child{};
+  cc_mw3_re::platform::NativeWindowHandle presentWindow{}, presentParent{},
+      child{};
   VkSurfaceKHR windowSurface{};
   VkSwapchainKHR swapchain{};
   std::vector<VkImage> swapImages;
@@ -2744,7 +2751,7 @@ private:
   // actual window surface before selecting a graphics queue; a headless render
   // does not. Requested quality features fail visibly if the device lacks their
   // contracts.
-  void init(HWND forPresent = nullptr) {
+  void init(cc_mw3_re::platform::NativeWindowHandle forPresent = nullptr) {
     const bool bridge_requested = bridge_config.dxgi_present;
     if (surface_source.create && bridge_requested)
       throw std::runtime_error(
@@ -2752,13 +2759,10 @@ private:
     if (bridge_requested && exclusiveRequested())
       throw std::runtime_error(
           "DXGI presentation bridge requires windowed or borderless mode");
-    library = ::LoadLibraryExW(L"vulkan-1.dll", nullptr,
-                               LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!library)
+    if (!loader.load())
       throw std::runtime_error(
           "Vulkan scene renderer: system Vulkan loader unavailable");
-    auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(::GetProcAddress(
-        static_cast<HMODULE>(library), "vkGetInstanceProcAddr"));
+    auto get = loader.get_instance_proc_addr();
     if (!get)
       throw std::runtime_error(
           "Vulkan scene renderer: vkGetInstanceProcAddr unavailable");
@@ -2795,10 +2799,11 @@ private:
             return true;
         return false;
       };
-      if (has(VK_KHR_SURFACE_EXTENSION_NAME) &&
-          has(VK_KHR_WIN32_SURFACE_EXTENSION_NAME))
-        instanceExtensions = {VK_KHR_SURFACE_EXTENSION_NAME,
-                              VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+      const char *plat_surface_ext =
+          cc_mw3_re::platform::get_platform_surface_extension_name();
+      if (plat_surface_ext && has(VK_KHR_SURFACE_EXTENSION_NAME) &&
+          has(plat_surface_ext))
+        instanceExtensions = {VK_KHR_SURFACE_EXTENSION_NAME, plat_surface_ext};
       if (exclusiveRequested()) {
         if (!has(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) ||
             !has(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
@@ -2829,15 +2834,13 @@ private:
         throw std::runtime_error("SDL did not create a Vulkan window surface");
       probe = windowSurface;
       presentWindow = forPresent;
-    } else if (!bridge_requested && forPresent && !instanceExtensions.empty() &&
-               f.vkCreateWin32SurfaceKHR) {
-      VkWin32SurfaceCreateInfoKHR ci{};
-      ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-      ci.hinstance = ::GetModuleHandleW(nullptr);
-      ci.hwnd = forPresent;
-      if (f.vkCreateWin32SurfaceKHR(instance, &ci, nullptr, &probe) !=
-          VK_SUCCESS)
-        probe = {};
+    } else if (!bridge_requested && forPresent && !instanceExtensions.empty()) {
+#if defined(_WIN32)
+      if (f.vkCreateWin32SurfaceKHR) {
+        probe = cc_mw3_re::platform::create_win32_surface(
+            instance, forPresent, f.vkCreateWin32SurfaceKHR);
+      }
+#endif
     }
     unsigned count = 0;
     check(f.vkEnumeratePhysicalDevices(instance, &count, nullptr),
@@ -2987,13 +2990,17 @@ private:
         f.vkEnumerateDeviceExtensionProperties(gpu, nullptr, &n, props.data());
       }
       for (const auto &p : props) {
-        if (!std::strcmp(p.extensionName, swapExt))
+        if (!std::strcmp(p.extensionName, swapExt)) {
+          bool native_surface_supported = false;
+#if defined(_WIN32)
+          native_surface_supported = (f.vkCreateWin32SurfaceKHR != nullptr);
+#endif
           presentable = !instanceExtensions.empty() &&
-                        (surface_source.create || f.vkCreateWin32SurfaceKHR);
+                        (surface_source.create || native_surface_supported);
+        }
         if (exclusiveRequested() &&
-            !std::strcmp(p.extensionName,
-                         VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME))
-          exclusiveDevice = true;
+            exclusive_fullscreen_.is_extension(p.extensionName))
+          exclusive_fullscreen_.set_device_exclusive(true);
       }
       if (bridge_requested) {
         for (const auto *required :
@@ -3008,14 +3015,14 @@ private:
           deviceExtensions.push_back(required);
         }
       }
-      if (exclusiveRequested() && !exclusiveDevice)
+      if (exclusiveRequested() && !exclusive_fullscreen_.is_device_exclusive())
         throw std::runtime_error(
             "GPU does not support Vulkan exclusive fullscreen");
     }
     if (presentable) {
       deviceExtensions.push_back(swapExt);
-      if (exclusiveDevice)
-        deviceExtensions.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
+      if (exclusive_fullscreen_.is_device_exclusive())
+        deviceExtensions.push_back(exclusive_fullscreen_.extension_name());
     }
     dci.enabledExtensionCount = unsigned(deviceExtensions.size());
     dci.ppEnabledExtensionNames = deviceExtensions.data();
@@ -3025,21 +3032,9 @@ private:
   if (!f.n)                                                                    \
     throw std::runtime_error("Vulkan scene renderer: " #n " missing");
     MW34_VK_DEV_FNS(MW34_VK_DLOAD)
-    if (exclusiveDevice) {
-      surfaceCaps2 =
-          reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR>(
-              get(instance, "vkGetPhysicalDeviceSurfaceCapabilities2KHR"));
-      acquireExclusive =
-          reinterpret_cast<PFN_vkAcquireFullScreenExclusiveModeEXT>(
-              f.vkGetDeviceProcAddr(device,
-                                    "vkAcquireFullScreenExclusiveModeEXT"));
-      releaseExclusive =
-          reinterpret_cast<PFN_vkReleaseFullScreenExclusiveModeEXT>(
-              f.vkGetDeviceProcAddr(device,
-                                    "vkReleaseFullScreenExclusiveModeEXT"));
-      if (!surfaceCaps2 || !acquireExclusive || !releaseExclusive)
-        throw std::runtime_error(
-            "Vulkan exclusive fullscreen entry points are missing");
+    if (exclusive_fullscreen_.is_device_exclusive()) {
+      exclusive_fullscreen_.init_device(instance, device, get,
+                                        f.vkGetDeviceProcAddr);
     }
     // Blits are core rendering commands too (mips, FXAA and scaled targets),
     // even when this device does not have a window surface.
@@ -4108,34 +4103,8 @@ private:
     f.vkCmdCopyImageToBuffer(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                              buf, 1, &c);
   }
-  // The child owns presentation pixels while input remains with the game
-  // window. Suppress background erasure to avoid flashes between presented
-  // images.
-  static LRESULT CALLBACK childProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (m == WM_NCHITTEST)
-      return HTTRANSPARENT;
-    if (m == WM_ERASEBKGND)
-      return 1;
-    return ::DefWindowProcW(h, m, w, l);
-  }
-  static HWND makeChild(HWND parent) {
-    static const ATOM cls = [] {
-      WNDCLASSW wc{};
-      wc.lpfnWndProc = childProc;
-      wc.hInstance = ::GetModuleHandleW(nullptr);
-      wc.lpszClassName = L"MW34VulkanPresent";
-      return ::RegisterClassW(&wc);
-    }();
-    if (!cls)
-      return nullptr;
-    RECT rc{};
-    ::GetClientRect(parent, &rc);
-    return ::CreateWindowExW(
-        WS_EX_NOPARENTNOTIFY, L"MW34VulkanPresent", L"",
-        WS_CHILD | WS_VISIBLE | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0, rc.right,
-        rc.bottom, parent, nullptr, ::GetModuleHandleW(nullptr), nullptr);
-  }
-  bool surface(HWND hwnd) {
+
+  bool surface(cc_mw3_re::platform::NativeWindowHandle hwnd) {
     if (dxgi.active()) {
       presentWindow = hwnd;
       return true;
@@ -4145,11 +4114,14 @@ private:
       presentWindow = hwnd;
       return windowSurface != VK_NULL_HANDLE;
     }
-    VkWin32SurfaceCreateInfoKHR ci{};
-    ci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    ci.hinstance = ::GetModuleHandleW(nullptr);
-    ci.hwnd = hwnd;
-    check(f.vkCreateWin32SurfaceKHR(instance, &ci, nullptr, &windowSurface),
+#if defined(_WIN32)
+    windowSurface = cc_mw3_re::platform::create_win32_surface(
+        instance, hwnd, f.vkCreateWin32SurfaceKHR);
+#else
+    windowSurface = VK_NULL_HANDLE;
+#endif
+    check(windowSurface != VK_NULL_HANDLE ? VK_SUCCESS
+                                          : VK_ERROR_INITIALIZATION_FAILED,
           "window surface");
     VkBool32 ok = VK_FALSE;
     check(
@@ -4180,10 +4152,7 @@ private:
     if (!swapchain)
       return;
     f.vkDeviceWaitIdle(device);
-    if (exclusiveHeld) {
-      releaseExclusive(device, swapchain);
-      exclusiveHeld = false;
-    }
+    exclusive_fullscreen_.release(device, swapchain);
     f.vkDestroySwapchainKHR(device, swapchain, nullptr);
     for (auto sem : swapRendered)
       f.vkDestroySemaphore(device, sem, nullptr);
@@ -4196,37 +4165,51 @@ private:
   // semaphores.
   bool swapchainReady() {
     if (dxgi.active()) {
-      RECT client{};
-      ::GetClientRect(child, &client);
-      if (::IsIconic(presentParent) || client.right <= 0 || client.bottom <= 0)
+      long cw = 0, ch = 0;
+      if (surface_source.get_drawable_size) {
+        surface_source.get_drawable_size(presentWindow, &cw, &ch);
+      } else {
+        cc_mw3_re::platform::get_window_client_rect(child, &cw, &ch);
+      }
+      if ((!surface_source.create &&
+           cc_mw3_re::platform::is_window_iconic(presentParent)) ||
+          cw <= 0 || ch <= 0)
         return false;
-      dxgi.prepare(child, unsigned(client.right), unsigned(client.bottom));
-      swapExtent = {unsigned(client.right), unsigned(client.bottom)};
+      dxgi.prepare(static_cast<HWND>(child), unsigned(cw), unsigned(ch));
+      swapExtent = {unsigned(cw), unsigned(ch)};
       return true;
     }
     VkSurfaceCapabilitiesKHR caps{};
     if (const VkResult r = f.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
             gpu, windowSurface, &caps);
         r != VK_SUCCESS) {
-      RECT rc{};
-      ::GetClientRect(presentWindow, &rc);
+      long rw = 0, rh = 0;
+      cc_mw3_re::platform::get_window_client_rect(presentWindow, &rw, &rh);
       throw std::runtime_error(
           "Vulkan presenter: surface capabilities failed (" +
           std::to_string(int(r)) + ") for window " +
           std::to_string(reinterpret_cast<std::uintptr_t>(presentWindow)) +
-          " valid " + std::to_string(::IsWindow(presentWindow)) + " visible " +
-          std::to_string(::IsWindowVisible(presentWindow)) + " client " +
-          std::to_string(rc.right) + "x" + std::to_string(rc.bottom) +
+          " valid " +
+          std::to_string(cc_mw3_re::platform::is_window_valid(presentWindow)) +
+          " visible " +
+          std::to_string(
+              cc_mw3_re::platform::is_window_visible(presentWindow)) +
+          " client " + std::to_string(rw) + "x" + std::to_string(rh) +
           " style " +
-          std::to_string(::GetWindowLongW(presentWindow, GWL_STYLE)) +
+          std::to_string(cc_mw3_re::platform::get_window_style(presentWindow)) +
           " exstyle " +
-          std::to_string(::GetWindowLongW(presentWindow, GWL_EXSTYLE)));
+          std::to_string(
+              cc_mw3_re::platform::get_window_exstyle(presentWindow)));
     }
     VkExtent2D e = caps.currentExtent;
     if (e.width == 0xffffffffu) {
-      RECT rc{};
-      ::GetClientRect(presentWindow, &rc);
-      e = {unsigned(rc.right), unsigned(rc.bottom)};
+      long rw = 0, rh = 0;
+      if (surface_source.get_drawable_size) {
+        surface_source.get_drawable_size(presentWindow, &rw, &rh);
+      } else {
+        cc_mw3_re::platform::get_window_client_rect(presentWindow, &rw, &rh);
+      }
+      e = {unsigned(rw), unsigned(rh)};
     }
     if (!e.width || !e.height)
       return false;
@@ -4252,33 +4235,12 @@ private:
     VkSwapchainCreateInfoKHR sc{};
     sc.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     sc.surface = windowSurface;
-    VkSurfaceFullScreenExclusiveWin32InfoEXT monitor{};
-    monitor.sType =
-        VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
-    monitor.hmonitor =
-        ::MonitorFromWindow(presentParent, MONITOR_DEFAULTTONEAREST);
-    VkSurfaceFullScreenExclusiveInfoEXT full{};
-    full.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
-    full.fullScreenExclusive =
-        VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
-    full.pNext = &monitor;
-    if (exclusiveDevice) {
-      VkPhysicalDeviceSurfaceInfo2KHR info{};
-      info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
-      info.surface = windowSurface;
-      info.pNext = &full;
-      VkSurfaceCapabilitiesFullScreenExclusiveEXT supported{};
-      supported.sType =
-          VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_FULL_SCREEN_EXCLUSIVE_EXT;
-      VkSurfaceCapabilities2KHR capabilities{};
-      capabilities.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
-      capabilities.pNext = &supported;
-      check(surfaceCaps2(gpu, &info, &capabilities),
-            "query exclusive fullscreen support");
-      if (!supported.fullScreenExclusiveSupported)
+    exclusive_fullscreen_.setup_swapchain_chain(presentParent);
+    if (exclusive_fullscreen_.is_device_exclusive()) {
+      if (!exclusive_fullscreen_.validate_swapchain_support(gpu, windowSurface))
         throw std::runtime_error("Exclusive fullscreen is not supported for "
                                  "this window and monitor");
-      sc.pNext = &full;
+      sc.pNext = exclusive_fullscreen_.swapchain_pnext();
     }
     sc.minImageCount = std::max(caps.minImageCount, 2u);
     if (caps.maxImageCount)
@@ -4338,33 +4300,12 @@ private:
     swapExtent = e;
     return syncExclusive();
   }
-  PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR surfaceCaps2{};
-  PFN_vkAcquireFullScreenExclusiveModeEXT acquireExclusive{};
-  PFN_vkReleaseFullScreenExclusiveModeEXT releaseExclusive{};
-  bool exclusiveDevice{}, exclusiveHeld{};
+  cc_mw3_re::platform::ExclusiveFullscreenHandler exclusive_fullscreen_;
   bool exclusiveRequested() const {
     return bridge_config.window_mode == "fullscreen";
   }
   bool syncExclusive() {
-    if (!exclusiveDevice)
-      return true;
-    const bool foreground = ::GetAncestor(::GetForegroundWindow(), GA_ROOT) ==
-                            ::GetAncestor(presentParent, GA_ROOT);
-    if (!foreground) {
-      if (exclusiveHeld) {
-        check(releaseExclusive(device, swapchain),
-              "release fullscreen on focus loss");
-        exclusiveHeld = false;
-      }
-      return false;
-    }
-    if (!exclusiveHeld) {
-      check(acquireExclusive(device, swapchain),
-            "acquire Vulkan exclusive fullscreen");
-      exclusiveHeld = true;
-      std::fprintf(stderr, "Vulkan exclusive fullscreen acquired\n");
-    }
-    return true;
+    return exclusive_fullscreen_.sync(device, swapchain, presentParent);
   }
   bool srcRgba{};
   void presentSource(unsigned w, unsigned h, bool rgba32 = false) {
@@ -4392,8 +4333,7 @@ private:
       dropSurface();
       if (instance && f.vkDestroyInstance)
         f.vkDestroyInstance(instance, nullptr);
-      if (library)
-        ::FreeLibrary(static_cast<HMODULE>(library));
+      loader.unload();
       return;
     }
     f.vkDeviceWaitIdle(device);
@@ -4463,7 +4403,7 @@ private:
     dropSwapchain();
     dropSurface();
     if (child)
-      ::DestroyWindow(child);
+      cc_mw3_re::platform::destroy_present_child(child);
     if (srcImage.view)
       f.vkDestroyImageView(device, srcImage.view, nullptr);
     if (srcImage.image)
@@ -4549,7 +4489,7 @@ private:
     f.vkDestroyCommandPool(device, commandPool, nullptr);
     f.vkDestroyDevice(device, nullptr);
     f.vkDestroyInstance(instance, nullptr);
-    ::FreeLibrary(static_cast<HMODULE>(library));
+    loader.unload();
     device = {};
   }
 #include "quality_stage.inc"
