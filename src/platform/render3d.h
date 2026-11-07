@@ -56,6 +56,21 @@ struct ModelDrawContext {
   uint32_t source_vertices = 0, source_polygons = 0;
 };
 
+// Borrowed native material scope. Valid only inside the synchronous model
+// scope; never store these pointers in a render-worker packet or GPU resource.
+struct MaterialDrawContext {
+  const void *model = nullptr;
+  const void *material = nullptr;
+  const void *texture_entry = nullptr;
+  uint32_t polygon = 0;
+};
+
+// Opaque owned admission receipt. Implementations must keep it pointer-free
+// with respect to native Node/Model/Material/TextureEntry storage.
+struct DeferredMaterialBinding {
+  virtual ~DeferredMaterialBinding() = default;
+};
+
 class Render3D {
  public:
   virtual ~Render3D() = default;
@@ -73,6 +88,21 @@ class Render3D {
   }
   virtual void note_cpu_model_geometry() {}
   virtual bool wants_model_context() const { return false; }
+  virtual bool wants_material_context() const { return false; }
+  virtual std::shared_ptr<const DeferredMaterialBinding>
+  capture_deferred_material_binding(int32_t) {
+    return {};
+  }
+  virtual void
+  begin_deferred_material_draw(std::shared_ptr<const DeferredMaterialBinding>) {
+  }
+  virtual void end_deferred_material_draw() noexcept {}
+  // Source geometry is read-only within model draw scopes. A producer that
+  // changes it must invalidate before submitting another polygon.
+  virtual void invalidate_material_geometry() noexcept {}
+
+  virtual void begin_material_draw(const MaterialDrawContext &) {}
+  virtual void end_material_draw() noexcept {}
   virtual void begin_model_draw(const ModelDrawContext&) {}
   virtual void end_model_draw() noexcept {}
   virtual bool replaces_model_geometry() const { return false; }

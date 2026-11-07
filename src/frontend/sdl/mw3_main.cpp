@@ -168,6 +168,8 @@ struct Args {
   float look[2] = {0, -2.9f};
   bool have_pos = false, nosound = false, hidden = false, verbose = false, fly = false;
   float vehicle_ahead = 0;  // --vehicle-ahead M (ours): the mission's first (armed) vehicle placed M m before the player
+  bool field_base_fixture =
+      false; // --field-base-ahead: typed MFB selection, not a name guess
   bool vehicle_hold = false;  // --vehicle-hold (ours): and the player turned to face it each frame (to watch it fire)
   float turret_ahead = 0;  // --turret-ahead M (ours): the player M m from the nearest live turret, facing it
   float mech_ahead = 0;  // --mech-ahead M (ours): the player kept M to 1.5 M m from the nearest enemy mech in play, facing it
@@ -232,25 +234,39 @@ struct Args {
 
 void usage() {
   std::printf(
-      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE [--install-to DIR]] "
+      "mw3 [install-dir] [--install DIR | --install-from DISC|ISO|CUE "
+      "[--install-to DIR]] "
       "[--assets DIR]... [--write-dir DIR] [--version]\n"
-      "    [--mission NAME | --fly NAME [--variant BLOCK]] [--pos X Y Z] [--look YAW PITCH] "
-      "[--vehicle-ahead M [--vehicle-hold]] [--turret-ahead M] [--mech-ahead M] [--dialog FILE "
+      "    [--mission NAME | --fly NAME [--variant BLOCK]] [--pos X Y Z] "
+      "[--look YAW PITCH] "
+      "[--vehicle-ahead M [--vehicle-hold]] [--field-base-ahead M] "
+      "[--turret-ahead M] [--mech-ahead M] [--dialog FILE "
       "NAME]\n"
-      "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] [--fire N "
+      "    [--shot FILE.bmp [--shot-frame N] [--shot-any] [--shot-series K]] "
+      "[--fire N "
       "[--fire-group 1..5]] [--objectives N] [--win N] [--lab-mech N]\n"
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
-      "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting off|flat|normal] [--cc-sun "
+      "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
+      "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting "
+      "off|flat|normal] [--cc-sun "
       "AZIMUTH ELEVATION]\n"
-      "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] [--cc-hud-text 0|1]\n"
-      "    [--cc-geometry legacy|partial|gpu|cpu-reference] [--cc-geometry-debug normals]\n"
+      "    [--cc-hud original|core-critical] [--cc-hud-artwork DIR] "
+      "[--cc-hud-text 0|1]\n"
+      "    [--cc-geometry legacy|partial|gpu|cpu-reference] "
+      "[--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1]\n"
-      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] [--cc-af LEVEL] "
-      "[--original] [--import | --no-import] [--no-launcher] [--debug-camera] [--wide-menus | "
-      "--no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] [--patch ZIP|DIR] "
-      "[--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] [--click-at "
-      "X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... [--walk] [--tap "
-      "DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] [--window WxH] "
+      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] "
+      "[--cc-af LEVEL] "
+      "[--original] [--import | --no-import] [--no-launcher] [--debug-camera] "
+      "[--wide-menus | "
+      "--no-wide-menus] [--mod NAME]... [--no-mods] [--mods] [--check-mod DIR] "
+      "[--patch ZIP|DIR] "
+      "[--vfw-helper EXE | --no-vfw-helper] [--briefing c1m2] [--click N[:M]] "
+      "[--click-at "
+      "X,Y@N]... [--click-players X,Y@N/P]... [--click-return X,Y@N]... "
+      "[--walk] [--tap "
+      "DIK@N[:M]]... [--frames N] [--frame-ms N] [--frame-times N] [--seed N] "
+      "[--window WxH] "
       "[--nosound] [--hidden] [--verbose]\n"
       "    [-nofmv] [-seasick] [-cdN]\n"
       "See docs/program.md.\n");
@@ -399,19 +415,22 @@ bool parse(int argc, char** argv, Args& a) {
     }
     else if (s == "--cc-sun" && next(2)) {
       a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
-    }
-    else if (s == "--cc-model-normals" && next(3)) {
+    } else if (s == "--cc-model-materials" && next(3)) {
+      sdlfe::PreparedMaterialBinding binding;
+      binding.chassis = argv[++i], binding.lod = argv[++i],
+      binding.path = argv[++i];
+      a.cc_assets.materials.push_back(std::move(binding));
+    } else if (s == "--cc-model-normals" && next(3)) {
       sdlfe::PreparedNormalBinding binding;
       binding.chassis = argv[++i], binding.lod = argv[++i], binding.path = argv[++i];
       a.cc_assets.normals.push_back(std::move(binding));
-    }
-    else if (s == "--cc-model" && next(4)) {
+    } else if (s == "--cc-model" && next(4)) {
       sdlfe::PreparedModelBinding binding;
       binding.chassis = argv[++i], binding.lod = argv[++i];
       binding.mesh = argv[++i], binding.textures = argv[++i];
       a.cc_assets.models.push_back(std::move(binding));
-    }
-    else if (s == "--no-launcher") a.no_launcher = true;
+    } else if (s == "--no-launcher")
+      a.no_launcher = true;
     else if (s == "--ready-file" && next(1)) a.ready_file = argv[++i];
     else if (s == "--wide-menus") a.wide_menus = 1;
     else if (s == "--debug-camera") a.debug_camera = true;
@@ -427,6 +446,9 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--pos" && next(3)) {
       for (float& v : a.pos) v = std::strtof(argv[++i], nullptr);
       a.have_pos = true;
+    } else if (s == "--field-base-ahead" && next(1)) {
+      a.vehicle_ahead = std::strtof(argv[++i], nullptr);
+      a.field_base_fixture = true;
     } else if (s == "--vehicle-ahead" && next(1)) {
       a.vehicle_ahead = std::strtof(argv[++i], nullptr);
     } else if (s == "--turret-ahead" && next(1)) {
@@ -1228,12 +1250,18 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
               for (void* v : mech3::program_vehicles()) {
                 mech3::VehicleSummary vs;
                 if (!mech3::describe_vehicle(v, &vs) || !vs.in_world) continue;
+                if (a.field_base_fixture && !vs.field_base)
+                  continue;
                 if (armed && mech3::wm_weapon_count(mech3::mech_weapon_manager(v)) == 0) continue;
                 const float to[3] = {p[0] + f[0] * a.vehicle_ahead, p[1], p[2] + f[2] * a.vehicle_ahead};
                 mech3::program_vehicle_place(v, to, 0.0f);
                 held = v, held_at[0] = p[0], held_at[1] = p[1], held_at[2] = p[2];
                 std::printf("mw3: %s placed %.0f m ahead (%d weapons)\n", vs.name, a.vehicle_ahead,
                             mech3::wm_weapon_count(mech3::mech_weapon_manager(v)));
+                if (a.field_base_fixture)
+                  std::printf(
+                      "mw3: field-base fixture selected: %s registry=%d\n",
+                      vs.name, vs.registry);
                 placed = true;
                 break;
               }

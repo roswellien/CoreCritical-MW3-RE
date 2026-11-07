@@ -4,11 +4,14 @@
 #include "gamez/zclass/cls_data.h"
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/object3d.h"
+#include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "renderer/material_normals.hpp"
+#include "renderer/native_surface_identity.hpp"
 #include "renderer/surface_detail.hpp"
+#include "renderer/surface_materials.hpp"
 
 namespace mw34::materials {
 void set_active_surface_key(const SurfaceKey &key);
@@ -403,6 +406,51 @@ void check_quality(SDL_Window *window, sdlfe::RendererBackend backend,
 } // namespace
 
 namespace {
+std::string surface_metadata(const char *asset, const char *material,
+                             uint64_t mesh_hash) {
+  prepared_fixture::Bytes metadata;
+  metadata.value.assign("BWSFM1", 6);
+  metadata.value.append(2, char(0));
+  metadata.u32(1);
+  metadata.u32(1);
+  metadata.u32(1);
+  metadata.u32(0);
+  metadata.u64(mesh_hash);
+  metadata.u32(0);
+  auto text = [&](const char *value) {
+    metadata.u32(uint32_t(std::strlen(value)));
+    metadata.value += value;
+  };
+  text(asset);
+  text(material);
+  metadata.u32(0xffffffffU);
+  metadata.u32(0xffffffffU);
+  metadata.f32(0);
+  metadata.f32(0);
+  metadata.f32(0);
+  metadata.u32(1);
+  metadata.f32(1);
+  metadata.f32(1);
+  metadata.f32(0);
+  metadata.f32(0);
+  metadata.u32(1);
+  metadata.u32(1);
+  metadata.f32(0);
+  metadata.f32(0);
+  metadata.f32(1);
+  metadata.f32(1);
+  metadata.f32(0);
+  metadata.f32(1);
+  metadata.f32(1);
+  metadata.f32(1);
+  metadata.f32(0);
+  metadata.f32(0);
+  metadata.f32(.7f);
+  metadata.f32(.04f);
+  metadata.f32(0);
+  return metadata.value;
+}
+
 void check_terrain_surface_normals(SDL_Window *window,
                                    sdlfe::RendererBackend backend) {
   const auto folder = std::filesystem::temp_directory_path() /
@@ -527,13 +575,54 @@ void check_terrain_surface_normals(SDL_Window *window,
           "Could not read back terrain normal frame");
 
   const auto normal_pixels = pixels;
-  const auto stats = renderer->asset_statistics();
+  auto stats = renderer->asset_statistics();
   require(stats.normal_draws > 0, "Terrain surface normal binding test failed "
                                   "with 0 matched normal bindings");
   require(stats.world_normal_decoded_bytes == 4 &&
               stats.world_normal_peak_decoded_bytes == 4 &&
               stats.world_normal_loaded_pages == 1,
           "World page decoded-byte/loaded-page accounting is incorrect");
+
+  // Test3: reject stale bindings on same-handle texture updates
+  const auto base_draws = stats.normal_draws;
+  require(base_draws > 0, "base normal_draws > 0");
+  const auto saved_green = green_data;
+  green_data[0] ^= 0xFF;
+  green_data[1] ^= 0xFF;
+  green_data[2] ^= 0xFF; // edited RGBA
+  auto bad_key = t1m1_terrain_key;
+  bad_key.hash ^= 1;
+  mw34::materials::set_active_surface_key(bad_key);
+  renderer->update_texture(tex, 128, 128, green_data.data());
+  mw34::materials::clear_active_surface_key();
+  renderer->clear(true, 0, 0, 0);
+  quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+  require(renderer->read_back(&pixels, &width, &height),
+          "Could not read back updated surface");
+  require(renderer->asset_statistics().normal_draws == base_draws,
+          "altered-key same-handle update rejected");
+  mw34::materials::clear_active_surface_key();
+  renderer->update_texture(tex, 128, 128, green_data.data());
+  mw34::materials::clear_active_surface_key();
+  renderer->clear(true, 0, 0, 0);
+  quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+  require(renderer->read_back(&pixels, &width, &height),
+          "Could not read back updated surface");
+  require(renderer->asset_statistics().normal_draws == base_draws,
+          "unauthenticated update rejected");
+  green_data = saved_green; // restore original RGBA
+  mw34::materials::set_active_surface_key(t1m1_terrain_key);
+  renderer->update_texture(tex, 128, 128, green_data.data());
+  mw34::materials::clear_active_surface_key();
+  renderer->clear(true, 0, 0, 0);
+  quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+  require(renderer->read_back(&pixels, &width, &height),
+          "Could not read back updated surface");
+  require(renderer->asset_statistics().normal_draws > base_draws,
+          "authenticated update accepted");
+  require(pixels == normal_pixels, "pixels equal normal_pixels");
+
+  stats = renderer->asset_statistics();
 
   // Verify reset_scene_resources invalidates epoch and stale texture slot
   // bindings
@@ -653,6 +742,260 @@ void check_terrain_surface_normals(SDL_Window *window,
                 0,
         "Missing optional world pack did not remain neutral");
   }
+  // A real source model/material scope, authenticated by an authored BWSFM1
+  // expectation rather than a first-observed UV cache entry.
+  {
+    struct NativeEnvironment {
+      ~NativeEnvironment() {
+#if defined(_WIN32)
+        _putenv_s("MW34_NATIVE_MATERIALS", "");
+        _putenv_s("MW34_NATIVE_MATERIAL_ID", "");
+#else
+        unsetenv("MW34_NATIVE_MATERIALS");
+        unsetenv("MW34_NATIVE_MATERIAL_ID");
+#endif
+      }
+    } native_environment;
+    float positions[]{0, 0, 2, 2, 0, 2, 0, 2, 2};
+    float uvs[]{0, 0, 1, 0, 0, 1};
+    uint32_t indices[]{0, 1, 2};
+    zmod::Material material{};
+    material.flags = 1;
+    zimg::TextureEntry source_texture{};
+    std::strcpy(source_texture.name, "ggter1");
+    zvid::D3DTexture device_texture{};
+    source_texture.surface = &device_texture;
+    material.texture = &source_texture;
+    zmod::Polygon polygon{};
+    polygon.flags = 3;
+    polygon.vertex_indices = indices;
+    polygon.uvs = uvs;
+    polygon.material = &material;
+    zmod::Model source_model{};
+    const uint32_t one = 1, three = 3;
+    std::memcpy(source_model.header + 0x10, &one, 4);
+    std::memcpy(source_model.header + 0x14, &three, 4);
+    source_model.polygons = &polygon;
+    source_model.vertices = positions;
+    const auto native_hash = cc_mw3_re::native_mesh_uv_hash(source_model);
+    require(native_hash.has_value(),
+            "Authored native source hash was unavailable");
+    struct Batch {
+      std::vector<std::array<float, 8>> vertices;
+    };
+    std::vector<Batch> canonical(1);
+    for (unsigned corner = 0; corner < 3; ++corner)
+      canonical[0].vertices.push_back({positions[corner * 3],
+                                       positions[corner * 3 + 1],
+                                       positions[corner * 3 + 2], 0, 0, 0,
+                                       uvs[corner * 2], uvs[corner * 2 + 1]});
+    require(*native_hash ==
+                mw34::materials::compute_mesh_uv_hash(canonical, 0, 1),
+            "Native source hash does not match the canonical BWSFM1 stream");
+    uvs[2] = .75f;
+    require(
+        cc_mw3_re::native_mesh_uv_hash(source_model) != native_hash,
+        "Changed live UV coordinates did not change native source identity");
+    uvs[2] = 1;
+    indices[0] = 3;
+    require(!cc_mw3_re::native_mesh_uv_hash(source_model),
+            "Native source hash accepted an out-of-range vertex");
+    indices[0] = 0;
+
+    const auto metadata =
+        surface_metadata("native:fixture", "ggter1", *native_hash);
+    const auto metadata_path = folder / "native-material.bin";
+    std::ofstream(metadata_path, std::ios::binary)
+        .write(metadata.data(), metadata.size());
+#if defined(_WIN32)
+    _putenv_s("MW34_WORLD_NORMALS", world_path.string().c_str());
+    _putenv_s("MW34_NATIVE_MATERIALS", metadata_path.string().c_str());
+    _putenv_s("MW34_NATIVE_MATERIAL_ID", "native:fixture");
+#else
+    setenv("MW34_WORLD_NORMALS", world_path.string().c_str(), 1);
+    setenv("MW34_NATIVE_MATERIALS", metadata_path.string().c_str(), 1);
+    setenv("MW34_NATIVE_MATERIAL_ID", "native:fixture", 1);
+#endif
+    auto checked_renderer = make_check_renderer(window, backend, {}, options);
+    checked_renderer->set_viewport(0, 0, 64, 64);
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    device_texture.handle = checked_renderer->create_named_texture(
+        "ggter1", 128, 128, green_data.data(), 1);
+    mw34::materials::clear_active_surface_key();
+    zcls::Node node{};
+    std::strcpy(reinterpret_cast<char *>(node.raw), "nativefixture");
+    node.model = &source_model;
+    platform::ModelDrawContext model_context;
+    model_context.node = &node;
+    model_context.ordinary = true;
+    platform::MaterialDrawContext material_context;
+    material_context.model = &source_model;
+    material_context.material = &material;
+    material_context.texture_entry = &source_texture;
+    auto draw_native = [&] {
+      checked_renderer->clear(true, 0, 0, 0);
+      checked_renderer->begin_model_draw(model_context);
+      checked_renderer->begin_material_draw(material_context);
+      platform::DrawState native_state;
+      native_state.texture = device_texture.handle;
+      const platform::TLVertex triangle[] = {
+          {0, 0, .5f, 1, 0xffffffff, 0, 0, 0},
+          {64, 0, .5f, 1, 0xffffffff, 0, 1, 0},
+          {0, 64, .5f, 1, 0xffffffff, 0, 0, 1}};
+      checked_renderer->draw(platform::Primitive::kFan, triangle, 3,
+                             native_state);
+      checked_renderer->end_material_draw();
+      checked_renderer->end_model_draw();
+      require(checked_renderer->read_back(&pixels, &width, &height),
+              "Could not read native UV fixture");
+    };
+    draw_native();
+    const auto qualified = checked_renderer->asset_statistics();
+    require(qualified.normal_draws > 0 &&
+                qualified.binding_rejected_mismatch == 0,
+            "Correct authored native UV binding was rejected");
+    uvs[2] = .75f;
+    draw_native();
+    require(checked_renderer->asset_statistics().normal_draws ==
+                    qualified.normal_draws &&
+                checked_renderer->asset_statistics().binding_rejected_mismatch >
+                    0,
+            "Wrong native mesh_uv_hash was accepted");
+    uvs[2] = 1;
+    material_context.texture_entry = nullptr;
+    draw_native();
+    require(checked_renderer->asset_statistics().normal_draws ==
+                qualified.normal_draws,
+            "Mismatched texture-entry identity was accepted");
+    material_context.texture_entry = &source_texture;
+    draw_native();
+    require(checked_renderer->asset_statistics().normal_draws >
+                qualified.normal_draws,
+            "Restored authored native UV binding was not usable");
+    struct DeferredBackendScope {
+      platform::Render3D *renderer = zvid::render3d();
+      zvid::DrawBuffers buffers = zvid::draw_buffers();
+      ~DeferredBackendScope() {
+        zvid::set_render3d(renderer);
+        zvid::draw_buffers() = buffers;
+      }
+    } deferred_backend;
+    zvid::set_render3d(checked_renderer.get());
+    platform::TLVertex deferred_vertices[] = {
+        {0, 0, .5f, 1, 0xffffffff, 0, 0, 0},
+        {64, 0, .5f, 1, 0xffffffff, 0, 1, 0},
+        {0, 64, .5f, 1, 0xffffffff, 0, 0, 1}};
+    zvid::draw_buffers().tl =
+        reinterpret_cast<zvid::TLVertex *>(deferred_vertices);
+    zvid::device_state().primitive = 6;
+    require(zvid::transparent_queue().count == 0 &&
+                zvid::overlay_list().count == 0,
+            "Native deferred fixtures require empty queues");
+    checked_renderer->clear(true, 0, 0, 0);
+    const auto before_deferred = checked_renderer->asset_statistics();
+    checked_renderer->begin_model_draw(model_context);
+    checked_renderer->begin_material_draw(material_context);
+    for (int i = 0; i < 4; ++i)
+      zvid::draw_textured_white(3, &device_texture, 0, .5f, i & 1);
+    const auto admission = checked_renderer->asset_statistics();
+    require(admission.native_fingerprint_evaluations ==
+                before_deferred.native_fingerprint_evaluations + 1,
+            "Native model fingerprint was recomputed per polygon");
+    auto receipt = checked_renderer->capture_deferred_material_binding(
+        device_texture.handle);
+    checked_renderer->end_material_draw();
+    checked_renderer->end_model_draw();
+    zvid::flush_transparent();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Transparent readback failed");
+    const auto after_transparent = checked_renderer->asset_statistics();
+    require(after_transparent.normal_draws > before_deferred.normal_draws &&
+                after_transparent.binding_rejected_mismatch ==
+                    before_deferred.binding_rejected_mismatch,
+            "Transparent queue lost qualified material admission");
+    zvid::flush_overlay();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Overlay readback failed");
+    const auto after_deferred = checked_renderer->asset_statistics();
+    require(after_deferred.normal_draws > after_transparent.normal_draws &&
+                after_deferred.binding_rejected_mismatch ==
+                    before_deferred.binding_rejected_mismatch,
+            "Overlay queue lost qualified material admission");
+    // Same handle after an upload cannot reuse a previously admitted receipt.
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    checked_renderer->update_texture(device_texture.handle, 128, 128,
+                                     green_data.data());
+    mw34::materials::clear_active_surface_key();
+    platform::DrawState receipt_state;
+    receipt_state.texture = device_texture.handle;
+    checked_renderer->begin_deferred_material_draw(receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Stale admission readback failed");
+    require(checked_renderer->asset_statistics().normal_draws ==
+                    after_deferred.normal_draws &&
+                checked_renderer->asset_statistics().binding_rejected_mismatch >
+                    after_deferred.binding_rejected_mismatch,
+            "Deferred admission survived a same-handle upload");
+    // A source mutation inside a model scope explicitly invalidates its hash.
+    checked_renderer->begin_model_draw(model_context);
+    checked_renderer->begin_material_draw(material_context);
+    checked_renderer->capture_deferred_material_binding(device_texture.handle);
+    const auto before_mutation = checked_renderer->asset_statistics();
+    uvs[2] = .75f;
+    checked_renderer->invalidate_material_geometry();
+    checked_renderer->capture_deferred_material_binding(device_texture.handle);
+    require(
+        checked_renderer->asset_statistics().native_fingerprint_evaluations ==
+                before_mutation.native_fingerprint_evaluations + 1 &&
+            checked_renderer->asset_statistics().binding_rejected_mismatch >
+                before_mutation.binding_rejected_mismatch,
+        "In-scope source UV mutation did not invalidate authentication");
+    uvs[2] = 1;
+    checked_renderer->end_material_draw();
+    checked_renderer->end_model_draw();
+    // The first admission after reset must reload catalogs before its lookup.
+    checked_renderer->reset_scene_resources();
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    checked_renderer->update_texture(device_texture.handle, 128, 128,
+                                     green_data.data());
+    mw34::materials::clear_active_surface_key();
+    checked_renderer->begin_model_draw(model_context);
+    checked_renderer->begin_material_draw(material_context);
+    auto reloaded_receipt = checked_renderer->capture_deferred_material_binding(
+        device_texture.handle);
+    require(bool(reloaded_receipt),
+            "First deferred material after reset was not admitted");
+    checked_renderer->end_material_draw();
+    checked_renderer->end_model_draw();
+    const auto before_reloaded = checked_renderer->asset_statistics();
+    checked_renderer->begin_deferred_material_draw(reloaded_receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Reloaded admission readback failed");
+    require(
+        checked_renderer->asset_statistics().normal_draws >
+                before_reloaded.normal_draws &&
+            checked_renderer->asset_statistics().binding_rejected_mismatch ==
+                before_reloaded.binding_rejected_mismatch,
+        "First deferred material after reset lost normal binding");
+    const auto before_old_epoch = checked_renderer->asset_statistics();
+    checked_renderer->begin_deferred_material_draw(receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Old-epoch admission readback failed");
+    require(checked_renderer->asset_statistics().normal_draws ==
+                    before_old_epoch.normal_draws &&
+                checked_renderer->asset_statistics().binding_rejected_mismatch >
+                    before_old_epoch.binding_rejected_mismatch,
+            "Deferred admission survived scene resource reset");
+  }
 }
 
 void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
@@ -670,6 +1013,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       std::filesystem::remove(folder / "mesh.bin", error);
       std::filesystem::remove(folder / "textures.bin", error);
       std::filesystem::remove(folder / "normals.bin", error);
+      std::filesystem::remove(folder / "materials.bin", error);
       std::filesystem::remove(folder, error);
     }
   } files{folder};
@@ -688,6 +1032,27 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     options.normals.push_back(
         {"authored", "0", (folder / "normals.bin").u8string()});
     options.lighting = "normal";
+    std::istringstream mesh_input(prepared_fixture::mesh(2, 0xffff0000),
+                                  std::ios::binary);
+    const auto mesh = ::platform::prepared::read_mesh(mesh_input);
+    const auto hash = mw34::materials::compute_mesh_uv_hash(
+        mesh.batches, 0, mesh.batches.size());
+    const auto metadata = surface_metadata("authored:close", "authored", hash);
+    const auto path = folder / "materials.bin";
+    options.materials.push_back({"authored", "0", path.u8string()});
+    auto wrong = metadata;
+    wrong[24] ^= 1;
+    std::ofstream(path, std::ios::binary).write(wrong.data(), wrong.size());
+    bool rejected = false;
+    try {
+      auto invalid = make_check_renderer(window, backend, quality, options);
+    } catch (const std::runtime_error &) {
+      rejected = true;
+    }
+    require(rejected,
+            "Prepared renderer accepted mismatched authored mesh_uv_hash");
+    std::ofstream(path, std::ios::binary)
+        .write(metadata.data(), metadata.size());
   }
   require(SDL_SetWindowSize(window, 64, 64) && SDL_SyncWindow(window),
           SDL_GetError());
@@ -840,6 +1205,14 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     std::ofstream(folder / "mesh.bin", std::ios::binary)
         << prepared_fixture::mesh(2, 0xffffffff, source_normal, mirror,
                                   degenerate, rank_one_uv);
+    // Each deliberate UV/basis variant has its own authored compatibility hash.
+    std::ifstream geometry(folder / "mesh.bin", std::ios::binary);
+    const auto mesh = ::platform::prepared::read_mesh(geometry);
+    const auto hash = mw34::materials::compute_mesh_uv_hash(
+        mesh.batches, 0, mesh.batches.size());
+    const auto metadata = surface_metadata("authored:close", "authored", hash);
+    std::ofstream(folder / "materials.bin", std::ios::binary)
+        .write(metadata.data(), metadata.size());
     std::ofstream(folder / "normals.bin", std::ios::binary)
         << prepared_fixture::normals(normal, absent);
     options.lighting = mode;

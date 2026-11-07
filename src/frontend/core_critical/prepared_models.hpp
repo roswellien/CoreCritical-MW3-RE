@@ -23,9 +23,7 @@ struct PreparedModelDraw {
     std::vector<PreparedBatchDraw> batches;
 };
 
-struct PreparedMaterialBinding {
-    std::string chassis, lod, path;
-};
+using PreparedMaterialBinding = sdlfe::PreparedMaterialBinding;
 
 class PreparedModels {
   public:

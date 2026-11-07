@@ -57,6 +57,9 @@ struct RendererBridgeConfig {
   // must not observe another renderer's later environment changes.
   std::string surface_normal_catalog;
   std::string world_normal_manifest;
+  std::string native_material_sidecar;
+  std::string native_material_asset_id;
+  bool trace_native_bindings{false};
 
   // Surface Detail
   std::optional<double> detail_fixed_time{std::nullopt};
@@ -78,6 +81,12 @@ struct RendererBridgeConfig {
 
   static RendererBridgeConfig from_diagnostic_env() {
     RendererBridgeConfig cfg;
+    if (const char *path = std::getenv("MW34_NATIVE_MATERIALS"))
+      cfg.native_material_sidecar = path;
+    if (const char *id = std::getenv("MW34_NATIVE_MATERIAL_ID"))
+      cfg.native_material_asset_id = id;
+    if (const char *value = std::getenv("MW34_NATIVE_BINDING_TRACE"))
+      cfg.trace_native_bindings = std::strcmp(value, "1") == 0;
     if (const char *path = std::getenv("MW34_SURFACE_NORMALS"))
       cfg.surface_normal_catalog = path;
     if (const char *path = std::getenv("MW34_WORLD_NORMALS"))

@@ -1,15 +1,19 @@
 #include "frame_renderer.hpp"
 #include "frontend/sdl/cpu_interval.h"
+#include "gamez/zclass/cls_node.h"
+#include "gamez/zimage/zimg_texture.h"
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
 #include "gamez/zutil/zutl_path.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 #include "prepared_draw.hpp"
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "render_worker.hpp"
 #include "renderer/geometry/reference.hpp"
 #include "renderer/material_normals.hpp"
+#include "renderer/native_surface_identity.hpp"
 
 namespace mw34::materials {
 void set_active_surface_key(const SurfaceKey &key);
@@ -256,7 +260,7 @@ public:
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
-        prepared_(sanitize_prepared_assets(assets)),
+        prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),
@@ -326,7 +330,9 @@ public:
             std::uint64_t(
                 std::count_if(surface_normals_.cache.pages.begin(),
                               surface_normals_.cache.pages.end(),
-                              [](const auto &page) { return page.loaded; }))};
+                              [](const auto &page) { return page.loaded; })),
+            binding_rejected_mismatch_,
+            native_fingerprint_evaluations_};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
@@ -346,16 +352,74 @@ public:
     return handle;
   }
 
-  bool wants_model_context() const override { return !prepared_.empty(); }
+  std::shared_ptr<const ::platform::DeferredMaterialBinding>
+  capture_deferred_material_binding(int32_t texture) override {
+    if (!lighting_.normals || bridge_config_.native_material_sidecar.empty() ||
+        texture < 0 || std::size_t(texture) >= textures_.size())
+      return {};
+    surface_normals_load(); // Reset clears catalogs; deferred admission can be
+                            // first.
+    const auto &key = textures_[texture].surface_key;
+    const auto &cache = surface_normals_.cache;
+    if (!cache.bindings.count(key) && !cache.world_bindings.count(key))
+      return {};
+    auto receipt = std::make_shared<NativeDeferredBinding>();
+    receipt->owner = material_binding_owner_;
+    receipt->key = textures_[texture].surface_key;
+    receipt->epoch = group_load_epoch_;
+    receipt->version = textures_[texture].version;
+    receipt->texture = texture;
+    receipt->normal_index = surface_normal_index(receipt->key, true, texture);
+    return receipt;
+  }
+  void begin_deferred_material_draw(
+      std::shared_ptr<const ::platform::DeferredMaterialBinding> receipt)
+      override {
+    deferred_material_binding_ = std::move(receipt);
+  }
+  void end_deferred_material_draw() noexcept override {
+    deferred_material_binding_.reset();
+  }
+  void invalidate_material_geometry() noexcept override {
+    native_context_.fingerprint_computed = false;
+    native_context_.fingerprint.reset();
+  }
+  bool wants_material_context() const override {
+    return lighting_.normals &&
+           (!bridge_config_.native_material_sidecar.empty() ||
+            bridge_config_.trace_native_bindings);
+  }
+  bool wants_model_context() const override {
+    return !prepared_.empty() || wants_material_context();
+  }
+  void
+  begin_material_draw(const ::platform::MaterialDrawContext &context) override {
+    native_context_.material = context;
+    native_context_.material_active = true;
+  }
+  void end_material_draw() noexcept override {
+    native_context_.material = {};
+    native_context_.material_active = false;
+  }
   bool replaces_model_geometry() const override {
     return suppress_model_draws_;
   }
-  void end_model_draw() noexcept override { suppress_model_draws_ = false; }
+  void end_model_draw() noexcept override {
+    suppress_model_draws_ = false;
+    native_context_ = {};
+  }
   void begin_model_draw(const ::platform::ModelDrawContext &context) override {
     // Visual retargeting/fog must not leak exception flags or rounding state
     // into the native polygon producer that resumes after this callback.
     VisualFloatScope float_scope;
     suppress_model_draws_ = false;
+    native_context_ = {};
+    if (wants_material_context()) {
+      native_context_.node = static_cast<const zcls::Node *>(context.node);
+      native_context_.model =
+          native_context_.node ? native_context_.node->model : nullptr;
+      native_context_.epoch = group_load_epoch_;
+    }
     ensure_extent();
     const auto draws = prepared_.draw(context);
     if (!draws.replace)
@@ -381,7 +445,16 @@ public:
       textures_.at(handle) = {};
     surface_normal_textures_.clear();
     surface_normals_ = SurfaceNormalState{};
+    deferred_material_binding_.reset();
+    native_context_ = {};
     logged_first_normal_trace_ = false;
+    if (bridge_config_.trace_native_bindings)
+      std::fprintf(stderr,
+                   "[SURFACE_EPOCH_RESET] epoch=%llu decoded_bytes=%llu "
+                   "normal_handles=%zu\n",
+                   (unsigned long long)group_load_epoch_,
+                   (unsigned long long)surface_normals_.cache.world_bytes,
+                   surface_normal_textures_.size());
   }
 
   ~FrameRenderer() override {
@@ -550,6 +623,11 @@ public:
   void update_texture(int32_t handle, int width, int height,
                       const uint8_t *rgba) override {
     auto &entry = textures_.at(handle);
+    // Refresh from the original texel producer on every upload. An arbitrary
+    // RGBA update has no authenticated 16-bit source identity and must not keep
+    // a normal binding merely because it reuses the same renderer handle.
+    mw34::materials::SurfaceKey source_key{};
+    mw34::materials::get_active_surface_key(&source_key);
     std::vector<uint32_t> replacement;
     if (entry.replacement) {
       if (!rgba || unsigned(width) != entry.source_width ||
@@ -573,6 +651,8 @@ public:
     entry.pixels.resize(std::size_t(width) * height);
     std::memcpy(entry.pixels.data(), rgba,
                 entry.pixels.size() * sizeof(std::uint32_t));
+    entry.surface_key = source_key;
+    entry.group_load_epoch = group_load_epoch_;
     entry.version = ++texture_version_;
   }
 
@@ -643,7 +723,8 @@ public:
     if (suppress_model_draws_)
       return;
     append_draw(primitive, vertices, count, state,
-                state.sharp || state.depth_always);
+                state.sharp || (state.depth_always &&
+                                !authenticated_deferred_world_draw()));
   }
 
   void clear_depth_rect(int left, int top, int right, int bottom) override {
@@ -751,7 +832,9 @@ private:
       const auto epoch = tex_entry.group_load_epoch;
       const auto tex_name = tex_entry.name;
       if (epoch == group_load_epoch_ && key.hash != 0) {
-        int norm_idx = lighting_.normals ? surface_normal_index(key, true) : -1;
+        int norm_idx = lighting_.normals
+                           ? deferred_surface_normal_index(key, state.texture)
+                           : -1;
         if (norm_idx >= 0) {
           int norm_handle = surface_normal_texture(norm_idx);
           draw.normal_texture = int(bind_texture(norm_handle, false));
