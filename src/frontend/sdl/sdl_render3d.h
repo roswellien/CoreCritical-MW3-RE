@@ -15,6 +15,10 @@
 // over the whole back buffer, which is the window, or with any_resolution the
 // frame's shape inside it (sdl_fit.h, black bars round it). Shaders are MSL for now (Metal);
 // SPIR-V and DXIL come with the Windows build.
+namespace platform::prepared {
+struct EnvironmentSelection;
+}
+
 namespace sdlfe {
 
 enum class RendererBackend { sdl, core_critical_dxgi, core_critical_wsi };
@@ -34,6 +38,8 @@ struct PreparedMaterialBinding {
   std::string chassis, lod, path;
 };
 struct CoreCriticalAssets {
+  std::vector<std::string> environment_packs;
+  std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
   bool render_thread = false;
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;
@@ -44,10 +50,11 @@ struct CoreCriticalAssets {
   bool sun_explicit = false;
   std::string lighting = "off", sun_azimuth = "45", sun_elevation = "35";
   bool empty() const {
-    return !sun_explicit && !render_thread && geometry == "legacy" &&
-           !geometry_debug_normals && textures.empty() && models.empty() &&
-           normals.empty() && materials.empty() && lighting == "off" &&
-           sun_azimuth == "45" && sun_elevation == "35";
+    return environment_packs.empty() && !environment && !sun_explicit &&
+           !render_thread && geometry == "legacy" && !geometry_debug_normals &&
+           textures.empty() && models.empty() && normals.empty() &&
+           materials.empty() && lighting == "off" && sun_azimuth == "45" &&
+           sun_elevation == "35";
   }
 };
 

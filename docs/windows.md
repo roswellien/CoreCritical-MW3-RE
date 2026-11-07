@@ -139,6 +139,24 @@ with selected normal maps). Normal mode requires a normal selection; explicitly
 absent bindings retain geometric lighting. Selected files are validated even when
 lighting is off. Configuration belongs to each renderer and survives scene reload.
 
+`--cc-environment-pack DIR` selects an already extracted schema-v2
+`prepared-environment-v1` pack. Repeat the option for different regions; duplicate
+region ownership fails rather than depending on argument order. The runtime checks
+member paths, sizes and SHA-256 pins before routing native mission/common texture
+banks and authored/world normal catalogs. Explicit normal catalogs take precedence,
+then operation1..4, training and shared-mechs. World pages remain lazy with a 512 MiB
+decoded resident budget. Missing or corrupt selected files fail visibly.
+Selected banks require direct 16-bit texels; global and local indexed textures
+are rejected because the native uploader does not support them. Texture edges
+must not exceed 4096 pixels and the aspect ratio must not exceed 8:1.
+
+Pack selection does not enable prepared model replacement or change the lighting
+mode. Use `--cc-lighting normal` to apply admitted normal maps. Lighting, effects,
+detail and surface-material metadata are retained for later integration; this option
+does not activate their rendering stages. Omit all pack options to restore stock
+bank routing. Pack admission rechecks file content; there is no live file watcher
+or automatic archive installation.
+
 `--cc-sun AZIMUTH ELEVATION` sets angles in degrees: azimuth 0 points toward world
 +X, 90 toward +Z, and positive elevation toward +Y. Supported ranges are -360..360
 and 1..89. The default is 45/35. This affects selected prepared models; native world,

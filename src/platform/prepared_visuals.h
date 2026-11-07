@@ -4,7 +4,10 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <istream>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -76,5 +79,36 @@ mw34::materials::SurfaceMaterialPack
 validate_surface_materials(std::istream &input, const std::string &expected_asset_id,
                            uint64_t expected_mesh_uv_hash,
                            const std::vector<std::string> &expected_batch_materials);
+
+// Owned, validated optional pack resources. Selection never enables a stage.
+enum class EnvironmentRole {
+  water,
+  surf,
+  cloud,
+  effects,
+  lighting,
+  ground_materials,
+  surface_materials
+};
+struct EnvironmentSelection {
+  std::map<std::string, std::string> banks;
+  std::map<std::string, std::map<EnvironmentRole, std::string>> resources;
+  std::vector<std::string> authored_manifests, world_manifests, regions;
+  std::string identity;
+};
+EnvironmentSelection
+load_environment_packs(const std::vector<std::string> &roots);
+std::string environment_region(const std::string &mission);
+// Revalidates content before a hit; corruption cannot reuse an older admission.
+class EnvironmentPackCache {
+public:
+  const EnvironmentSelection &resolve(const std::vector<std::string> &roots);
+  std::uint64_t hits() const { return hits_; }
+  std::uint64_t generation() const { return generation_; }
+
+private:
+  EnvironmentSelection selection_;
+  std::uint64_t hits_{}, generation_{};
+};
 
 } // namespace platform::prepared

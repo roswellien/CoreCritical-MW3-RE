@@ -55,10 +55,22 @@ void surface_normals_load() {
   // Transactional build: fill a local cache first and publish only on success,
   // so an exception leaves no partial entries behind for a subsequent attempt.
   mw34::materials::WorldNormalCache cache{};
-  const char *authored_path = bridge_config_.surface_normal_catalog.c_str();
-  if (authored_path && *authored_path) {
-    for (const auto &cat_path :
-         mw34::materials::surface_normal_catalog_paths(authored_path)) {
+  std::vector<std::string> authored_paths;
+  if (!bridge_config_.surface_normal_catalog.empty())
+    authored_paths.push_back(bridge_config_.surface_normal_catalog);
+  authored_paths.insert(authored_paths.end(),
+                        bridge_config_.environment_authored_manifests.begin(),
+                        bridge_config_.environment_authored_manifests.end());
+  std::uint64_t authored_total{};
+  for (const auto &authored_path : authored_paths) {
+    const auto prior_owners = cache.authored;
+    for (const auto &cat_path : mw34::materials::surface_normal_catalog_paths(
+             std::filesystem::u8path(authored_path))) {
+      const auto bytes = std::filesystem::file_size(cat_path);
+      if (bytes > mw34::materials::authored_normal_budget - authored_total)
+        throw std::runtime_error(
+            "Combined authored normal catalogs exceed byte budget");
+      authored_total += bytes;
       std::ifstream file(cat_path, std::ios::binary);
       if (!file) {
         throw std::runtime_error("Configured surface normal page is missing");
@@ -66,6 +78,9 @@ void surface_normals_load() {
       auto parsed = mw34::materials::read_surface_normals(file);
       const std::size_t base_idx = cache.textures.size();
       for (const auto &[key, idx] : parsed.bindings) {
+        // Explicit catalog first, then deterministic region ownership order.
+        if (prior_owners.count(key))
+          continue;
         if (idx == mw34::materials::no_normal) {
           // Explicit no_normal precedence over any world binding.
           cache.register_authored(key, -1);

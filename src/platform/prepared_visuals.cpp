@@ -345,3 +345,15 @@ validate_surface_materials(std::istream &input, const std::string &expected_asse
 }
 
 } // namespace platform::prepared
+
+namespace platform::prepared {
+namespace {
+bool env_claim_region(std::set<std::string> &regions,
+                      const std::string &region) {
+  // [WP03B R10: bypass only duplicate-region ownership rejection here.]
+  return regions.insert(region).second;
+}
+} // namespace
+} // namespace platform::prepared
+
+#include "prepared_environment.inc"

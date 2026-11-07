@@ -47,6 +47,7 @@
 //   --cc-aa MODE         off, fxaa, ssaa2 or ssaa4 on the Core Critical backend
 //   --cc-af LEVEL        1, 2, 4, 8 or 16 on the Core Critical backend
 //   --verbose            list every unported function reached at exit
+#include "platform/prepared_visuals.h"
 #include "crt/msvc_rand.h"
 #include <SDL3/SDL.h>
 
@@ -246,6 +247,7 @@ void usage() {
       "[--fire N "
       "[--fire-group 1..5]] [--objectives N] [--win N] [--lab-mech N]\n"
       "    [--cc-model CHASSIS LOD MESH BWTEX1]... [--cc-textures BWTEX1]\n"
+      "    [--cc-environment-pack DIR]...\n"
       "    [--cc-model-materials CHASSIS LOD BWSFM1]...\n"
       "    [--cc-model-normals CHASSIS LOD BWNRM2]... [--cc-lighting "
       "off|flat|normal] [--cc-sun "
@@ -416,6 +418,8 @@ bool parse(int argc, char** argv, Args& a) {
     else if (s == "--cc-sun" && next(2)) {
       a.cc_assets.sun_explicit = true;
       a.cc_assets.sun_azimuth = argv[++i], a.cc_assets.sun_elevation = argv[++i];
+    } else if (s == "--cc-environment-pack" && next(1)) {
+      a.cc_assets.environment_packs.push_back(argv[++i]);
     } else if (s == "--cc-model-materials" && next(3)) {
       sdlfe::PreparedMaterialBinding binding;
       binding.chassis = argv[++i], binding.lod = argv[++i],
@@ -945,7 +949,32 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
     return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
   if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
     return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
-  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality, a.cc_assets)) {
+  auto selected_assets = a.cc_assets;
+  if (!selected_assets.environment_packs.empty())
+    std::fprintf(stderr, "Environment packs requested: %zu\n",
+                 selected_assets.environment_packs.size());
+  if (!selected_assets.environment_packs.empty())
+    selected_assets.environment =
+        std::make_shared<const platform::prepared::EnvironmentSelection>(
+            platform::prepared::load_environment_packs(
+                selected_assets.environment_packs));
+  if (selected_assets.environment)
+    std::fprintf(stderr,
+                 "Environment packs admitted: %zu regions, %zu banks, %zu "
+                 "authored and %zu world catalogs\n",
+                 selected_assets.environment->regions.size(),
+                 selected_assets.environment->banks.size(),
+                 selected_assets.environment->authored_manifests.size(),
+                 selected_assets.environment->world_manifests.size());
+  struct BankScope {
+    std::shared_ptr<const zutl::BankOverrides> previous;
+    ~BankScope() { zutl::set_bank_overrides(std::move(previous)); }
+  } bank_scope{zutl::set_bank_overrides(
+      selected_assets.environment ? std::make_shared<const zutl::BankOverrides>(
+                                        selected_assets.environment->banks)
+                                  : nullptr)};
+  if (!window.init(a.hidden, a.launcher_window, a.backend, a.quality,
+                   selected_assets)) {
     // The reason is in the line before this (SdlWindow::init).
     sdlfe::fatal_box(std::string("MechWarrior 3 could not open its window or graphics (Vulkan on Linux): ") + SDL_GetError(), a.hidden);
     return 1;
