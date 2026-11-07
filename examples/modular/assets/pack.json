@@ -4,11 +4,12 @@
   "name": "Reusable Authored Structures and Vehicle Art",
   "version": "1.0.0",
   "game_id": "mw3",
-  "description": "Project-authored JSON geometry only: marker, collision bridge and truck body. No original media.",
+  "description": "Project-authored geometry: inline marker, collision bridge, truck body and reusable GLB gantry. No original media.",
   "dependencies": [],
   "required_capabilities": {
     "world_asset.static_mesh": 1,
-    "world.markers": 1
+    "world.markers": 1,
+    "world.hierarchy": 1
   },
   "definitions": [
     {
@@ -1424,7 +1425,21 @@
           }
         ]
       }
+    },
+    {
+      "kind": "world_asset",
+      "id": "demo-assets:gantry",
+      "behavior": "static_mesh",
+      "data": {
+        "name": "Authored gantry with nested telemetry beacon",
+        "source": "gantry.glb"
+      }
     }
   ],
-  "files": {}
+  "files": {
+    "gantry.glb": {
+      "bytes": 2524,
+      "sha256": "f31bc0d315a453b2e78653658bcac67a0a8f048bbffebf5d8eddeba844844511"
+    }
+  }
 }

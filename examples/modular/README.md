@@ -1,7 +1,7 @@
 # Authored modular gameplay examples
 
-These schema-3 source packages contain project-authored
-definitions and one generated checker texture. They contain no original models,
+These schema-3 source packages contain project-authored definitions, an authored
+gantry GLB and one generated checker texture. They contain no original models,
 textures, motions, game archives or generated game code. Native donor content
 comes from the player's installation at runtime.
 
@@ -12,7 +12,7 @@ comes from the player's installation at runtime.
 | `demo-chassis` | Independently selectable Bushwacker-based chassis with a loadout referencing both preceding packages |
 | `demo-paint` | New skin and external named RGB565 pixels, applied across the donor's material slots |
 | `demo-vehicles` | Independently named truck definition using an existing native AI controller family |
-| `demo-assets` (`assets/`) | Separate reusable authored marker, bridge deck/support collision geometry and truck body meshes |
+| `demo-assets` (`assets/`) | Reusable authored marker, bridge collision geometry, truck body meshes and a nested GLB gantry |
 | `demo-worlds` (`worlds/`) | Heightfield, variant, standalone missions and multiplayer arena referencing the reusable asset package |
 | `demo-campaigns` (`campaigns/`) | Branching campaign using the new chassis/loadout/skin and authored missions |
 
@@ -53,6 +53,16 @@ Its bridge contains an elevated deck
 and two supports with native ground/collision geometry. The truck's hull,
 cabin, bed and wheels are project-authored box meshes; no original vehicle
 art is redistributed.
+
+`assets/gantry.glb` is reproducible with `python assets/make_gantry.py` from this
+directory using only Python's standard library. Its cuboids use metres, Y up,
+and local translations for the `Gantry` / `Control` / `Beacon` parent chain.
+The `gantry` instance stands at `[-24, 0, -24]`, clear of the bridge and truck
+route. Landing's secondary intel objective binds the real native node path
+`["gantry", "Gantry", "Control", "Beacon"]`; its telemetry reward and campaign
+branch are unchanged. The inline `beacon` and moved/recolored `cover` variant
+remain separate demonstrations. Both the GLB and checker integrity records are
+updated by their adjacent generator scripts.
 
 The checker payload is exactly reproducible with the adjacent
 `demo-paint/make_checker.py` script using Python's standard library. The package

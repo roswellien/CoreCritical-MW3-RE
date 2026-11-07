@@ -18,7 +18,8 @@
   "required_capabilities": {
     "world.authored": 1,
     "world_asset.static_mesh": 1,
-    "mission.native": 1
+    "mission.native": 1,
+    "world.hierarchy": 1
   },
   "definitions": [
     {
@@ -127,6 +128,16 @@
               0.0,
               -72.0
             ]
+          },
+          {
+            "id": "gantry",
+            "asset": "demo-assets:gantry",
+            "translation": [
+              -24.0,
+              0.0,
+              -24.0
+            ],
+            "soil": 5
           }
         ]
       }
@@ -239,7 +250,10 @@
                 [
                   "node",
                   [
-                    "beacon"
+                    "gantry",
+                    "Gantry",
+                    "Control",
+                    "Beacon"
                   ],
                   "state",
                   "active",
