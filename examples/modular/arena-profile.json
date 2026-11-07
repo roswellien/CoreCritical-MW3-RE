@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "authored-arena",
+  "packages": [
+    {"id":"demo-assets","version":"1.0.0","path":"assets"},
+    {"id":"demo-equipment","version":"1.0.0","path":"demo-equipment"},
+    {"id":"demo-weapons","version":"1.0.0","path":"demo-weapons"},
+    {"id":"demo-chassis","version":"1.0.0","path":"demo-chassis"},
+    {"id":"demo-paint","version":"1.0.0","path":"demo-paint"},
+    {"id":"demo-vehicles","version":"1.0.0","path":"demo-vehicles"},
+    {"id":"demo-worlds","version":"1.0.0","path":"worlds"}
+  ],
+  "selections": {
+    "multiplayer": {
+      "chassis": "demo-chassis:scout",
+      "loadout": "Modular Demonstration",
+      "skin": "demo-paint:checker_skin"
+    }
+  }
+}

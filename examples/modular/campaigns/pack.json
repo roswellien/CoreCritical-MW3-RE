@@ -1,0 +1,39 @@
+{
+  "schema_version": 3,
+  "id": "demo-campaigns",
+  "name": "Modular Field Trial",
+  "version": "1.0.0",
+  "game_id": "mw3",
+  "description": "Authored branching campaign over two source maps with persistent objective rewards.",
+  "dependencies": [{"id":"demo-worlds","version":"1.0.0"},{"id":"demo-chassis","version":"1.0.0"},{"id":"demo-paint","version":"1.0.0"}],
+  "required_capabilities": {"campaign.graph":1,"mission_item.token-v1":1},
+  "definitions": [
+    {"kind":"mission_item","id":"demo-campaigns:telemetry","behavior":"token-v1","data":{"name":"Telemetry core","label":"Recovered telemetry core"}},
+    {
+      "kind":"campaign","id":"demo-campaigns:field_trial","behavior":"graph",
+      "data": {
+        "name":"Modular Field Trial", "start":"landing", "salvage":true,
+        "starting_chassis":"demo-chassis:scout", "starting_loadout":"Modular Demonstration", "starting_skin":"demo-paint:checker_skin",
+        "variables":{"successful_drops":0},
+        "nodes":[
+          {
+            "id":"landing", "mission":"demo-worlds:landing",
+            "on_success":[{"op":"add","variable":"successful_drops","value":1}],
+            "objective_rewards":{"intel":[{"op":"give","kind":"mission_item","id":"demo-campaigns:telemetry","count":1}]},
+            "routes":[
+              {"when":{"all":[{"outcome":"success"},{"item":"demo-campaigns:telemetry","gte":1}]},"next":"extraction"},
+              {"when":{"outcome":"success"},"next":null},
+              {"when":true,"next":"landing"}
+            ]
+          },
+          {
+            "id":"extraction", "mission":"demo-worlds:extraction",
+            "on_success":[{"op":"add","variable":"successful_drops","value":1},{"op":"take","kind":"mission_item","id":"demo-campaigns:telemetry","count":1}],
+            "routes":[{"when":{"outcome":"success"},"next":null},{"when":true,"next":"extraction"}]
+          }
+        ]
+      }
+    }
+  ],
+  "files":{}
+}

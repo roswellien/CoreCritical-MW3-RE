@@ -1,5 +1,10 @@
 # Core Critical HUD on the native game
 
+Package-selected native widget layout and visibility are documented in
+[`modular-hud.md`](modular-hud.md), including an authored sample profile and
+explicit package-owned MW3H-v1 artwork bindings. That route needs no manual
+artwork path or replacement native image archive.
+
 The opt-in HUD keeps the native game's state, text, positions, crops, colors,
 inputs and drawing order authoritative. It adapts Core Critical's prepared HUD
 artwork and output-density text to owned GPU resources. It observes native image
