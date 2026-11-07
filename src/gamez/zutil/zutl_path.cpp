@@ -13,9 +13,20 @@ namespace {
 Mounts g_mounts;
 std::shared_ptr<const BankOverrides> g_banks;
 
+std::FILE *open_host_file(const std::string &path, const char *mode) {
+#if defined(_WIN32)
+  std::wstring wide_mode;
+  for (const char *c = mode; *c; ++c)
+    wide_mode += static_cast<wchar_t>(*c);
+  return _wfopen(std::filesystem::u8path(path).c_str(), wide_mode.c_str());
+#else
+  return std::fopen(path.c_str(), mode);
+#endif
+}
+
 bool is_file(const std::string& p) {
   std::error_code ec;
-  return std::filesystem::is_regular_file(p, ec);
+  return std::filesystem::is_regular_file(std::filesystem::u8path(p), ec);
 }
 
 std::string join(const std::string& dir, const std::string& rel) {
@@ -294,10 +305,10 @@ std::FILE* open(const char* path, const char* mode) {
     if (p.empty()) return nullptr;
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(p).parent_path(), ec);
-    return std::fopen(p.c_str(), m.c_str());
+    return open_host_file(p, m.c_str());
   }
   const std::string p = find(path);
-  return p.empty() ? nullptr : std::fopen(p.c_str(), m.c_str());
+  return p.empty() ? nullptr : open_host_file(p, m.c_str());
 }
 
 std::vector<std::string> list(const char* pattern) {

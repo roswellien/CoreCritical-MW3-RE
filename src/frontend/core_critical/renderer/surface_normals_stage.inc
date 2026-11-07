@@ -64,8 +64,8 @@ void surface_normals_load() {
   std::uint64_t authored_total{};
   for (const auto &authored_path : authored_paths) {
     const auto prior_owners = cache.authored;
-    for (const auto &cat_path :
-         mw34::materials::surface_normal_catalog_paths(authored_path)) {
+    for (const auto &cat_path : mw34::materials::surface_normal_catalog_paths(
+             std::filesystem::u8path(authored_path))) {
       const auto bytes = std::filesystem::file_size(cat_path);
       if (bytes > mw34::materials::authored_normal_budget - authored_total)
         throw std::runtime_error(

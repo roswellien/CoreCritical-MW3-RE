@@ -306,6 +306,28 @@ void check_environment_packs() {
   }
   require(zutl::find("zbd/t1/texture.zbd") == stock,
           "Bank removal did not restore stock routing");
+  const auto unicode_parent =
+      folder / std::filesystem::u8path("pack-\xc3\xa9-\xe9\x9b\xaa");
+  std::filesystem::create_directories(unicode_parent);
+  EnvironmentFixture unicode_pack(unicode_parent / "training");
+  const auto unicode_selection = load_environment_packs({unicode_pack.path()});
+  {
+    BankRestore restore{zutl::set_bank_overrides(
+        std::make_shared<const zutl::BankOverrides>(unicode_selection.banks))};
+    auto *file = zutl::open("zbd/t1/rtexture.zbd", "rb");
+    require(file != nullptr, "UTF-8 selected bank could not be opened");
+    std::fclose(file);
+  }
+  mw34::materials::WorldNormalCache unicode_cache;
+  unicode_cache.load_world_manifest(
+      std::filesystem::u8path(unicode_selection.world_manifests.at(0)));
+  require(unicode_cache.surface_normal_index({1, 1, 1, 73}) >= 0,
+          "UTF-8 selected world catalog could not be decoded");
+  require(
+      mw34::materials::surface_normal_catalog_paths(
+          std::filesystem::u8path(unicode_selection.authored_manifests.at(0)))
+              .size() == 1,
+      "UTF-8 authored catalog could not be read");
   EnvironmentFixture duplicate(folder / "duplicate");
   env_test_reject(
       [&] { load_environment_packs({training.path(), duplicate.path()}); },
@@ -373,7 +395,7 @@ void check_environment_packs() {
   require(load_environment_packs({relocated.path()}).world_manifests.size() ==
               1,
           "Pinned relocated catalog rejected");
-  for (unsigned offset : {12U, 16U}) {
+  for (unsigned offset : {12U, 8U}) {
     EnvironmentFixture broken(folder /
                               ("broken-count-" + std::to_string(offset)));
     std::string bank(64, '\0');
@@ -384,6 +406,34 @@ void check_environment_packs() {
     broken.save();
     env_test_reject([&] { load_environment_packs({broken.path()}); },
                     "Negative native bank count admitted");
+  }
+  EnvironmentFixture palette(folder / "palette-bank");
+  std::string paletted(24 + 40 + 512, '\0');
+  paletted[4] = 1;
+  paletted[8] = 1;
+  paletted[12] = 1;
+  palette.put("environment/bank.bin", paletted, "ZBD-texture-v1");
+  palette.save();
+  require(!load_environment_packs({palette.path()}).banks.empty(),
+          "Valid paletted bank rejected");
+  EnvironmentFixture embedded_cr(folder / "embedded-cr");
+  embedded_cr.put("environment/world.txt", "MW34SNP1\nwo\rrld.bin\n",
+                  "MW34SNP1");
+  embedded_cr.save();
+  env_test_reject([&] { load_environment_packs({embedded_cr.path()}); },
+                  "Embedded manifest CR accepted");
+  for (const auto &name :
+       {std::string("world page.bin"), std::string(81, 'x') + ".bin"}) {
+    EnvironmentFixture filename(
+        folder / (name.size() > 80 ? "long-name" : "space-name"));
+    filename.put("environment/" + name, env_test_page(true), "BWSNR3");
+    filename.manifest["files"].erase("environment/world.bin");
+    filename.registry["world"] = {"environment/" + name};
+    filename.put("environment/world.txt", "MW34SNP1\n" + name + "\n",
+                 "MW34SNP1");
+    filename.save();
+    env_test_reject([&] { load_environment_packs({filename.path()}); },
+                    "Unsupported page filename admitted");
   }
   EnvironmentFixture truncated(folder / "truncated-bank");
   std::string short_bank(24, '\0');

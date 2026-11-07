@@ -191,7 +191,7 @@ void env_header(const EnvPin &pin) {
   if (pin.format == "ZBD-texture-v1") {
     if (pin.bytes > 2147483647ULL)
       env_fail("texture bank exceeds native offset domain");
-    const unsigned char expected[] = {0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0};
+    const unsigned char expected[] = {0, 0, 0, 0, 1, 0, 0, 0};
     if (count < 24 || std::memcmp(head, expected, sizeof expected))
       env_fail("invalid texture bank header");
     const auto signed_word = [&](unsigned offset) {
@@ -203,7 +203,7 @@ void env_header(const EnvPin &pin) {
         env_fail("negative texture bank count");
       return std::uint64_t(value);
     };
-    const auto textures = signed_word(12), palettes = signed_word(16);
+    const auto textures = signed_word(12), palettes = signed_word(8);
     if (24 + textures * 40 + palettes * 512 > pin.bytes)
       env_fail("texture bank table exceeds file");
   } else if (pin.format == "MW34-lighting-v1") {
@@ -246,7 +246,11 @@ void env_catalog(const EnvPack &pack, const char *role, const char *magic,
             .lexically_relative(efs::u8path(manifest).parent_path())
             .generic_u8string();
     if (relative.empty() || relative.find('/') != std::string::npos ||
-        relative == "..")
+        relative == ".." ||
+        relative.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+                                   "RSTUVWXYZ0123456789-_.") !=
+            std::string::npos ||
+        relative.size() > (std::string(role) == "world" ? 80U : 512U))
       env_fail("normal page outside manifest directory");
     expected += relative + "\n";
     bytes += it->second.bytes;
@@ -258,7 +262,15 @@ void env_catalog(const EnvPack &pack, const char *role, const char *magic,
       env_fail("normal catalog budget exceeded");
   }
   auto actual = env_read_text(efs::u8path(pack.pins.at(manifest).path));
-  actual.erase(std::remove(actual.begin(), actual.end(), '\r'), actual.end());
+  std::string normalized;
+  std::istringstream lines(actual);
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    normalized += line + "\n";
+  }
+  actual = std::move(normalized);
   if (!actual.empty() && actual.back() != '\n')
     actual += '\n';
   if (actual != expected)
