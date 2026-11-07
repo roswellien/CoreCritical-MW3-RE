@@ -20,6 +20,9 @@ struct AssetStatistics {
   std::uint64_t retired_geometry_buffers{};
   std::uint64_t gpu_prepared_vertices{}, early_prepared_models{},
       prepared_cpu_fallback_batches{};
+  // Decoded world-page pixels only; excludes authored catalogs and GPU copies.
+  std::uint64_t world_normal_decoded_bytes{}, world_normal_peak_decoded_bytes{},
+      world_normal_loaded_pages{};
 };
 
 class VulkanFrameRenderer : public sdlfe::FrameRenderer {

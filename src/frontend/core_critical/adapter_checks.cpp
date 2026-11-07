@@ -7,7 +7,14 @@
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "renderer/material_normals.hpp"
 #include "renderer/surface_detail.hpp"
+
+namespace mw34::materials {
+void set_active_surface_key(const SurfaceKey &key);
+void clear_active_surface_key();
+bool get_active_surface_key(SurfaceKey *out);
+} // namespace mw34::materials
 #include "tests/prepared_visual_fixture.h"
 #include <cfenv>
 
@@ -396,6 +403,258 @@ void check_quality(SDL_Window *window, sdlfe::RendererBackend backend,
 } // namespace
 
 namespace {
+void check_terrain_surface_normals(SDL_Window *window,
+                                   sdlfe::RendererBackend backend) {
+  const auto folder = std::filesystem::temp_directory_path() /
+                      ("cc-terrain-normal-check-" +
+                       std::to_string(SDL_GetPerformanceCounter()));
+  require(std::filesystem::create_directory(folder),
+          "Terrain normal fixture directory already exists");
+  struct Files {
+    std::filesystem::path folder;
+    ~Files() {
+      std::error_code error;
+      std::filesystem::remove_all(folder, error);
+#if defined(_WIN32)
+      _putenv_s("MW34_WORLD_NORMALS", "");
+#else
+      unsetenv("MW34_WORLD_NORMALS");
+#endif
+    }
+  } files{folder};
+
+  // Model fixture so PreparedModels admits per-pixel lighting
+  std::ofstream(folder / "mesh.bin", std::ios::binary)
+      << prepared_fixture::mesh(2, 0xffff0000);
+  std::ofstream(folder / "textures.bin", std::ios::binary)
+      << prepared_fixture::textures();
+  std::ofstream(folder / "normals.bin", std::ios::binary)
+      << prepared_fixture::normals(0xffd980d9);
+
+  // Primary t1m1 ground terrain tile SurfaceKey: ggter1, 128x128, format 1
+  // (RGB565), hash 0x6335d0d1f5c866
+  const mw34::materials::SurfaceKey t1m1_terrain_key{128, 128, 1,
+                                                     0x6335d0d1f5c866ULL};
+  const auto page_path = folder / "page-0.bin";
+  const auto world_path = folder / "world.txt";
+
+  // Build valid BWSNR2 page containing t1m1_terrain_key and non-neutral normal
+  // (0xffd980d9)
+  {
+    prepared_fixture::Bytes out;
+    out.value.assign("BWSNR2\0\0", 8);
+    out.u32(1); // 1 key
+    out.u32(t1m1_terrain_key.width);
+    out.u32(t1m1_terrain_key.height);
+    out.u32(t1m1_terrain_key.format);
+    out.u32(uint32_t(t1m1_terrain_key.hash & 0xffffffff));
+    out.u32(uint32_t(t1m1_terrain_key.hash >> 32));
+    out.name("terrain0");
+
+    out.value.append("BWNRM2\0\0", 8);
+    out.u32(1); // batches
+    out.u32(1); // images count
+    out.u32(0); // binding: batch 0 -> image 0
+    out.name("terrain0");
+    out.u32(1); // width 1
+    out.u32(1); // height 1
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    const uint32_t normal_pixel = 0xffd980d9;
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+      hash ^= uint8_t(normal_pixel >> shift);
+      hash *= 0x100000001b3ULL;
+    }
+    out.u64(hash);
+    out.u32(normal_pixel);
+
+    std::ofstream pf(page_path, std::ios::binary);
+    pf.write(out.value.data(), out.value.size());
+  }
+
+  // Build manifest
+  {
+    std::ofstream wf(world_path);
+    wf << "MW34SNP1\npage-0.bin\n";
+  }
+
+#if defined(_WIN32)
+  _putenv_s("MW34_WORLD_NORMALS", world_path.string().c_str());
+#else
+  setenv("MW34_WORLD_NORMALS", world_path.string().c_str(), 1);
+#endif
+
+  sdlfe::CoreCriticalAssets options;
+  options.textures = (folder / "textures.bin").u8string();
+  options.models.push_back(
+      {"authored", "0", (folder / "mesh.bin").u8string(), options.textures});
+  options.normals.push_back(
+      {"authored", "0", (folder / "normals.bin").u8string()});
+  options.lighting = "normal";
+  // The screen-aligned fixture faces -Z. Light that face so perturbations
+  // affect direct illumination rather than comparing two ambient-only images.
+  options.sun_azimuth = "-90";
+
+  auto renderer = make_check_renderer(window, backend, {}, options);
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 0,
+          "World pages decoded before first material lookup");
+#if defined(_WIN32)
+  _putenv_s("MW34_WORLD_NORMALS", (folder / "missing.txt").string().c_str());
+#else
+  setenv("MW34_WORLD_NORMALS", (folder / "missing.txt").string().c_str(), 1);
+#endif
+  renderer->set_viewport(0, 0, 64, 64);
+  renderer->clear(true, 0, 0, 0);
+
+  // Producer active surface key channel
+  mw34::materials::set_active_surface_key(t1m1_terrain_key);
+  std::vector<uint8_t> green_data(128 * 128 * 4);
+  for (size_t i = 0; i < 128 * 128; ++i) {
+    green_data[i * 4 + 0] = 34;
+    green_data[i * 4 + 1] = 139;
+    green_data[i * 4 + 2] = 34;
+    green_data[i * 4 + 3] = 255;
+  }
+  const auto tex =
+      renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
+  mw34::materials::clear_active_surface_key();
+
+  platform::DrawState state{};
+  state.texture = tex;
+  quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+  std::vector<uint32_t> pixels;
+  int width = 0, height = 0;
+  require(renderer->read_back(&pixels, &width, &height),
+          "Could not read back terrain normal frame");
+
+  const auto normal_pixels = pixels;
+  const auto stats = renderer->asset_statistics();
+  require(stats.normal_draws > 0, "Terrain surface normal binding test failed "
+                                  "with 0 matched normal bindings");
+  require(stats.world_normal_decoded_bytes == 4 &&
+              stats.world_normal_peak_decoded_bytes == 4 &&
+              stats.world_normal_loaded_pages == 1,
+          "World page decoded-byte/loaded-page accounting is incorrect");
+
+  // Verify reset_scene_resources invalidates epoch and stale texture slot
+  // bindings
+  renderer->reset_scene_resources();
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 0 &&
+              renderer->asset_statistics().world_normal_loaded_pages == 0,
+          "Scene reset retained decoded world pages");
+  renderer->clear(true, 0, 0, 0);
+  quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+  require(renderer->read_back(&pixels, &width, &height),
+          "Could not read back after reset_scene_resources");
+  require(renderer->asset_statistics().normal_draws == stats.normal_draws,
+          "Scene reset reused a stale surface normal binding");
+  require(renderer->asset_statistics().world_normal_decoded_bytes == 0,
+          "Stale texture caused a world-page decode after reset");
+
+  // Recreated native textures must acquire the new epoch and reload the
+  // catalog.
+  mw34::materials::set_active_surface_key(t1m1_terrain_key);
+  state.texture =
+      renderer->create_named_texture("ggter1", 128, 128, green_data.data(), 1);
+  mw34::materials::clear_active_surface_key();
+  quad(*renderer, 0, 64, .5f, 0xffffffff, state);
+  require(renderer->read_back(&pixels, &width, &height) &&
+              renderer->asset_statistics().normal_draws > stats.normal_draws &&
+              renderer->asset_statistics().world_normal_decoded_bytes == 4,
+          "New-epoch texture did not reload its world normal page");
+
+  {
+    bool rejected = false;
+    try {
+      auto missing_renderer = make_check_renderer(window, backend, {}, options);
+    } catch (const std::runtime_error &) {
+      rejected = true;
+    }
+    require(rejected, "Configured missing world catalog was not rejected "
+                      "before mission callbacks");
+#if defined(_WIN32)
+    _putenv_s("MW34_WORLD_NORMALS", world_path.string().c_str());
+#else
+    setenv("MW34_WORLD_NORMALS", world_path.string().c_str(), 1);
+#endif
+    auto repaired_renderer = make_check_renderer(window, backend, {}, options);
+    require(repaired_renderer->asset_statistics().world_normal_decoded_bytes ==
+                0,
+            "Catalog admission decoded pixels before a material lookup");
+  }
+
+  std::vector<uint32_t> flat_pixels;
+  // Flat lighting control: normal_draws == 0
+  {
+    auto flat_options = options;
+    flat_options.lighting = "flat";
+    auto flat_renderer = make_check_renderer(window, backend, {}, flat_options);
+    flat_renderer->set_viewport(0, 0, 64, 64);
+    flat_renderer->clear(true, 0, 0, 0);
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    const auto flat_tex = flat_renderer->create_named_texture(
+        "ggter1", 128, 128, green_data.data(), 1);
+    mw34::materials::clear_active_surface_key();
+    platform::DrawState flat_state{};
+    flat_state.texture = flat_tex;
+    quad(*flat_renderer, 0, 64, .5f, 0xffffffff, flat_state);
+    require(flat_renderer->read_back(&pixels, &width, &height),
+            "Could not read back flat terrain frame");
+    flat_pixels = pixels;
+    require(pixels != normal_pixels,
+            "Visible terrain normal fixture did not differ from flat lighting");
+    require(flat_renderer->asset_statistics().normal_draws == 0,
+            "Flat lighting produced non-zero normal draws");
+    require(flat_renderer->asset_statistics().world_normal_decoded_bytes == 0,
+            "Flat lighting decoded a world normal page");
+  }
+
+  // Off lighting control: normal_draws == 0
+  {
+    sdlfe::CoreCriticalAssets off_options;
+    off_options.lighting = "off";
+    auto off_renderer = make_check_renderer(window, backend, {}, off_options);
+    off_renderer->set_viewport(0, 0, 64, 64);
+    off_renderer->clear(true, 0, 0, 0);
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    const auto off_tex = off_renderer->create_named_texture(
+        "ggter1", 128, 128, green_data.data(), 1);
+    mw34::materials::clear_active_surface_key();
+    platform::DrawState off_state{};
+    off_state.texture = off_tex;
+    quad(*off_renderer, 0, 64, .5f, 0xffffffff, off_state);
+    require(off_renderer->read_back(&pixels, &width, &height),
+            "Could not read back off terrain frame");
+    require(off_renderer->asset_statistics().normal_draws == 0,
+            "Off lighting produced non-zero normal draws");
+    require(off_renderer->asset_statistics().world_normal_decoded_bytes == 0,
+            "Off lighting decoded a world normal page");
+  }
+  // Optional content absent: normal mode is neutral, not a synthetic pack.
+#if defined(_WIN32)
+  _putenv_s("MW34_WORLD_NORMALS", "");
+#else
+  unsetenv("MW34_WORLD_NORMALS");
+#endif
+  {
+    auto neutral_renderer = make_check_renderer(window, backend, {}, options);
+    neutral_renderer->set_viewport(0, 0, 64, 64);
+    neutral_renderer->clear(true, 0, 0, 0);
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    platform::DrawState neutral_state{};
+    neutral_state.texture = neutral_renderer->create_named_texture(
+        "ggter1", 128, 128, green_data.data(), 1);
+    mw34::materials::clear_active_surface_key();
+    quad(*neutral_renderer, 0, 64, .5f, 0xffffffff, neutral_state);
+    require(
+        neutral_renderer->read_back(&pixels, &width, &height) &&
+            pixels == flat_pixels &&
+            neutral_renderer->asset_statistics().normal_draws == 0 &&
+            neutral_renderer->asset_statistics().world_normal_decoded_bytes ==
+                0,
+        "Missing optional world pack did not remain neutral");
+  }
+}
+
 void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                     const sdlfe::CoreCriticalQuality &quality,
                     bool materials = false) {
@@ -703,6 +962,9 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
           "Prepared lighting changed sharp HUD composition or existing world "
           "color");
   zmod::fog() = saved_fog;
+  if (materials) {
+    check_terrain_surface_normals(window, backend);
+  }
 }
 } // namespace
 

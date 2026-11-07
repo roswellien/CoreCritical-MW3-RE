@@ -1,4 +1,28 @@
 #include "gamez/zimage/zimg_texture.h"
+#include "frontend/core_critical/renderer/material_normals.hpp"
+
+namespace mw34::materials {
+thread_local SurfaceKey g_active_surface_key{};
+thread_local bool g_has_active_surface_key{false};
+
+void set_active_surface_key(const SurfaceKey &key) {
+  g_active_surface_key = key;
+  g_has_active_surface_key = true;
+}
+
+void clear_active_surface_key() {
+  g_has_active_surface_key = false;
+  g_active_surface_key = {};
+}
+
+bool get_active_surface_key(SurfaceKey *out) {
+  if (g_has_active_surface_key && out) {
+    *out = g_active_surface_key;
+    return true;
+  }
+  return false;
+}
+} // namespace mw34::materials
 
 #include <cstdio>
 #include <cstring>
@@ -259,6 +283,24 @@ void load_texture(TextureEntry* entry, int32_t free_pixels) {
     if (g_hooks.reload) g_hooks.reload(entry->surface, &img);
     entry->state = 1;
     return;
+  }
+  // Texture creation can throw; never let one upload's identity leak into the
+  // next.
+  struct ActiveSurfaceScope {
+    ~ActiveSurfaceScope() { mw34::materials::clear_active_surface_key(); }
+  } active_surface_scope;
+  mw34::materials::clear_active_surface_key();
+  if (img.pixels && img.palette_count == 0 && (img.flags & kTwoBytes) &&
+      img.width > 0 && img.height > 0 && img.pixel_count > 0 &&
+      std::uint64_t(img.pixel_count) >=
+          std::uint64_t(img.width) * std::uint64_t(img.height)) {
+    const uint32_t format = (img.flags & kAlpha) == 0 ? 1 : img.alpha ? 3 : 2;
+    const uint64_t hash = mw34::materials::normal_hash(
+        img.pixels, static_cast<size_t>(img.width) * img.height * 2);
+    const mw34::materials::SurfaceKey key{static_cast<uint32_t>(img.width),
+                                          static_cast<uint32_t>(img.height),
+                                          format, hash};
+    mw34::materials::set_active_surface_key(key);
   }
   if (!entry->surface) {
     // [0x0072f364] = 0x0057b130 (zvid_ddd3d).
