@@ -8,6 +8,9 @@
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "renderer/campaign_environment_policy.hpp"
+#include "renderer/campaign_lighting.hpp"
+#include "renderer/campaign_sun_settings.hpp"
 #include "renderer/material_normals.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/surface_detail.hpp"
@@ -1346,6 +1349,229 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
 #include "prepared_gpu_checks.inc"
 #include "ultrawide_checks.inc"
 
+void check_campaign_lighting_and_policy() {
+  using namespace mw34::campaign;
+  mw34::sun::Settings base{};
+  base.enabled = true;
+  const auto training = resolve_mission_lighting("t1m1");
+  const auto lit = mission_sun_settings(base, training, true, false);
+  require(lit.azimuth == 95.f && lit.elevation == 6.f && lit.strength == 1.05f,
+          "Training lighting was not applied");
+  const auto manual = mission_sun_settings(base, training, true, true);
+  require(manual.azimuth == 45.f && manual.elevation == 35.f,
+          "Explicit default sun angles were overwritten");
+  const auto off = mission_sun_settings(base, training, false, false);
+  require(off.strength == base.strength && off.color == base.color &&
+              off.azimuth == base.azimuth,
+          "Off-mode inherited campaign lighting");
+  const auto restored = mission_sun_settings(
+      base, resolve_mission_lighting("unknown"), true, false);
+  require(restored.color == base.color && restored.ambient == base.ambient,
+          "Unknown mission inherited stale lighting");
+  require(
+      mission_sun_settings(base, resolve_mission_lighting("c2m2"), true, false)
+              .strength == 0.f,
+      "Sealed mission retained directional sun");
+  unsigned identities = 0;
+  for (int world = 0; world < 6; ++world)
+    for (int number = 0; number <= 7; ++number) {
+      const auto id = canonical_mission_id(world, number);
+      if (!id.empty()) {
+        ++identities;
+        require(resolve_mission_lighting(id).has_profile,
+                "Native mission identity failed profile lookup");
+      }
+    }
+  require(identities == 24 && canonical_mission_id(4, 4) == "c4m4" &&
+              canonical_mission_id(-1, 1).empty(),
+          "Native mission mapping has wrong bounds");
+
+  // 1. All 24 real mission IDs distinct and findable
+  static constexpr const char *const kAllMissionIds[24] = {
+      "t1m1", "t1m2", "t1m3", "t1m4", "c1m1", "c1m2", "c1m3", "c1m4",
+      "c2m1", "c2m2", "c2m3", "c2m4", "c3m1", "c3m2", "c3m3", "c3m4",
+      "c3m5", "c3m6", "c4m1", "c4m2", "c4m3", "c4m4", "c4m5", "c4m6"};
+
+  const auto *fuel_depot = find_builtin_environment("c3m3");
+  require(fuel_depot &&
+              fuel_depot->sky_tint == std::array<float, 3>{2.60f, .70f, .35f} &&
+              fuel_depot->sky_brightness == 1.15f &&
+              fuel_depot->sky_grade == std::array<float, 3>{.78f, .75f, .60f},
+          "Fuel Depot must use current authored mission sky values");
+  const auto &db = builtin_mission_database();
+  require(db.size() == 24,
+          "Builtin mission database must contain exactly 24 profiles");
+
+  for (size_t i = 0; i < 24; ++i) {
+    const char *id = kAllMissionIds[i];
+    const MissionEnvironment *env = find_builtin_environment(id);
+    require(env != nullptr,
+            "Mission profile must be found in builtin database");
+    require(std::string_view(env->id) == id, "Mission environment ID mismatch");
+
+    const auto resolved = resolve_mission_lighting(id);
+    require(resolved.has_profile == true,
+            "Resolved mission lighting must indicate has_profile == true");
+    require(resolved.environment == env,
+            "Resolved environment pointer mismatch");
+
+    // Verify distinctness across database entries
+    for (size_t j = i + 1; j < 24; ++j) {
+      require(std::string_view(kAllMissionIds[i]) != kAllMissionIds[j],
+              "Mission IDs must be distinct");
+      require(find_builtin_environment(kAllMissionIds[i]) !=
+                  find_builtin_environment(kAllMissionIds[j]),
+              "Mission environment pointers must be distinct");
+    }
+  }
+
+  // 2. Unknown case explicit fallback (no profile, stock fallback, no crash/log
+  // spam)
+  for (const char *unknown_id : {"", "unknown", "c0m0", "c9m9", "t2m1"}) {
+    require(find_builtin_environment(unknown_id) == nullptr,
+            "Unknown mission ID must return nullptr");
+    const auto unk = resolve_mission_lighting(unknown_id);
+    require(unk.has_profile == false,
+            "Unknown mission must yield has_profile == false");
+    require(unk.environment == nullptr,
+            "Unknown mission must yield null environment");
+    require(unk.policy.inside == false,
+            "Unknown mission must default inside == false");
+    require(unk.policy.suppress_sun == false,
+            "Unknown mission must default suppress_sun == false");
+    require(unk.policy.suppress_sky == false,
+            "Unknown mission must default suppress_sky == false");
+    require(unk.policy.sky_source == SkySource::OriginalClouds,
+            "Unknown mission must default to SkySource::OriginalClouds");
+  }
+
+  // 3. Sealed policy independent of potentially contradictory profile input
+  // Sealed missions: c2m2, c2m4, c3m5
+  for (const char *sealed_id : {"c2m2", "c2m4", "c3m5"}) {
+    require(sealed_mission(sealed_id) == true,
+            "Expected sealed mission identity");
+    const auto sealed_res = resolve_mission_lighting(sealed_id);
+    require(sealed_res.policy.inside == true,
+            "Sealed mission must enforce inside == true");
+    require(sealed_res.policy.suppress_sun == true,
+            "Sealed mission must suppress sun");
+    require(sealed_res.policy.suppress_sky == true,
+            "Sealed mission must suppress sky");
+    require(sealed_res.policy.sky_source == SkySource::Interior,
+            "Sealed mission must resolve to SkySource::Interior");
+
+    // Independent of contradictory profile input: even if profile_interior ==
+    // false
+    const auto forced_ext = resolve_environment_policy(sealed_id, false);
+    require(forced_ext.inside == true,
+            "Sealed policy must override contradictory exterior flag");
+    require(forced_ext.suppress_sun == true,
+            "Sealed policy must override contradictory sun flag");
+    require(forced_ext.suppress_sky == true,
+            "Sealed policy must override contradictory sky flag");
+    require(forced_ext.sky_source == SkySource::Interior,
+            "Sealed policy must override contradictory sky source");
+  }
+
+  // Unsealed mission with profile_interior == true gets inside policy
+  const auto unsealed_interior = resolve_environment_policy("c1m1", true);
+  require(unsealed_interior.inside == true,
+          "Profile interior flag must set inside == true");
+  require(unsealed_interior.suppress_sun == true,
+          "Profile interior flag must suppress sun");
+  require(unsealed_interior.suppress_sky == true,
+          "Profile interior flag must suppress sky");
+  require(unsealed_interior.sky_source == SkySource::Interior,
+          "Profile interior flag must set Interior sky");
+
+  // Normal unsealed mission (c1m1)
+  const auto c1m1_res = resolve_mission_lighting("c1m1");
+  require(c1m1_res.policy.inside == false, "c1m1 must not be inside");
+  require(c1m1_res.policy.suppress_sun == false, "c1m1 must not suppress sun");
+  require(c1m1_res.policy.suppress_sky == false, "c1m1 must not suppress sky");
+  require(c1m1_res.policy.sky_source == SkySource::Twilight,
+          "c1m1 must have Twilight sky");
+
+  // 4. Expected sky categories
+  // ClearDay: t1m2, c2m1, c3m1, c3m2, c4m6
+  for (const char *id : {"t1m2", "c2m1", "c3m1", "c3m2", "c4m6"}) {
+    require(mission_sky_source(id) == SkySource::ClearDay,
+            "Expected ClearDay sky source");
+  }
+  // Twilight: t1m1, t1m4, c1m1, c3m3, c3m4, c4m3, c4m4, c4m5
+  for (const char *id :
+       {"t1m1", "t1m4", "c1m1", "c3m3", "c3m4", "c4m3", "c4m4", "c4m5"}) {
+    require(mission_sky_source(id) == SkySource::Twilight,
+            "Expected Twilight sky source");
+  }
+  // ClearNight: c3m6
+  require(mission_sky_source("c3m6") == SkySource::ClearNight,
+          "c3m6 must be ClearNight");
+  // DustHaze: c2m3
+  require(mission_sky_source("c2m3") == SkySource::DustHaze,
+          "c2m3 must be DustHaze");
+  // Interior: c2m2, c2m4, c3m5
+  for (const char *id : {"c2m2", "c2m4", "c3m5"}) {
+    require(mission_sky_source(id) == SkySource::Interior,
+            "Expected Interior sky source");
+  }
+  // OriginalClouds: t1m3, c1m2, c1m3, c1m4, c4m1, c4m2
+  for (const char *id : {"t1m3", "c1m2", "c1m3", "c1m4", "c4m1", "c4m2"}) {
+    require(mission_sky_source(id) == SkySource::OriginalClouds,
+            "Expected OriginalClouds sky source");
+  }
+
+  // 5. Representative authored numeric values
+  const auto *t1m1 = find_builtin_environment("t1m1");
+  require(t1m1 && t1m1->azimuth == 95.0f && t1m1->elevation == 6.0f,
+          "t1m1 sun angle mismatch");
+  require(t1m1->sun_strength == 1.05f && t1m1->fog_distance == 1100.0f,
+          "t1m1 metrics mismatch");
+
+  const auto *t1m2 = find_builtin_environment("t1m2");
+  require(t1m2 && t1m2->heat_shimmer == 0.70f && t1m2->azimuth == 115.0f,
+          "t1m2 metrics mismatch");
+
+  const auto *t1m3 = find_builtin_environment("t1m3");
+  require(t1m3 && t1m3->rain_intensity == 0.70f && !t1m3->shadows,
+          "t1m3 metrics mismatch");
+
+  const auto *c1m1 = find_builtin_environment("c1m1");
+  require(c1m1 && c1m1->azimuth == 245.0f && c1m1->elevation == 7.0f,
+          "c1m1 sun angle mismatch");
+  require(c1m1->sun_strength == 1.40f && c1m1->shadow_range == 300.0f,
+          "c1m1 metrics mismatch");
+
+  const auto *c1m2 = find_builtin_environment("c1m2");
+  require(c1m2 && c1m2->env_lights.size() == 4 && c1m2->rain_intensity == 0.35f,
+          "c1m2 light emitters mismatch");
+
+  const auto *c1m3 = find_builtin_environment("c1m3");
+  require(c1m3 && c1m3->has_lightning && c1m3->rain_intensity == 0.95f,
+          "c1m3 storm metrics mismatch");
+
+  const auto *c2m2 = find_builtin_environment("c2m2");
+  require(c2m2 && c2m2->is_interior && c2m2->sun_strength == 0.0f,
+          "c2m2 interior metrics mismatch");
+
+  const auto *c3m5 = find_builtin_environment("c3m5");
+  require(c3m5 && c3m5->env_lights.size() == 4 && c3m5->is_interior,
+          "c3m5 interior light emitters mismatch");
+
+  const auto *c4m1 = find_builtin_environment("c4m1");
+  require(c4m1 && c4m1->env_lights.size() == 3 && c4m1->volcanic_ash == 0.75f &&
+              c4m1->lava_glow == 0.85f,
+          "c4m1 volcanic metrics mismatch");
+
+  const auto *c4m6 = find_builtin_environment("c4m6");
+  require(c4m6 && c4m6->azimuth == 110.0f && c4m6->elevation == 28.0f &&
+              c4m6->sun_strength == 1.45f,
+          "c4m6 metrics mismatch");
+
+  std::fprintf(stderr, "check_campaign_lighting_and_policy: passed (24 mission "
+                       "profiles, sealed maps, sky categories)\n");
+}
+
 void check_renderer_bridge_config() {
   // 1. Zero function-static env cache test
   require(mw34::detail::presentation_time(1, 10.5) == 10.5,
@@ -1402,6 +1628,8 @@ void check_renderer_bridge_config() {
   require(cfg_wsi.normal_maps_enabled == false,
           "normal_maps_enabled false mismatch");
   require(cfg_wsi.sun == false, "sun false mismatch");
+
+  check_campaign_lighting_and_policy();
 
   std::fprintf(stderr, "check_renderer_bridge_config: passed\n");
 }

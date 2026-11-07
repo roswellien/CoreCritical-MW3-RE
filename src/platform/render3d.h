@@ -71,6 +71,14 @@ struct DeferredMaterialBinding {
   virtual ~DeferredMaterialBinding() = default;
 };
 
+// Typed mission-change notification: the 0-based campaign world (launch
+// index) and the mission number within it. {-1, 0} is the empty identity
+// (failed load or scene reset).
+struct MissionIdentity {
+  int32_t world_index = -1;
+  int32_t number = 0;
+};
+
 class Render3D {
  public:
   virtual ~Render3D() = default;
@@ -88,6 +96,9 @@ class Render3D {
   }
   virtual void note_cpu_model_geometry() {}
   virtual bool wants_model_context() const { return false; }
+  // Typed mission-change callback from the native missions object. The
+  // default is a no-op so renderers that do not care are unaffected.
+  virtual void mission_changed(const MissionIdentity &) {}
   virtual bool wants_material_context() const { return false; }
   virtual std::shared_ptr<const DeferredMaterialBinding>
   capture_deferred_material_binding(int32_t) {

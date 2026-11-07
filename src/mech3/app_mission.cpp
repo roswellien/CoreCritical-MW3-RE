@@ -2473,6 +2473,16 @@ void GameEngine::missions_start(uint32_t list) {
   mech_entities_forget();
   m.start();
   if (m.failed) std::fprintf(stderr, "mw3: the mission load failed\n");
+  // Typed mission-change notification, fired even when the load failed (with
+  // the empty identity) so renderers drop any stale mission state.
+  if (auto *render = platform_parts().render) {
+    const platform::MissionIdentity identity =
+        m.failed
+            ? platform::MissionIdentity{-1, 0}
+            : platform::MissionIdentity{static_cast<int32_t>(launch_.index),
+                                        static_cast<int32_t>(launch_.number)};
+    render->mission_changed(identity);
+  }
   zcls::Node* cam = mission_node(*this, camera_);
   if (launch_.active && launch_.have_pos && cam) {  // as the debug viewer places it (render.md section 0)
     zcls::camera_set_rotation(cam, -launch_.pitch, launch_.yaw + 3.14159265f, 0.0f);
