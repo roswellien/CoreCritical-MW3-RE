@@ -28,9 +28,28 @@ static_assert(sizeof(zmod::TLVertex) == sizeof(TLVertex), "both are D3DTLVERTEX"
 namespace {
 TransparentQueue g_queue;
 OverlayList g_overlay;
+platform::Render3D *g_render = nullptr;
+// Host-only admission sidecars preserve original queue records and draw order.
+std::shared_ptr<const platform::DeferredMaterialBinding>
+    g_transparent_materials[TransparentQueue::kMaxPolys];
+std::shared_ptr<const platform::DeferredMaterialBinding>
+    g_overlay_materials[OverlayList::kMax];
+struct DeferredMaterialScope {
+  platform::Render3D *renderer;
+  DeferredMaterialScope(
+      std::shared_ptr<const platform::DeferredMaterialBinding> binding)
+      : renderer(g_render) {
+    if (renderer)
+      renderer->begin_deferred_material_draw(std::move(binding));
+  }
+  ~DeferredMaterialScope() {
+    if (renderer)
+      renderer->end_deferred_material_draw();
+  }
+};
+
 TLVertex g_flat[64];
 DeviceState g_state;
-platform::Render3D* g_render = nullptr;
 platform::DrawState g_draw;
 DrawBuffers g_buffers{reinterpret_cast<TLVertex*>(zmod::clip2d().tl),
                       reinterpret_cast<const WorkRecord*>(zmod::clip2d().work), &zmod::clip2d().shadow};
@@ -250,6 +269,10 @@ OverlayPoly* overlay_slot(int32_t type, int32_t count, const D3DTexture* texture
     zerr::report(0x400, kFile, line, msg);
     return nullptr;
   }
+  g_overlay_materials[o.count] =
+      g_render && texture
+          ? g_render->capture_deferred_material_binding(texture->handle)
+          : nullptr;
   OverlayPoly& p = o.polys[o.count++];
   p.type = type;
   p.count = count;
@@ -359,6 +382,10 @@ TLVertex* queue_transparent(int32_t primitive, int32_t count, const D3DTexture* 
     zerr::report(0x400, kFile, 0x599, msg);
     return nullptr;
   }
+  g_transparent_materials[q.count] =
+      g_render && texture
+          ? g_render->capture_deferred_material_binding(texture->handle)
+          : nullptr;
   TransparentPoly& p = q.polys[q.count++];
   p.primitive = primitive;
   p.count = count;
@@ -686,6 +713,8 @@ void flush_transparent() {
   for (uint32_t i = 0; i < q.count; ++i) q.order[i] = static_cast<int32_t>(q.count - 1 - i);
   sort_transparent();
   for (uint32_t n = 0; n < q.count; ++n) {
+    DeferredMaterialScope material_scope(
+        std::move(g_transparent_materials[q.order[n]]));
     const TransparentPoly& p = q.polys[q.order[n]];
     if (p.texture) {
       // Compares a texture type with the cached ALPHAOP: anything but 2
@@ -715,6 +744,7 @@ void flush_overlay() {
   if (o.count == 0) return;
   set_render_state(23, 8);  // ZFUNC ALWAYS
   for (int32_t n = 0; n < o.count; ++n) {
+    DeferredMaterialScope material_scope(std::move(g_overlay_materials[n]));
     const OverlayPoly& p = o.polys[n];
     const D3DTexture* t = p.texture;
     switch (p.type) {

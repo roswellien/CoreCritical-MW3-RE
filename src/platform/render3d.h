@@ -65,6 +65,12 @@ struct MaterialDrawContext {
   uint32_t polygon = 0;
 };
 
+// Opaque owned admission receipt. Implementations must keep it pointer-free
+// with respect to native Node/Model/Material/TextureEntry storage.
+struct DeferredMaterialBinding {
+  virtual ~DeferredMaterialBinding() = default;
+};
+
 class Render3D {
  public:
   virtual ~Render3D() = default;
@@ -83,6 +89,18 @@ class Render3D {
   virtual void note_cpu_model_geometry() {}
   virtual bool wants_model_context() const { return false; }
   virtual bool wants_material_context() const { return false; }
+  virtual std::shared_ptr<const DeferredMaterialBinding>
+  capture_deferred_material_binding(int32_t) {
+    return {};
+  }
+  virtual void
+  begin_deferred_material_draw(std::shared_ptr<const DeferredMaterialBinding>) {
+  }
+  virtual void end_deferred_material_draw() noexcept {}
+  // Source geometry is read-only within model draw scopes. A producer that
+  // changes it must invalidate before submitting another polygon.
+  virtual void invalidate_material_geometry() noexcept {}
+
   virtual void begin_material_draw(const MaterialDrawContext &) {}
   virtual void end_material_draw() noexcept {}
   virtual void begin_model_draw(const ModelDrawContext&) {}

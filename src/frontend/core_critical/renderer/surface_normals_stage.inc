@@ -20,8 +20,21 @@ struct NativeBindingContext {
   ::platform::MaterialDrawContext material{};
   std::uint64_t epoch{};
   bool material_active{};
+  bool fingerprint_computed{};
+  std::optional<std::uint64_t> fingerprint;
 } native_context_;
 std::uint64_t binding_rejected_mismatch_{};
+std::uint64_t native_fingerprint_evaluations_{};
+struct NativeDeferredBinding final : ::platform::DeferredMaterialBinding {
+  std::weak_ptr<const int> owner;
+  mw34::materials::SurfaceKey key{};
+  std::uint64_t epoch{}, version{};
+  int texture{-1}, normal_index{-1};
+};
+const std::shared_ptr<const int> material_binding_owner_ =
+    std::make_shared<const int>(0);
+std::shared_ptr<const ::platform::DeferredMaterialBinding>
+    deferred_material_binding_;
 
 bool reject_surface_binding(const char *reason) {
   ++binding_rejected_mismatch_;
@@ -167,7 +180,12 @@ bool native_surface_binding_matches(const mw34::materials::SurfaceKey &key,
              .second)
       return true;
   }
-  const auto fingerprint = native_mesh_uv_hash(*context.model);
+  if (!native_context_.fingerprint_computed) {
+    native_context_.fingerprint = native_mesh_uv_hash(*context.model);
+    native_context_.fingerprint_computed = true;
+    ++native_fingerprint_evaluations_;
+  }
+  const auto fingerprint = native_context_.fingerprint;
   if (!fingerprint)
     return strict ? reject_surface_binding(
                         "unsupported native source mesh/UV stream")
@@ -266,4 +284,31 @@ surface_normal_image(int index) {
 
 std::uint64_t resident_normal_decoded_bytes() const {
   return surface_normals_.cache.world_bytes;
+}
+
+int deferred_surface_normal_index(const mw34::materials::SurfaceKey &key,
+                                  int texture) {
+  if (!deferred_material_binding_)
+    return surface_normal_index(key, true, texture);
+  const auto *binding = dynamic_cast<const NativeDeferredBinding *>(
+      deferred_material_binding_.get());
+  if (!binding || binding->owner.lock() != material_binding_owner_ ||
+      binding->epoch != group_load_epoch_ || binding->texture != texture ||
+      texture < 0 || std::size_t(texture) >= textures_.size() ||
+      binding->version != textures_[texture].version || binding->key < key ||
+      key < binding->key) {
+    reject_surface_binding("stale or foreign deferred material admission");
+    return -1;
+  }
+  return binding->normal_index;
+}
+
+bool authenticated_deferred_world_draw() const {
+  const auto *binding = dynamic_cast<const NativeDeferredBinding *>(
+      deferred_material_binding_.get());
+  return binding && binding->normal_index >= 0 &&
+         binding->owner.lock() == material_binding_owner_ &&
+         binding->epoch == group_load_epoch_ && binding->texture >= 0 &&
+         std::size_t(binding->texture) < textures_.size() &&
+         binding->version == textures_[binding->texture].version;
 }

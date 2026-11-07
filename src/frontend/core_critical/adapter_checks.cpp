@@ -872,6 +872,90 @@ void check_terrain_surface_normals(SDL_Window *window,
     require(checked_renderer->asset_statistics().normal_draws >
                 qualified.normal_draws,
             "Restored authored native UV binding was not usable");
+    struct DeferredBackendScope {
+      platform::Render3D *renderer = zvid::render3d();
+      zvid::DrawBuffers buffers = zvid::draw_buffers();
+      ~DeferredBackendScope() {
+        zvid::set_render3d(renderer);
+        zvid::draw_buffers() = buffers;
+      }
+    } deferred_backend;
+    zvid::set_render3d(checked_renderer.get());
+    platform::TLVertex deferred_vertices[] = {
+        {0, 0, .5f, 1, 0xffffffff, 0, 0, 0},
+        {64, 0, .5f, 1, 0xffffffff, 0, 1, 0},
+        {0, 64, .5f, 1, 0xffffffff, 0, 0, 1}};
+    zvid::draw_buffers().tl =
+        reinterpret_cast<zvid::TLVertex *>(deferred_vertices);
+    zvid::device_state().primitive = 6;
+    require(zvid::transparent_queue().count == 0 &&
+                zvid::overlay_list().count == 0,
+            "Native deferred fixtures require empty queues");
+    checked_renderer->clear(true, 0, 0, 0);
+    const auto before_deferred = checked_renderer->asset_statistics();
+    checked_renderer->begin_model_draw(model_context);
+    checked_renderer->begin_material_draw(material_context);
+    for (int i = 0; i < 4; ++i)
+      zvid::draw_textured_white(3, &device_texture, 0, .5f, i & 1);
+    const auto admission = checked_renderer->asset_statistics();
+    require(admission.native_fingerprint_evaluations ==
+                before_deferred.native_fingerprint_evaluations + 1,
+            "Native model fingerprint was recomputed per polygon");
+    auto receipt = checked_renderer->capture_deferred_material_binding(
+        device_texture.handle);
+    checked_renderer->end_material_draw();
+    checked_renderer->end_model_draw();
+    zvid::flush_transparent();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Transparent readback failed");
+    const auto after_transparent = checked_renderer->asset_statistics();
+    require(after_transparent.normal_draws > before_deferred.normal_draws &&
+                after_transparent.binding_rejected_mismatch ==
+                    before_deferred.binding_rejected_mismatch,
+            "Transparent queue lost qualified material admission");
+    zvid::flush_overlay();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Overlay readback failed");
+    const auto after_deferred = checked_renderer->asset_statistics();
+    require(after_deferred.normal_draws > after_transparent.normal_draws &&
+                after_deferred.binding_rejected_mismatch ==
+                    before_deferred.binding_rejected_mismatch,
+            "Overlay queue lost qualified material admission");
+    // Same handle after an upload cannot reuse a previously admitted receipt.
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    checked_renderer->update_texture(device_texture.handle, 128, 128,
+                                     green_data.data());
+    mw34::materials::clear_active_surface_key();
+    platform::DrawState receipt_state;
+    receipt_state.texture = device_texture.handle;
+    checked_renderer->begin_deferred_material_draw(receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Stale admission readback failed");
+    require(checked_renderer->asset_statistics().normal_draws ==
+                    after_deferred.normal_draws &&
+                checked_renderer->asset_statistics().binding_rejected_mismatch >
+                    after_deferred.binding_rejected_mismatch,
+            "Deferred admission survived a same-handle upload");
+    // A source mutation inside a model scope explicitly invalidates its hash.
+    checked_renderer->begin_model_draw(model_context);
+    checked_renderer->begin_material_draw(material_context);
+    checked_renderer->capture_deferred_material_binding(device_texture.handle);
+    const auto before_mutation = checked_renderer->asset_statistics();
+    uvs[2] = .75f;
+    checked_renderer->invalidate_material_geometry();
+    checked_renderer->capture_deferred_material_binding(device_texture.handle);
+    require(
+        checked_renderer->asset_statistics().native_fingerprint_evaluations ==
+                before_mutation.native_fingerprint_evaluations + 1 &&
+            checked_renderer->asset_statistics().binding_rejected_mismatch >
+                before_mutation.binding_rejected_mismatch,
+        "In-scope source UV mutation did not invalidate authentication");
+    uvs[2] = 1;
+    checked_renderer->end_material_draw();
+    checked_renderer->end_model_draw();
   }
 }
 

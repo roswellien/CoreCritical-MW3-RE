@@ -23,7 +23,7 @@ struct AssetStatistics {
   // Decoded world-page pixels only; excludes authored catalogs and GPU copies.
   std::uint64_t world_normal_decoded_bytes{}, world_normal_peak_decoded_bytes{},
       world_normal_loaded_pages{};
-  std::uint64_t binding_rejected_mismatch{};
+  std::uint64_t binding_rejected_mismatch{}, native_fingerprint_evaluations{};
 };
 
 class VulkanFrameRenderer : public sdlfe::FrameRenderer {

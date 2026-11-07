@@ -331,7 +331,8 @@ public:
                 std::count_if(surface_normals_.cache.pages.begin(),
                               surface_normals_.cache.pages.end(),
                               [](const auto &page) { return page.loaded; })),
-            binding_rejected_mismatch_};
+            binding_rejected_mismatch_,
+            native_fingerprint_evaluations_};
   }
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
@@ -351,6 +352,36 @@ public:
     return handle;
   }
 
+  std::shared_ptr<const ::platform::DeferredMaterialBinding>
+  capture_deferred_material_binding(int32_t texture) override {
+    if (!lighting_.normals || bridge_config_.native_material_sidecar.empty() ||
+        texture < 0 || std::size_t(texture) >= textures_.size())
+      return {};
+    const auto &key = textures_[texture].surface_key;
+    const auto &cache = surface_normals_.cache;
+    if (!cache.bindings.count(key) && !cache.world_bindings.count(key))
+      return {};
+    auto receipt = std::make_shared<NativeDeferredBinding>();
+    receipt->owner = material_binding_owner_;
+    receipt->key = textures_[texture].surface_key;
+    receipt->epoch = group_load_epoch_;
+    receipt->version = textures_[texture].version;
+    receipt->texture = texture;
+    receipt->normal_index = surface_normal_index(receipt->key, true, texture);
+    return receipt;
+  }
+  void begin_deferred_material_draw(
+      std::shared_ptr<const ::platform::DeferredMaterialBinding> receipt)
+      override {
+    deferred_material_binding_ = std::move(receipt);
+  }
+  void end_deferred_material_draw() noexcept override {
+    deferred_material_binding_.reset();
+  }
+  void invalidate_material_geometry() noexcept override {
+    native_context_.fingerprint_computed = false;
+    native_context_.fingerprint.reset();
+  }
   bool wants_material_context() const override {
     return lighting_.normals &&
            (!bridge_config_.native_material_sidecar.empty() ||
@@ -412,6 +443,7 @@ public:
       textures_.at(handle) = {};
     surface_normal_textures_.clear();
     surface_normals_ = SurfaceNormalState{};
+    deferred_material_binding_.reset();
     native_context_ = {};
     logged_first_normal_trace_ = false;
     if (bridge_config_.trace_native_bindings)
@@ -689,7 +721,8 @@ public:
     if (suppress_model_draws_)
       return;
     append_draw(primitive, vertices, count, state,
-                state.sharp || state.depth_always);
+                state.sharp || (state.depth_always &&
+                                !authenticated_deferred_world_draw()));
   }
 
   void clear_depth_rect(int left, int top, int right, int bottom) override {
@@ -798,7 +831,7 @@ private:
       const auto tex_name = tex_entry.name;
       if (epoch == group_load_epoch_ && key.hash != 0) {
         int norm_idx = lighting_.normals
-                           ? surface_normal_index(key, true, state.texture)
+                           ? deferred_surface_normal_index(key, state.texture)
                            : -1;
         if (norm_idx >= 0) {
           int norm_handle = surface_normal_texture(norm_idx);
