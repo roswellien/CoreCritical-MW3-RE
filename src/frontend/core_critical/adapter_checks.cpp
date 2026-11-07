@@ -956,6 +956,45 @@ void check_terrain_surface_normals(SDL_Window *window,
     uvs[2] = 1;
     checked_renderer->end_material_draw();
     checked_renderer->end_model_draw();
+    // The first admission after reset must reload catalogs before its lookup.
+    checked_renderer->reset_scene_resources();
+    mw34::materials::set_active_surface_key(t1m1_terrain_key);
+    checked_renderer->update_texture(device_texture.handle, 128, 128,
+                                     green_data.data());
+    mw34::materials::clear_active_surface_key();
+    checked_renderer->begin_model_draw(model_context);
+    checked_renderer->begin_material_draw(material_context);
+    auto reloaded_receipt = checked_renderer->capture_deferred_material_binding(
+        device_texture.handle);
+    require(bool(reloaded_receipt),
+            "First deferred material after reset was not admitted");
+    checked_renderer->end_material_draw();
+    checked_renderer->end_model_draw();
+    const auto before_reloaded = checked_renderer->asset_statistics();
+    checked_renderer->begin_deferred_material_draw(reloaded_receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Reloaded admission readback failed");
+    require(
+        checked_renderer->asset_statistics().normal_draws >
+                before_reloaded.normal_draws &&
+            checked_renderer->asset_statistics().binding_rejected_mismatch ==
+                before_reloaded.binding_rejected_mismatch,
+        "First deferred material after reset lost normal binding");
+    const auto before_old_epoch = checked_renderer->asset_statistics();
+    checked_renderer->begin_deferred_material_draw(receipt);
+    checked_renderer->draw(platform::Primitive::kFan, deferred_vertices, 3,
+                           receipt_state);
+    checked_renderer->end_deferred_material_draw();
+    require(checked_renderer->read_back(&pixels, &width, &height),
+            "Old-epoch admission readback failed");
+    require(checked_renderer->asset_statistics().normal_draws ==
+                    before_old_epoch.normal_draws &&
+                checked_renderer->asset_statistics().binding_rejected_mismatch >
+                    before_old_epoch.binding_rejected_mismatch,
+            "Deferred admission survived scene resource reset");
   }
 }
 

@@ -357,6 +357,8 @@ public:
     if (!lighting_.normals || bridge_config_.native_material_sidecar.empty() ||
         texture < 0 || std::size_t(texture) >= textures_.size())
       return {};
+    surface_normals_load(); // Reset clears catalogs; deferred admission can be
+                            // first.
     const auto &key = textures_[texture].surface_key;
     const auto &cache = surface_normals_.cache;
     if (!cache.bindings.count(key) && !cache.world_bindings.count(key))
