@@ -1454,6 +1454,39 @@ void check_campaign_lighting_and_policy() {
       mission_sun_settings(base, resolve_mission_lighting("c2m2"), true, false)
               .strength == 0.f,
       "Sealed mission retained directional sun");
+  {
+    const auto campaign_identity =
+        platform::make_mission_identity(1, 1, 2, true);
+    require(campaign_identity.world_index == 1 && campaign_identity.number == 2,
+            "Campaign identity must retain coordinates");
+    const auto training_identity =
+        platform::make_mission_identity(4, 5, 1, true);
+    require(training_identity.world_index == 5 && training_identity.number == 1,
+            "Training identity must retain coordinates");
+    const auto campaign_sun = mission_sun_settings(
+        base,
+        resolve_mission_lighting(canonical_mission_id(
+            campaign_identity.world_index, campaign_identity.number)),
+        true, false);
+    require(campaign_sun.strength == 0.f, "Campaign c2m2 must be sealed");
+    for (const auto identity :
+         {platform::make_mission_identity(2, 1, 2, true),
+          platform::make_mission_identity(3, 1, 2, true),
+          platform::make_mission_identity(9, 1, 2, true),
+          platform::make_mission_identity(1, 1, 2, false)}) {
+      require(identity.world_index == -1 && identity.number == 0,
+              "Non-campaign or failed load identity must be empty");
+      const auto id =
+          canonical_mission_id(identity.world_index, identity.number);
+      require(id.empty(), "Non-campaign load acquired a campaign profile");
+      const auto settings =
+          mission_sun_settings(base, resolve_mission_lighting(id), true, false);
+      require(settings.strength == base.strength &&
+                  settings.color == base.color &&
+                  settings.ambient == base.ambient,
+              "Non-campaign or failed load must restore configured lighting");
+    }
+  }
   unsigned identities = 0;
   for (int world = 0; world < 6; ++world)
     for (int number = 0; number <= 7; ++number) {

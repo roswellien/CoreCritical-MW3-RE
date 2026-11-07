@@ -2476,11 +2476,9 @@ void GameEngine::missions_start(uint32_t list) {
   // Typed mission-change notification, fired even when the load failed (with
   // the empty identity) so renderers drop any stale mission state.
   if (auto *render = platform_parts().render) {
-    const platform::MissionIdentity identity =
-        m.failed
-            ? platform::MissionIdentity{-1, 0}
-            : platform::MissionIdentity{static_cast<int32_t>(launch_.index),
-                                        static_cast<int32_t>(launch_.number)};
+    const platform::MissionIdentity identity = platform::make_mission_identity(
+        launch_.type, static_cast<int32_t>(launch_.index),
+        static_cast<int32_t>(launch_.number), !m.failed);
     render->mission_changed(identity);
   }
   zcls::Node* cam = mission_node(*this, camera_);

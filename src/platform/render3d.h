@@ -73,11 +73,22 @@ struct DeferredMaterialBinding {
 
 // Typed mission-change notification: the 0-based campaign world (launch
 // index) and the mission number within it. {-1, 0} is the empty identity
-// (failed load or scene reset).
+// (failed load, non-campaign game type or scene reset).
 struct MissionIdentity {
   int32_t world_index = -1;
   int32_t number = 0;
 };
+
+inline MissionIdentity make_mission_identity(int32_t game_type,
+                                             int32_t world_index,
+                                             int32_t number,
+                                             bool load_success) {
+  // IA and multiplayer numbers name iaN/mpN blocks, not campaign mN blocks.
+  if (!load_success || (game_type != 1 && game_type != 4)) {
+    return MissionIdentity{-1, 0};
+  }
+  return MissionIdentity{world_index, number};
+}
 
 class Render3D {
  public:
