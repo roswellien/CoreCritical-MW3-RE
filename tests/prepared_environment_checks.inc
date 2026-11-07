@@ -61,6 +61,7 @@ struct EnvironmentFixture {
     std::string bank;
     for (unsigned value : {0U, 1U, 0U, 1U, 0U, 0U})
       write_u32(bank, value);
+    bank.resize(64, '\0'); // One complete native header + texture-table entry.
     put("environment/bank.bin", bank, "ZBD-texture-v1");
     std::vector<std::string> dirs = {
         region == "training" ? "t1" : "c" + region.substr(9)};
@@ -206,6 +207,46 @@ void check_environment_packs() {
   require(platform::integrity::sha256_file(folder / "hash.bin") ==
               vectors[10].digest,
           "Chunked file SHA256 mismatch");
+  // Later pages may contain keys already owned by an earlier catalog.
+  // Loading another key from that page must never publish the duplicate,
+  // even after either page has been evicted and decoded again.
+  for (bool exclusion : {false, true}) {
+    const auto owner =
+        folder / (exclusion ? "owner-excluded.bin" : "owner.bin");
+    auto first = env_test_page();
+    if (exclusion)
+      for (unsigned i = 0; i < 4; ++i)
+        first[80 + i] = char(0xff);
+    env_test_write(owner, first);
+    auto later = env_test_page();
+    const auto key = later.substr(12, 52);
+    auto second_key = key;
+    second_key[12] = 74;
+    later[8] = 2;
+    later.insert(64, second_key);
+    later[124] = 2;
+    later.insert(132, std::string(4, '\0'));
+    env_test_write(folder / "later.bin", later);
+    env_test_write(folder / "owner.txt",
+                   "MW34SNP1\n" + owner.filename().string() + "\n");
+    env_test_write(folder / "later.txt", "MW34SNP1\nlater.bin\n");
+    mw34::materials::WorldNormalCache cache;
+    cache.load_world_manifest(folder / "owner.txt");
+    cache.load_world_manifest(folder / "later.txt");
+    const mw34::materials::SurfaceKey a{1, 1, 1, 73}, b{1, 1, 1, 74};
+    const auto expected = cache.surface_normal_index(a);
+    require(exclusion ? expected == -1 : expected >= 0,
+            "First catalog lookup failed");
+    cache.load_page(1, 4);
+    require(cache.bindings.at(a) == expected,
+            "Later page replaced first catalog ownership");
+    require(cache.surface_normal_index(b) >= 0,
+            "Later page lost its unique key");
+    cache.load_page(0, 4);
+    cache.load_page(1, 4);
+    require(cache.bindings.at(a) == expected,
+            "Eviction/reload replaced first catalog ownership");
+  }
   EnvironmentFixture training(folder / "training"),
       operation(folder / "operation", "operation4"),
       shared(folder / "shared", "shared-mechs");
@@ -312,6 +353,46 @@ void check_environment_packs() {
                   "Corrupt BWSNR3 pin accepted");
   env_test_reject([&] { load_environment_packs({broken_material.path()}); },
                   "Corrupt BWSFM1 pin accepted");
+  // A relocated manifest must resolve its own pinned sibling, not a
+  // similarly named file under the registry directory.
+  EnvironmentFixture misplaced(folder / "misplaced");
+  misplaced.put("catalogs/world.txt", "MW34SNP1\nworld.bin\n", "MW34SNP1");
+  misplaced.manifest["files"].erase("environment/world.txt");
+  misplaced.registry["world_manifest"] = "catalogs/world.txt";
+  misplaced.save();
+  env_test_reject([&] { load_environment_packs({misplaced.path()}); },
+                  "Manifest admitted an unpinned sibling page");
+  EnvironmentFixture relocated(folder / "relocated");
+  relocated.put("catalogs/world.txt", "MW34SNP1\nworld.bin\n", "MW34SNP1");
+  relocated.put("catalogs/world.bin", env_test_page(true), "BWSNR3");
+  relocated.manifest["files"].erase("environment/world.txt");
+  relocated.manifest["files"].erase("environment/world.bin");
+  relocated.registry["world_manifest"] = "catalogs/world.txt";
+  relocated.registry["world"] = {"catalogs/world.bin"};
+  relocated.save();
+  require(load_environment_packs({relocated.path()}).world_manifests.size() ==
+              1,
+          "Pinned relocated catalog rejected");
+  for (unsigned offset : {12U, 16U}) {
+    EnvironmentFixture broken(folder /
+                              ("broken-count-" + std::to_string(offset)));
+    std::string bank(64, '\0');
+    bank[4] = 1;
+    bank[offset] = char(0xff);
+    bank[offset + 3] = char(0x80);
+    broken.put("environment/bank.bin", bank, "ZBD-texture-v1");
+    broken.save();
+    env_test_reject([&] { load_environment_packs({broken.path()}); },
+                    "Negative native bank count admitted");
+  }
+  EnvironmentFixture truncated(folder / "truncated-bank");
+  std::string short_bank(24, '\0');
+  short_bank[4] = 1;
+  short_bank[12] = 1;
+  truncated.put("environment/bank.bin", short_bank, "ZBD-texture-v1");
+  truncated.save();
+  env_test_reject([&] { load_environment_packs({truncated.path()}); },
+                  "Truncated bank table admitted");
   EnvironmentFixture traversal(folder / "traversal");
   traversal.manifest["files"]["../outside.bin"] =
       traversal.manifest["files"]["environment/bank.bin"];

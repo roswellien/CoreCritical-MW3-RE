@@ -194,6 +194,18 @@ void env_header(const EnvPin &pin) {
     const unsigned char expected[] = {0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0};
     if (count < 24 || std::memcmp(head, expected, sizeof expected))
       env_fail("invalid texture bank header");
+    const auto signed_word = [&](unsigned offset) {
+      std::uint32_t value{};
+      for (unsigned i = 0; i < 4; ++i)
+        value |= std::uint32_t(static_cast<unsigned char>(head[offset + i]))
+                 << (8 * i);
+      if (value > 2147483647U)
+        env_fail("negative texture bank count");
+      return std::uint64_t(value);
+    };
+    const auto textures = signed_word(12), palettes = signed_word(16);
+    if (24 + textures * 40 + palettes * 512 > pin.bytes)
+      env_fail("texture bank table exceeds file");
   } else if (pin.format == "MW34-lighting-v1") {
     const auto lighting = env_json(efs::u8path(pin.path));
     if (!lighting.is_object() || env_uint(lighting.at("schema_version")) != 1 ||
@@ -230,7 +242,9 @@ void env_catalog(const EnvPack &pack, const char *role, const char *magic,
     if (!references.insert(name).second)
       env_fail("duplicate resource role");
     const auto relative =
-        efs::u8path(name).lexically_relative("environment").generic_u8string();
+        efs::u8path(name)
+            .lexically_relative(efs::u8path(manifest).parent_path())
+            .generic_u8string();
     if (relative.empty() || relative.find('/') != std::string::npos ||
         relative == "..")
       env_fail("normal page outside manifest directory");

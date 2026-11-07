@@ -505,7 +505,8 @@ class WorldNormalCache {
 
         for (const auto &[key, normal_index] : parsed.bindings) {
             // Authored bindings and explicit exclusions take precedence!
-            if (!authored.count(key))
+            const auto owner = world_bindings.find(key);
+            if (!authored.count(key) && owner != world_bindings.end() && owner->second == page_index)
                 bindings[key] =
                     (normal_index == no_normal) ? -1 : page.normal_indices.at(normal_index);
         }
