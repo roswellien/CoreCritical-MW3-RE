@@ -293,6 +293,12 @@ PreparedModelDraw PreparedModels::draw(const platform::ModelDrawContext &context
             if (normal != platform::prepared::no_normal)
                 draw.normal = &selected->normals.images.at(normal);
         }
+        if (selected->surface_materials && !selected->surface_materials->bindings.empty()) {
+            const auto sm_index = selected->surface_materials->bindings[index];
+            if (sm_index != ::mw34::materials::no_surface_material &&
+                sm_index < selected->surface_materials->records.size())
+                draw.surface_material = selected->surface_materials->records[sm_index].get();
+        }
         if (selected->mesh.version != 4) {
             draw.camera = placed(root_camera, live.poses, batch);
             draw.world = placed(root_world, live.poses, batch);

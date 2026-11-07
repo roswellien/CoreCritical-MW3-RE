@@ -6,8 +6,9 @@
 #include <string>
 #include <vector>
 
-// Project-authored prepared visual payloads. These readers contain no assets and
-// operate independently of SDL, Vulkan, game memory and the original file formats.
+// Project-authored prepared visual payloads. These readers contain no assets
+// and operate independently of SDL, Vulkan, game memory and the original file
+// formats.
 namespace platform::prepared {
 
 using Matrix = std::array<double, 16>;
@@ -69,5 +70,8 @@ Mesh read_mesh(std::istream &input);
 Textures read_textures(std::istream &input);
 Normals read_normals(std::istream &input, const Textures &textures);
 void validate_bindings(const Mesh &mesh, const Textures &textures);
+void validate_surface_materials(std::istream &input, const std::string &expected_asset_id,
+                                uint64_t expected_mesh_uv_hash,
+                                const std::vector<std::string> &expected_batch_materials);
 
 } // namespace platform::prepared

@@ -3,6 +3,7 @@
 #include "frontend/sdl/cpu_interval.h"
 #include "frontend/sdl/sdl_render3d.h"
 #include "platform/prepared_visuals.h"
+#include "renderer/surface_materials.hpp"
 
 namespace cc_mw3_re {
 
@@ -10,6 +11,7 @@ struct PreparedBatchDraw {
   const ::platform::prepared::Batch *batch{};
   const ::platform::prepared::Image *texture{};
   const ::platform::prepared::NormalImage *normal{};
+  const ::mw34::materials::SurfaceMaterialRecord *surface_material{};
   ::platform::prepared::Matrix camera{}, world{};
   // Mixed-bone seams follow the existing CPU visual deformation contract.
   // Their per-frame vertices are submitted as TL data, never cached as
@@ -40,6 +42,7 @@ private:
     ::platform::prepared::Mesh mesh;
     ::platform::prepared::Textures textures;
     ::platform::prepared::Normals normals;
+    std::shared_ptr<::mw34::materials::SurfaceMaterialPack> surface_materials;
   };
   ::platform::prepared::Textures named_;
   std::vector<Model> models_;

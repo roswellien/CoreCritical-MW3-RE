@@ -9,20 +9,31 @@
 #include "platform/render3d.h"
 #include "prepared_visual_fixture.h"
 
+#include "frontend/core_critical/renderer/material_normals.hpp"
+#include "frontend/core_critical/renderer/normal_codec.hpp"
+#include "frontend/core_critical/renderer/surface_materials.hpp"
+
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace {
 void require(bool condition, const char *message) {
     if (!condition)
         throw std::runtime_error(message);
 }
+
 using prepared_fixture::mesh;
 using prepared_fixture::textures;
+
 template <class Function> void rejects(const std::string &data, Function read) {
     bool rejected = false;
     try {
@@ -33,6 +44,598 @@ template <class Function> void rejects(const std::string &data, Function read) {
     }
     require(rejected, "Malformed prepared payload was accepted");
 }
+
+void write_u32(std::string &out, std::uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i)
+        out.push_back(static_cast<char>((value >> (i * 8)) & 0xffU));
+}
+
+void write_u64(std::string &out, std::uint64_t value) {
+    write_u32(out, static_cast<std::uint32_t>(value));
+    write_u32(out, static_cast<std::uint32_t>(value >> 32));
+}
+
+void write_f32(std::string &out, float value) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &value, 4);
+    write_u32(out, bits);
+}
+
+void write_str(std::string &out, const std::string &value) {
+    write_u32(out, static_cast<std::uint32_t>(value.size()));
+    out.append(value);
+}
+
+struct TestVertex {
+    float x{}, y{}, z{};
+    float nx{}, ny{}, nz{};
+    float u{}, v{};
+};
+
+struct TestBatch {
+    std::vector<TestVertex> vertices;
+};
+
+std::string build_bwsfm1(std::uint64_t mesh_hash, float height_amp, float max_disp,
+                         float height_ref = 0.5f, std::uint32_t height_img = 0U,
+                         std::uint32_t thick_img = mw34::materials::no_surface_image,
+                         std::uint32_t tess_cap = 4U, float sss_part = 0.0f, float sss_rad = 0.0f,
+                         float thick_scale = 0.0f, float roughness = 0.7f,
+                         float reflectivity = 0.04f, float metallic = 0.0f) {
+    using namespace mw34::materials;
+    const std::array<unsigned char, 16> h_pixels{
+        32, 0, 0, 255, 96, 0, 0, 255, 160, 0, 0, 255, 224, 0, 0, 255,
+    };
+    const std::array<unsigned char, 16> t_pixels{
+        64, 0, 0, 255, 128, 0, 0, 255, 192, 0, 0, 255, 240, 0, 0, 255,
+    };
+
+    std::string out("BWSFM1\0\0", 8);
+    write_u32(out, 1U);        // version
+    write_u32(out, 2U);        // batch_count
+    write_u32(out, 2U);        // record_count
+    write_u32(out, 2U);        // image_count
+    write_u64(out, mesh_hash); // mesh_uv_hash
+
+    // Batch bindings: batch 0 -> record 0, batch 1 -> record 1
+    write_u32(out, 0U);
+    write_u32(out, 1U);
+
+    // Record 0: ("bushwacker:close", "armor_hull")
+    write_str(out, "bushwacker:close");
+    write_str(out, "armor_hull");
+    write_u32(out, height_img);
+    write_u32(out, thick_img);
+    write_f32(out, height_ref);
+    write_f32(out, height_amp);
+    write_f32(out, max_disp);
+    write_u32(out, tess_cap);
+    write_f32(out, 2.0f);  // uv_scale[0]
+    write_f32(out, -2.0f); // uv_scale[1]
+    write_f32(out, 0.125f);
+    write_f32(out, -0.25f);
+    write_u32(out, surface_address_mirror);
+    write_u32(out, surface_address_clamp);
+    write_f32(out, 0.125f);
+    write_f32(out, 0.25f);
+    write_f32(out, 0.875f);
+    write_f32(out, 0.75f);
+    write_f32(out, sss_part);
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_f32(out, sss_rad);
+    write_f32(out, thick_scale);
+    write_f32(out, roughness);
+    write_f32(out, reflectivity);
+    write_f32(out, metallic);
+
+    // Record 1: ("bushwacker:close", "canopy_glass")
+    write_str(out, "bushwacker:close");
+    write_str(out, "canopy_glass");
+    write_u32(out, no_surface_image);
+    write_u32(out, 1U); // thickness_image
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_u32(out, 1U);
+    write_f32(out, 1.0f);
+    write_f32(out, 1.0f);
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_u32(out, surface_address_wrap);
+    write_u32(out, surface_address_wrap);
+    write_f32(out, 0.0f);
+    write_f32(out, 0.0f);
+    write_f32(out, 1.0f);
+    write_f32(out, 1.0f);
+    write_f32(out, 0.5f);
+    write_f32(out, 0.25f);
+    write_f32(out, 0.5f);
+    write_f32(out, 0.75f);
+    write_f32(out, 0.125f);
+    write_f32(out, 0.375f);
+    write_f32(out, 0.7f);
+    write_f32(out, 0.04f);
+    write_f32(out, 0.0f);
+
+    // Image 0: height_armor
+    write_str(out, "height_armor");
+    write_u32(out, surface_role_height);
+    write_u32(out, 2U);
+    write_u32(out, 2U);
+    write_u64(out, normal_hash(h_pixels.data(), h_pixels.size()));
+    out.append(reinterpret_cast<const char *>(h_pixels.data()), h_pixels.size());
+
+    // Image 1: thick_canopy
+    write_str(out, "thick_canopy");
+    write_u32(out, surface_role_thickness);
+    write_u32(out, 2U);
+    write_u32(out, 2U);
+    write_u64(out, normal_hash(t_pixels.data(), t_pixels.size()));
+    out.append(reinterpret_cast<const char *>(t_pixels.data()), t_pixels.size());
+
+    return out;
+}
+
+bool rejected_surface_materials(const std::string &bytes, const std::string &asset_id,
+                                std::uint64_t mesh_hash,
+                                const std::vector<std::string> &materials) {
+    try {
+        std::istringstream stream(bytes);
+        mw34::materials::read_surface_materials(stream, asset_id, mesh_hash, materials);
+        return false;
+    } catch (const std::runtime_error &) {
+        return true;
+    }
+}
+
+void check_normal_codec() {
+    using namespace mw34::materials;
+
+    // 1. Round-trip test of decode_normal_pixels covering literal, repeat, and
+    // nibble tokens. We decode 4 pixels (16 bytes) across 4 channels (R, G, B,
+    // A). Channel 0 (R): 1 pixel delta 128 (literal run token 0, count 1), then 3
+    // pixels delta 0 (repeat token 128+2=130, count 3) -> 128, 128, 128, 128
+    // Channel 1 (G): 4 pixels via literal deltas (token 3, count 4): [100, 20, 5,
+    // 2] -> 100, 120, 125, 127 Channel 2 (B): 4 pixels via nibble deltas (token
+    // 192+3=195, count 4): [0x12, 0xf0] -> 1, 2, -1(255), 0 -> 1, 3, 2, 2 Channel
+    // 3 (A): 1 pixel delta 255 (literal token 0), then 3 pixels delta 0 (repeat
+    // token 130) -> 255, 255, 255, 255
+    const std::vector<unsigned char> encoded{
+        0,   128,  130,  0,    // Channel 0 (R)
+        3,   100,  20,   5, 2, // Channel 1 (G)
+        195, 0x12, 0xf0,       // Channel 2 (B)
+        0,   255,  130,  0     // Channel 3 (A)
+    };
+
+    const std::vector<unsigned char> expected{
+        128, 100, 1, 255, // Pixel 0 (RGBA)
+        128, 120, 3, 255, // Pixel 1 (RGBA)
+        128, 125, 2, 255, // Pixel 2 (RGBA)
+        128, 127, 2, 255  // Pixel 3 (RGBA)
+    };
+
+    std::vector<unsigned char> decoded(16, 0);
+    decode_normal_pixels(encoded, decoded.data(), 16);
+
+    require(decoded == expected, "decode_normal_pixels bit-exact RGBA8 mismatch");
+    require(normal_hash(decoded.data(), 16) == normal_hash(expected.data(), 16),
+            "FNV-1a64 hash mismatch on decoded pixels");
+
+    // Verify alpha is preserved and intact
+    for (std::size_t p = 0; p < 4; ++p) {
+        require(decoded[p * 4 + 3] == 255, "Alpha channel was not preserved");
+    }
+
+    // Error cases: invalid arguments / corrupted streams fail closed
+    std::vector<unsigned char> out_buf(16);
+    bool rejected = false;
+    try {
+        decode_normal_pixels({}, out_buf.data(), 16);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected, "Empty encoded buffer was accepted");
+
+    rejected = false;
+    try {
+        decode_normal_pixels(encoded, out_buf.data(), 15); // not multiple of 4
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected, "Unaligned pixel bytes was accepted");
+
+    rejected = false;
+    try {
+        auto bad_enc = encoded;
+        bad_enc.pop_back(); // truncated
+        decode_normal_pixels(bad_enc, out_buf.data(), 16);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected, "Truncated compressed stream was accepted");
+
+    rejected = false;
+    try {
+        auto bad_enc = encoded;
+        bad_enc.push_back(0); // trailing
+        decode_normal_pixels(bad_enc, out_buf.data(), 16);
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    require(rejected, "Trailing byte in compressed stream was accepted");
+}
+
+void check_bwnrm_formats() {
+    using namespace mw34::materials;
+
+    // BWNRM1 test: material name Window/Glass maps to no_normal
+    {
+        std::string stream("BWNRM1\0\0", 8);
+        write_u32(stream, 2U); // batches
+        write_u32(stream, 2U); // count
+        write_u32(stream, 0U); // binding 0 -> image 0
+        write_u32(stream, 1U); // binding 1 -> image 1
+        std::string img0 = "Armor";
+        img0.resize(32, '\0');
+        stream.append(img0);
+        write_u32(stream, 1U);
+        write_u32(stream, 1U);
+        write_u64(stream, 0ULL); // hash (ignored in v1)
+        const unsigned char px0[]{128, 128, 255, 255};
+        stream.append(reinterpret_cast<const char *>(px0), 4);
+
+        std::string img1 = "Glass";
+        img1.resize(32, '\0');
+        stream.append(img1);
+        write_u32(stream, 1U);
+        write_u32(stream, 1U);
+        write_u64(stream, 0ULL);
+        const unsigned char px1[]{128, 128, 255, 255};
+        stream.append(reinterpret_cast<const char *>(px1), 4);
+
+        std::istringstream iss(stream);
+        const auto pack = read_normals(iss, {"Armor", "Glass"});
+        require(pack.bindings[0] == 0U, "BWNRM1 normal binding 0 mismatch");
+        require(pack.bindings[1] == no_normal, "BWNRM1 Glass was not mapped to no_normal");
+    }
+
+    // BWNRM3 test: compressed normal payload decoded via decode_normal_pixels
+    {
+        std::string stream("BWNRM3\0\0", 8);
+        write_u32(stream, 1U); // batches
+        write_u32(stream, 1U); // count
+        write_u32(stream, 0U); // binding 0
+        std::string name = "Armor";
+        name.resize(32, '\0');
+        stream.append(name);
+        write_u32(stream, 1U);
+        write_u32(stream, 1U);
+        const unsigned char pixel[]{128, 128, 255, 255};
+        const auto hash = normal_hash(pixel, 4);
+        write_u64(stream, hash);
+        // Compressed payload: literal token 3 (count 4), 4 deltas
+        const unsigned char encoded[]{3, 128, 128, 255, 255};
+        write_u64(stream, sizeof(encoded));
+        stream.append(reinterpret_cast<const char *>(encoded), sizeof(encoded));
+
+        std::istringstream iss(stream);
+        const auto pack = read_normals(iss, {"Armor"});
+        require(pack.images.size() == 1, "BWNRM3 image count mismatch");
+        require(pack.images[0].pixels[0] == 0xffff8080U, "BWNRM3 pixel mismatch");
+        require(pack.images[0].hash == hash, "BWNRM3 hash mismatch");
+
+        // Corrupted hash fails closed
+        auto bad = stream;
+        bad[60] ^= 1; // alter hash byte at offset 60
+        std::istringstream bad_iss(bad);
+        bool failed = false;
+        try {
+            read_normals(bad_iss, {"Armor"});
+        } catch (const std::runtime_error &) {
+            failed = true;
+        }
+        require(failed, "BWNRM3 corrupted hash was accepted");
+    }
+}
+
+void check_surface_materials_contract() {
+    using namespace mw34::materials;
+
+    // 1. Geometry batch fixture and mesh_uv_hash computation
+    std::vector<TestBatch> batches(2);
+    for (std::size_t b = 0; b < 2; ++b) {
+        const float u_step = (b == 0) ? 0.25f : 0.75f;
+        for (int idx = 0; idx < 3; ++idx) {
+            batches[b].vertices.push_back(TestVertex{float(idx), float(idx + 1), float(idx + 2),
+                                                     0.0f, 0.0f, 1.0f, u_step * float(idx),
+                                                     0.5f * float(idx)});
+        }
+    }
+
+    const auto mesh_hash = compute_mesh_uv_hash(batches, 0, batches.size());
+    require(mesh_hash != 0, "compute_mesh_uv_hash produced 0");
+
+    // Modifying UV must alter mesh_uv_hash
+    auto modified_batches = batches;
+    modified_batches[1].vertices[2].v = 0.999f;
+    require(compute_mesh_uv_hash(modified_batches, 0, modified_batches.size()) != mesh_hash,
+            "Altering UV did not change mesh_uv_hash");
+
+    const std::vector<std::string> materials{"armor_hull", "canopy_glass"};
+
+    // 2. Signed height amplitude tests:
+    // A) Negative amplitude (-4.0f) with max_displacement = 4.0f (valid: 4.0 >=
+    // abs(-4.0))
+    {
+        const auto sidecar = build_bwsfm1(mesh_hash, -4.0f, 4.0f, 0.5f);
+        std::istringstream iss(sidecar);
+        const auto pack = read_surface_materials(iss, "bushwacker:close", mesh_hash, materials);
+        require(pack.records[0]->height_amplitude == -4.0f, "Negative height_amplitude mismatch");
+        require(pack.records[0]->max_displacement == 4.0f, "max_displacement mismatch");
+        require(pack.records[0]->roughness == 0.7f, "Default roughness mismatch");
+        require(pack.records[0]->reflectivity == 0.04f, "Default reflectivity mismatch");
+        require(pack.records[0]->metallic == 0.0f, "Default metallic mismatch");
+        require((pack.images[0].pixels[0] & 0xffU) == 32U, "Red channel scalar height mismatch");
+    }
+
+    // B) Zero amplitude (0.0f) with max_displacement = 0.0f and no height image
+    {
+        const auto sidecar =
+            build_bwsfm1(mesh_hash, 0.0f, 0.0f, 0.0f, no_surface_image, no_surface_image, 1U);
+        std::istringstream iss(sidecar);
+        const auto pack = read_surface_materials(iss, "bushwacker:close", mesh_hash, materials);
+        require(pack.records[0]->height_amplitude == 0.0f, "Zero height_amplitude mismatch");
+        require(pack.records[0]->max_displacement == 0.0f, "Zero max_displacement mismatch");
+    }
+
+    // C) Positive amplitude (+4.0f) with max_displacement = 4.0f
+    {
+        const auto sidecar = build_bwsfm1(mesh_hash, 4.0f, 4.0f, 0.5f);
+        std::istringstream iss(sidecar);
+        const auto pack = read_surface_materials(iss, "bushwacker:close", mesh_hash, materials);
+        require(pack.records[0]->height_amplitude == 4.0f, "Positive height_amplitude mismatch");
+        require(pack.records[0]->max_displacement == 4.0f, "max_displacement mismatch");
+    }
+
+    // D) Height reference tests: 0.0f, 0.5f, 1.0f all valid
+    for (float ref : {0.0f, 0.5f, 1.0f}) {
+        const auto sidecar = build_bwsfm1(mesh_hash, 2.0f, 2.0f, ref);
+        std::istringstream iss(sidecar);
+        const auto pack = read_surface_materials(iss, "bushwacker:close", mesh_hash, materials);
+        require(pack.records[0]->height_reference == ref, "height_reference value mismatch");
+    }
+
+    // 3. Invariant check: max_displacement >= std::abs(height_amplitude)
+    // CRITICAL: Negative amplitude (-4.0f) with max_displacement = 3.5f MUST be
+    // rejected! (This tests the exact condition targeted by the production
+    // negative control!)
+    {
+        const auto invalid_neg = build_bwsfm1(mesh_hash, -4.0f, 3.5f, 0.5f);
+        require(rejected_surface_materials(invalid_neg, "bushwacker:close", mesh_hash, materials),
+                "Invariant max_displacement >= abs(height_amplitude) violated for "
+                "negative amplitude but accepted");
+    }
+
+    // Positive amplitude (+4.0f) with max_displacement = 3.5f MUST be rejected
+    {
+        const auto invalid_pos = build_bwsfm1(mesh_hash, 4.0f, 3.5f, 0.5f);
+        require(rejected_surface_materials(invalid_pos, "bushwacker:close", mesh_hash, materials),
+                "Invariant max_displacement >= abs(height_amplitude) violated for "
+                "positive amplitude but accepted");
+    }
+
+    // 4. Fail-closed rejection tests on corrupted sidecars
+    const auto valid_sidecar = build_bwsfm1(mesh_hash, -4.0f, 4.0f, 0.5f);
+
+    // Truncated header (e.g. cut off at byte 16)
+    require(rejected_surface_materials(valid_sidecar.substr(0, 16), "bushwacker:close", mesh_hash,
+                                       materials),
+            "Truncated 16-byte header was accepted");
+
+    // Truncated at every byte offset
+    for (std::size_t cut = 0; cut < valid_sidecar.size(); ++cut) {
+        require(rejected_surface_materials(valid_sidecar.substr(0, cut), "bushwacker:close",
+                                           mesh_hash, materials),
+                "Truncated surface materials sidecar was accepted");
+    }
+
+    // Trailing bytes rejected
+    require(rejected_surface_materials(valid_sidecar + "trailing", "bushwacker:close", mesh_hash,
+                                       materials),
+            "Trailing bytes in sidecar was accepted");
+
+    // Unsorted records rejected: swap record names
+    {
+        auto unsorted = valid_sidecar;
+        // Locate "armor_hull" and replace with "zebra" so that record 0 > record 1
+        auto pos = unsorted.find("armor_hull");
+        require(pos != std::string::npos, "armor_hull not found");
+        unsorted.replace(pos, 10, "zebra_hull");
+        require(rejected_surface_materials(unsorted, "bushwacker:close", mesh_hash, materials),
+                "Unsorted records table was accepted");
+    }
+
+    // Bad FNV-1a64 hash on image pixels rejected
+    {
+        auto bad_hash = valid_sidecar;
+        bad_hash.back() ^= 0xff; // corrupt pixel
+        require(rejected_surface_materials(bad_hash, "bushwacker:close", mesh_hash, materials),
+                "Corrupted pixel with bad FNV-1a64 hash was accepted");
+    }
+
+    // Mismatched mesh_uv_hash rejected
+    require(
+        rejected_surface_materials(valid_sidecar, "bushwacker:close", mesh_hash ^ 1ULL, materials),
+        "Mismatched mesh_uv_hash was accepted");
+
+    // Mismatched asset_id rejected
+    require(rejected_surface_materials(valid_sidecar, "wrong:asset", mesh_hash, materials),
+            "Mismatched asset_id was accepted");
+
+    // Swapped batch materials rejected
+    require(rejected_surface_materials(valid_sidecar, "bushwacker:close", mesh_hash,
+                                       {"canopy_glass", "armor_hull"}),
+            "Swapped batch materials was accepted");
+}
+
+void check_world_normals_lru_and_precedence() {
+    using namespace mw34::materials;
+
+    // 1. MW34SNA1 authored catalog tests
+    const auto temp_dir = std::filesystem::temp_directory_path() / "mw34_test_catalogs";
+    std::filesystem::create_directories(temp_dir);
+
+    struct Cleanup {
+        std::filesystem::path p;
+        ~Cleanup() {
+            std::error_code ec;
+            std::filesystem::remove_all(p, ec);
+        }
+    } cleanup{temp_dir};
+
+    // Test directory traversal rejection in MW34SNA1
+    {
+        const auto sna1_path = temp_dir / "bad_sna1.txt";
+        {
+            std::ofstream f(sna1_path, std::ios::binary);
+            f << "MW34SNA1\n../outside_page.bin\n";
+        }
+        bool rejected = false;
+        try {
+            surface_normal_catalog_paths(sna1_path);
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        require(rejected, "MW34SNA1 path with directory traversal was accepted");
+    }
+
+    // 2. MW34SNP1 WorldNormalCache & 512 MiB LRU eviction tests
+    auto make_page = [](std::uint64_t hash_base) {
+        std::string stream("BWSNR2\0\0", 8);
+        write_u32(stream, 1U); // 1 surface key
+        write_u32(stream, 1U); // width
+        write_u32(stream, 1U); // height
+        write_u32(stream, 1U); // format RGB565
+        write_u64(stream, hash_base);
+        std::string mat = "Armor";
+        mat.resize(32, '\0');
+        stream.append(mat);
+
+        // BWNRM2 payload: 1 batch, 1 image
+        stream.append("BWNRM2\0\0", 8);
+        write_u32(stream, 1U);
+        write_u32(stream, 1U);
+        write_u32(stream, 0U);
+        stream.append(mat);
+        write_u32(stream, 1U);
+        write_u32(stream, 1U);
+        const unsigned char px[]{128, 128, 255, 255};
+        write_u64(stream, normal_hash(px, 4));
+        stream.append(reinterpret_cast<const char *>(px), 4);
+        return stream;
+    };
+
+    const auto p0_path = temp_dir / "page-0.bin";
+    const auto p1_path = temp_dir / "page-1.bin";
+    const auto p2_path = temp_dir / "page-2.bin";
+
+    {
+        std::ofstream(p0_path, std::ios::binary) << make_page(0x1000ULL);
+        std::ofstream(p1_path, std::ios::binary) << make_page(0x2000ULL);
+        std::ofstream(p2_path, std::ios::binary) << make_page(0x3000ULL);
+    }
+
+    const auto manifest_path = temp_dir / "world.txt";
+    {
+        std::ofstream f(manifest_path, std::ios::binary);
+        f << "MW34SNP1\npage-0.bin\npage-1.bin\npage-2.bin\n";
+    }
+
+    // Test 16 MiB compressed page limit rejection
+    {
+        const auto huge_page = temp_dir / "huge_page.bin";
+        {
+            // Create a file larger than 16 MiB
+            std::ofstream f(huge_page, std::ios::binary);
+            f.seekp(16ULL * 1024 * 1024 + 1);
+            f.write("X", 1);
+        }
+        const auto bad_manifest = temp_dir / "bad_world.txt";
+        {
+            std::ofstream f(bad_manifest, std::ios::binary);
+            f << "MW34SNP1\nhuge_page.bin\n";
+        }
+        WorldNormalCache cache;
+        bool rejected = false;
+        try {
+            cache.load_world_manifest(bad_manifest);
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        require(rejected, "Page exceeding 16 MiB limit was accepted");
+    }
+
+    // Test LRU eviction with a bounded budget (8 bytes, each page has 4 pixel
+    // bytes)
+    {
+        WorldNormalCache cache;
+        cache.load_world_manifest(manifest_path);
+        require(cache.pages.size() == 3, "Manifest pages count mismatch");
+
+        // Set pixel budget to 8 bytes: can hold at most 2 pages simultaneously
+        const std::uint64_t budget = 8;
+        cache.load_page(0, budget);
+        require(cache.pages[0].loaded && cache.world_bytes == 4, "Page 0 load mismatch");
+
+        cache.load_page(1, budget);
+        require(cache.pages[0].loaded && cache.pages[1].loaded && cache.world_bytes == 8,
+                "Page 0 and 1 load mismatch");
+
+        // Touch page 0 to update its last_use clock
+        cache.load_page(0, budget);
+
+        // Load page 2: needs 4 bytes, budget is 8 -> must evict least recently used
+        // (page 1)
+        cache.load_page(2, budget);
+        require(cache.pages[0].loaded, "Page 0 should be retained as recently used");
+        require(!cache.pages[1].loaded, "Page 1 should be evicted");
+        require(cache.pages[2].loaded, "Page 2 should be loaded");
+        require(cache.world_bytes == 8, "Resident world_bytes accounting mismatch");
+        require(cache.textures[cache.pages[1].normal_indices[0]].pixels32.empty(),
+                "Evicted page pixels were not freed");
+
+        // Reload page 1: evicts page 0
+        cache.load_page(1, budget);
+        require(cache.pages[1].loaded, "Page 1 reload failed");
+        require(!cache.pages[0].loaded, "Page 0 should be evicted on page 1 reload");
+    }
+
+    // Test Authored-over-world precedence:
+    // When a key is registered by an authored catalog, world normal loading does
+    // NOT overwrite it
+    {
+        WorldNormalCache cache;
+        SurfaceKey authored_key{1, 1, 1, 0x1000ULL}; // matches key in page 0
+        cache.register_authored(authored_key, 42);   // authored binding to index 42
+
+        SurfaceKey excluded_key{1, 1, 1, 0x2000ULL}; // matches key in page 1
+        cache.register_authored(excluded_key,
+                                -1); // explicit authored exclusion (no_normal)
+
+        cache.load_world_manifest(manifest_path);
+        // Page 0 has key 0x1000, page 1 has key 0x2000
+        cache.load_page(0, 512ULL * 1024 * 1024);
+        cache.load_page(1, 512ULL * 1024 * 1024);
+
+        require(cache.bindings[authored_key] == 42,
+                "Authored binding was overwritten by world normal page");
+        require(cache.bindings[excluded_key] == -1,
+                "Explicit authored exclusion was overwritten by world normal page");
+    }
+}
+
 void checks() {
     std::istringstream tex_input(textures());
     const auto tex = platform::prepared::read_textures(tex_input);
@@ -184,13 +787,19 @@ int main(int argc, char **argv) {
                 if (!normal_input)
                     throw std::runtime_error("Cannot open selected normal component");
                 const auto normals = platform::prepared::read_normals(normal_input, materials);
-                std::printf("BWNRM2: %zu images; ", normals.images.size());
+                std::printf("BWNRM: %zu images; ", normals.images.size());
             }
             std::printf("BWMESH%u: %zu batches; BWTEX1: %zu images\n", geometry.version,
                         geometry.batches.size(), materials.images.size());
         } else if (argc == 1) {
             checks();
+            check_normal_codec();
+            check_bwnrm_formats();
+            check_surface_materials_contract();
+            check_world_normals_lru_and_precedence();
             check_producer_unwind();
+            std::printf("All prepared visual, normal, and surface material contract "
+                        "checks passed successfully.\n");
         } else
             throw std::runtime_error("usage: mw3prepared_checks [--check MESH TEXTURES [NORMALS]]");
         return 0;
