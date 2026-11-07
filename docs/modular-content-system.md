@@ -58,6 +58,14 @@ qualifier and must appear in its owner's integrity table. Nested glTF buffers
 and images remain in that glTF package. Their hashes enter the gameplay
 fingerprint even when their filenames resemble cosmetic resources.
 
+Imported static glTF/GLB scenes retain named parent/child nodes, including
+transform-only nodes, beneath each asset instance or vehicle actor. Mesh vertices
+remain node-local; native local matrices and mirrored-transform compensation let
+rendering, collision and objective paths use the same hierarchy. These packages
+require `world.hierarchy` version 1; see
+[imported scene hierarchy](native-content-definitions.md#imported-scene-hierarchy)
+for bounds and path rules.
+
 ## Composition and storage
 
 Each package can add several content types. A patch names `kind`, `id` and
@@ -81,7 +89,11 @@ its published integrity pin and MIT license. Dependency search, package count,
 metadata inventory and resource closure also have explicit limits.
 Payload paths use normalized portable ASCII names. Traversal, alternate streams,
 links, Windows device basenames and trailing-dot/space aliases are rejected
-before extraction. Package roots and display text can use Unicode.
+before extraction. Host package, profile and save roots accept UTF-8. Windows
+filesystem boundaries use wide absolute extended-length paths, including UNC
+paths, within Windows limits. Manifest paths, exact-lock identities and VFS names
+remain logical paths subject to the portable payload-name and confinement rules
+above.
 
 Metadata resolves before selected asset decoding. Native visual caches retain
 their session ownership; profile changes require quiescent consumers. Resource

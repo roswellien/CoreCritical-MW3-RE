@@ -9,21 +9,32 @@ is [MW3Recomp-Private PR 264](https://github.com/roswellien/MW3Recomp-Private/pu
 
 - The Windows clang-cl build produces `mw3`, `mw3content` and the content/native
   tests with SDL and the Core Critical Vulkan backend.
-- 70 content tests pass. They exercise composition and dependency failures,
+- 78 content tests pass. They exercise composition and dependency failures,
   stable handles, real native readers and geometry queries, item/store/lance
   consumers, campaign reduction, transactional persistence/import, migration,
   multiplayer envelopes, HUD presentation and lazy resource integrity.
-- 125 focused content and existing stock regression tests pass, including
+- 133 focused content and existing stock regression tests pass, including
   pilot/configuration, Lab, lobby, resolution, weapons, mods and patch behavior.
-- Six selected CTest consumers pass: renderer worker, prepared resources,
-  geometry, GPU HUD, SDL and prepared staging. This is not the entire Vulkan
-  fixture matrix or the complete original-data differential suite.
+- All 31 presentation/CLI CTests pass: the Vulkan fixture matrix, renderer
+  worker, prepared resources/staging, geometry, GPU HUD, SDL and the actual
+  Unicode-path CLI. The separately run native test executable is excluded from
+  that count. This does not cover the complete original-data differential suite.
+- Windows long-Unicode-root fixtures exercise package export/install, complete
+  save-bundle reads and failed replacement preserving the accepted save,
+  managed campaign refresh/cold load, VFS and selected loose-reader reads,
+  strings and settings. A correctly hashed malformed selected reader fails
+  visibly instead of loading an archive fallback. The actual native executable
+  also completes a packaged campaign mission from a Unicode profile/store root.
+- Retained-hierarchy fixtures check transform-only nodes, deterministic bindings,
+  invalid graphs/matrices, nested native objective and ground/ray queries,
+  mirrored surfaces, restoration, vehicle marker binding and hierarchy-tag
+  lifetime. These are native adapter checks, separate from live game runs.
 - A deliberate removal of the Windows trailing-dot/space path guard makes its
   regression fail. Restoring the exact source makes it pass. A package containing
   `data.txt` and `data.txt.` was accepted before the fix and is now rejected
   before activation, preventing two claimed files aliasing one Windows file.
-- CI includes asset-free content checks and the shared CLI on Linux, macOS and
-  Windows. Local Windows results do not establish cross-platform CI success.
+- Asset-free CI passes content checks and the shared CLI on Linux, macOS and
+  Windows for runtime source revision `9950cbcf`.
 
 ## Demonstrated native execution
 
@@ -34,8 +45,12 @@ reach-area/node-change objectives. Added weapon firing/heat and replicated peer
 movement were observed. Geometry, ground/projectile and restoration tests cover
 paths that a capture alone cannot establish.
 
-The authored campaign completes landing, grants one telemetry token, cold-loads
-the extraction branch, consumes the token and ends with two accepted results.
+Fourteen actual CLI calls install the nine showcase source packages, compile
+both worlds, export and install the compiled `.mw3pack`, and resolve/inspect its
+selected profile. Native runs using that installed compiled world complete
+landing, including the imported `gantry/Gantry/Control/Beacon` objective, grant
+one telemetry token, cold-load the extraction branch, consume the token and end
+with two accepted results.
 An active checkpoint imports into a separate profile write directory using
 `--content-save`; its source remains unchanged. Native snapshot payloads preserve
 the existing game's save facilities, principally animation state. A map with no
@@ -49,25 +64,36 @@ owned skin pixels retain the same gameplay identity and were admitted. The
 cosmetic rerun exits cleanly under the debugger after fixing a static texture
 ownership teardown defect. An earlier intermittent access violation was not
 reproduced or conclusively attributed; extended multiplayer stability remains a
-release gate. The direct arena route does not establish production lobby UI,
+release gate. The final compiled hierarchy showcase also passes matching and
+cosmetic native peer runs; both changed-damage peers exit 2 before Core. These
+peers use complete version/hash locks and the installed package store. The
+direct arena route does not establish production lobby UI,
 scoreboard or respawn acceptance.
 
 The no-profile stock chain traverses all 20 missions, reaches credits and exits
 zero, with zero unknown original functions and zero skipped script-engine calls.
-All 15 fitted-weapon checks pass. Seven salvage comparison diagnostics report
-differences; a baseline comparison is still required before calling every
-salvage lifecycle check equivalent.
+All 15 fitted-weapon checks pass. A same-seed comparison with a verified baseline
+binary built at `98ed1168`, whose tracked source tree is identical to integration
+base `17a527b8`, matches all 20 progression/score lines, 15 fitted-weapon checks,
+20 salvage diagnostics and 19 transfer diagnostics. This is a verified identical
+source-tree baseline, not an exact-commit build. The seven salvage `differs`
+diagnostics also occur in that baseline; this run introduces no new difference
+in those diagnostics. It does not establish equivalence to original-game output.
 
 Native captures cover 800x600, 1280x720 and 1680x720 and an authored HUD scale of
 1.25. Inspection caught and corrected overlap between the example radar and
-weapon list. Dynamic resize/input acceptance and the complete Studio/launcher
-interaction remain to be exercised; launcher UI follow-up is
+weapon list. A separate live native run maximizes and restores its 1280x720
+window, keeps the selected HUD aligned, resumes through the displayed pause
+button at both sizes and toggles objectives through F12, then exits zero.
+This tests presentation resize and native input alignment; it does not change
+the logical mission resolution. The complete Studio/launcher interaction remains
+to be exercised; launcher UI follow-up is
 [issue 262](https://github.com/roswellien/MW3Recomp-Private/issues/262).
 
 ## Release boundary
 
-Keep the implementation PRs in draft until remaining native stability, UI,
-baseline salvage and full demonstration checks are accepted. The launcher full
+Keep the implementation PRs in draft until remaining native stability, UI and
+full demonstration checks are accepted. The launcher full
 suite also encounters its existing Steam-must-be-closed guard on the developer
 machine; focused native-CLI integration and its other checks pass. Do not count
 that environment-blocked aggregate test as passing. No original-game fallback,
