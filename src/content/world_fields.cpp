@@ -19,22 +19,30 @@ void fields(const Definition &definition, const Json &object,
 void validate_compiled_world_fields(const Json &world) {
     Definition definition{"world", world.value("id", std::string{}), {}, "compiled", {}, -1};
     fields(definition, world,
-           {"format", "schema", "id", "digest", "bounds", "spawn", "chunks", "markers", "textures",
-            "readers"},
+           {"format", "schema", "id", "digest", "bounds", "spawn", "chunks", "nodes", "markers",
+            "textures", "readers"},
            "world");
     if (world.contains("chunks"))
         for (size_t i = 0; i < world["chunks"].size(); ++i) {
             const auto &chunk = world["chunks"][i];
             const auto path = "world.chunks[" + std::to_string(i) + "]";
             fields(definition, chunk,
-                   {"name", "instance", "vertices", "triangles", "uvs", "color", "alpha", "soil",
-                    "texture", "image", "collision", "ground", "visible"},
+                   {"name", "instance", "node", "vertices", "triangles", "uvs", "color", "alpha",
+                    "soil", "texture", "image", "collision", "ground", "visible"},
                    path);
             for (const char *key : {"collision", "ground", "visible"})
                 if (chunk.contains(key) && !chunk[key].is_boolean())
                     fail("world-schema", "Compiled mesh flags must be boolean", {}, definition.id,
                          path + "." + key);
         }
+    if (world.contains("nodes")) {
+        if (!world["nodes"].is_array())
+            fail("world-schema", "Compiled nodes must be an array");
+        for (size_t i = 0; i < world["nodes"].size(); ++i)
+            fields(definition, world["nodes"][i],
+                   {"id", "instance", "parent", "name", "local_matrix"},
+                   "world.nodes[" + std::to_string(i) + "]");
+    }
     if (world.contains("textures"))
         for (const auto &image : world["textures"].items())
             fields(definition, image.value(), {"width", "height", "pixels", "alpha"},

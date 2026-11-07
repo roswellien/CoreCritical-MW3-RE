@@ -86,6 +86,8 @@ int copy_node_base(Node* src, Node* dst) {
   dst->source_asset_root = src->source_asset_root;
   dst->content_chassis_id = src->content_chassis_id;
   dst->source_model_vertices = src->source_model_vertices;
+  dst->content_hierarchy_parent = src->content_hierarchy_parent;
+  dst->content_hierarchy_root = src->content_hierarchy_root;
   const uint32_t f = src->flags();
   auto bit = [f](int n) { return static_cast<int>((f >> n) & 1); };
   if (int r = node_set_name(dst, src->name())) return copy_error(0x400, 0x3fb, "description field.", r);

@@ -54,7 +54,7 @@ void append_world_stock_content(std::vector<Definition> &definitions) {
 cc::content::Capabilities world_capabilities() {
     return {{"world.authored", 1},     {"world.compiled", 1},          {"world.legacy", 1},
             {"world.legacy-layer", 1}, {"world_asset.static_mesh", 1}, {"mission.native", 1},
-            {"world.markers", 1},      {"vehicle-assets", 1}};
+            {"world.markers", 1},      {"world.hierarchy", 1},         {"vehicle-assets", 1}};
 }
 void validate_world_content(const cc::content::ResolvedContentSet &content) {
     std::set<std::string> legacy_directories;

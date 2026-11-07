@@ -60,6 +60,7 @@
 #include "gamez/zweapon/zweapon.h"
 #include "gamez/zentity/zent_init.h"
 #include "mech3/cheats.h"
+#include "mech3/content_world_hierarchy.h"
 #include "mech3/cockpit_sound.h"
 #include "mech3/landmines.h"
 #include "mech3/entity_classes.h"
@@ -1448,9 +1449,16 @@ struct WiredObjectiveHooks : ObjectiveHooks {
     if (target(h)) return nullptr;
     return e->object_of(h) ? entity_name(h) : nullptr;
   }
-  Handle node_find(const char* name) override { return e->handle_of(zcls::list_find_by_name(6, name)); }
+  Handle node_find(const char* name) override {
+    zcls::Node* root = nullptr;
+    if (content_hierarchy_root(name, &root)) return root ? e->handle_of(root) : 0;
+    return e->handle_of(zcls::list_find_by_name(6, name));
+  }
   Handle subnode_find(Handle node, const char* name) override {
     zcls::Node* n = mission_node(*e, node);
+    zcls::Node *child = nullptr;
+    if (content_hierarchy_child(n, name, &child))
+        return child ? e->handle_of(child) : 0;
     return n ? e->handle_of(zcls::node_find_in_tree(n, name)) : 0;
   }
   uint8_t node_active(Handle node) override {

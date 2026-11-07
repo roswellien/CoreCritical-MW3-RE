@@ -1,5 +1,6 @@
 #include "content/world.h"
 #include "platform/host_path.h"
+#include "content/world_hierarchy.h"
 
 #include "miniz/miniz_tinfl.h"
 #include <algorithm>
@@ -50,6 +51,8 @@ Point transform(const Matrix &m, const Point &p) {
 }
 Matrix matrix(const Json &node) {
     if (node.contains("matrix")) {
+        if (node.contains("translation") || node.contains("rotation") || node.contains("scale"))
+            fail("world-transform", "A node may specify matrix or TRS, not both");
         if (!node["matrix"].is_array() || node["matrix"].size() != 16)
             fail("world-transform", "A matrix must have sixteen entries");
         Matrix m{};
@@ -242,7 +245,8 @@ struct Compiler {
     Json out;
     size_t triangles = 0;
 
-    void mesh(const Json &mesh, const Matrix &placement, const std::string &instance) {
+    void mesh(const Json &mesh, const Matrix &placement, const std::string &instance,
+              const std::string &node_id = {}, const Matrix *world_placement = nullptr) {
         if (!mesh.contains("vertices") || !mesh["vertices"].is_array() ||
             !mesh.contains("triangles") || !mesh["triangles"].is_array())
             fail("world-mesh", "Mesh requires vertices and triangle indices", definition.owner,
@@ -263,12 +267,17 @@ struct Compiler {
                      {"collision", mesh.value("collision", true)},
                      {"ground", mesh.value("ground", true)},
                      {"visible", mesh.value("visible", true)}};
+            if (!node_id.empty())
+                chunk["node"] = node_id;
         };
         fresh();
+        // Bound primitives keep local positions. Their complete ancestor chain
+        // still determines whether reflection reverses native triangle winding.
+        const Matrix &orientation = world_placement ? *world_placement : placement;
         const double determinant =
-            placement[0] * (placement[5] * placement[10] - placement[9] * placement[6]) -
-            placement[4] * (placement[1] * placement[10] - placement[9] * placement[2]) +
-            placement[8] * (placement[1] * placement[6] - placement[5] * placement[2]);
+            orientation[0] * (orientation[5] * orientation[10] - orientation[9] * orientation[6]) -
+            orientation[4] * (orientation[1] * orientation[10] - orientation[9] * orientation[2]) +
+            orientation[8] * (orientation[1] * orientation[6] - orientation[5] * orientation[2]);
         for (Json triangle : mesh["triangles"]) {
             if (!triangle.is_array() || triangle.size() != 3)
                 fail("world-triangle", "Only triangle primitives are supported");
@@ -421,116 +430,135 @@ struct Compiler {
             return result;
         };
         const auto nodes = doc.value("nodes", Json::array());
-        std::set<int> stack;
-        std::function<void(int, const Matrix &, int)> walk = [&](int ni, const Matrix &parent,
-                                                                 int depth) {
-            if (depth > 64 || ni < 0 || static_cast<size_t>(ni) >= nodes.size() ||
-                !stack.insert(ni).second)
-                fail("gltf-nodes", "Invalid or cyclic glTF node graph");
-            const auto &node = nodes[ni];
-            const Matrix placed = multiply(parent, matrix(node));
-            if (node.contains("skin") || node.contains("weights"))
-                fail("gltf-feature", "Only static mesh nodes are supported");
-            if (node.contains("mesh")) {
-                const size_t mi = node["mesh"].get<size_t>();
-                if (mi >= doc.value("meshes", Json::array()).size())
-                    fail("gltf-mesh", "Invalid mesh reference");
-                for (const auto &primitive : doc["meshes"][mi]["primitives"]) {
-                    if (primitive.value("mode", 4) != 4 || primitive.contains("targets"))
-                        fail("gltf-primitive", "Only static triangle primitives are supported");
-                    Json m;
-                    m["vertices"] = accessor(primitive["attributes"].value("POSITION", -1), 3);
-                    m["triangles"] = Json::array();
-                    Json indices = Json::array();
-                    if (primitive.contains("indices"))
-                        indices = accessor(primitive["indices"].get<int>(), 1);
-                    else
-                        for (size_t k = 0; k < m["vertices"].size(); ++k)
-                            indices.push_back(k);
-                    if (indices.size() % 3)
-                        fail("gltf-primitive", "Triangle index count is not divisible by three");
-                    for (size_t k = 0; k < indices.size(); k += 3)
-                        m["triangles"].push_back(Json{indices[k], indices[k + 1], indices[k + 2]});
-                    if (primitive["attributes"].contains("TEXCOORD_0"))
-                        m["uvs"] = accessor(primitive["attributes"]["TEXCOORD_0"].get<int>(), 2);
-                    if (primitive.contains("material")) {
-                        const size_t material = primitive["material"].get<size_t>();
-                        if (material >= doc.value("materials", Json::array()).size())
-                            fail("gltf-material", "Invalid material reference");
-                        const auto mat = doc["materials"][material];
-                        const auto pbr = mat.value("pbrMetallicRoughness", Json::object());
-                        const std::string alpha_mode =
-                            mat.value("alphaMode", std::string("OPAQUE"));
-                        if (alpha_mode != "OPAQUE" && alpha_mode != "MASK" && alpha_mode != "BLEND")
-                            fail("gltf-material", "Unsupported material alpha mode");
-                        if (pbr.contains("baseColorTexture")) {
-                            const auto texture_index =
-                                pbr["baseColorTexture"].at("index").get<size_t>();
-                            if (texture_index >= doc.value("textures", Json::array()).size())
-                                fail("gltf-texture", "Invalid texture index");
-                            const auto image_index =
-                                doc["textures"][texture_index].at("source").get<size_t>();
-                            if (image_index >= doc.value("images", Json::array()).size())
-                                fail("gltf-image", "Invalid image index");
-                            const auto &image = doc["images"][image_index];
-                            std::string image_bytes;
-                            if (image.contains("uri"))
-                                image_bytes =
-                                    bytes(content.resource(owner, (fs::path(path).parent_path() /
-                                                                   image["uri"].get<std::string>())
-                                                                      .generic_string()));
-                            else {
-                                const auto vi = image.at("bufferView").get<size_t>();
-                                if (vi >= doc.value("bufferViews", Json::array()).size())
-                                    fail("gltf-image", "Invalid image buffer view");
-                                const auto &view = doc["bufferViews"][vi];
-                                const auto bi = view.at("buffer").get<size_t>(),
-                                           offset = view.value("byteOffset", size_t{}),
-                                           length = view.at("byteLength").get<size_t>();
-                                if (bi >= buffers.size() || offset > buffers[bi].size() ||
-                                    length > buffers[bi].size() - offset)
-                                    fail("gltf-image", "Image buffer exceeds its source");
-                                image_bytes = buffers[bi].substr(offset, length);
-                            }
-                            const double cutoff = number(mat.value("alphaCutoff", Json(0.5)));
-                            if (cutoff < 0 || cutoff > 1)
-                                fail("gltf-material", "Alpha cutoff must be from zero to one");
-                            const auto key =
-                                sha256(image_bytes + alpha_mode + std::to_string(cutoff));
-                            if (!out["textures"].contains(key)) {
-                                auto image_data = texture_image(png(image_bytes));
-                                if (alpha_mode == "OPAQUE")
-                                    image_data["alpha"] = Json::array();
-                                else if (alpha_mode == "MASK")
-                                    for (auto &alpha : image_data["alpha"])
-                                        alpha = alpha.get<int>() >= cutoff * 255 ? 255 : 0;
-                                out["textures"][key] = image_data;
-                            }
-                            m["image"] = key;
-                        }
-                        const Json color = pbr.value("baseColorFactor", Json{1, 1, 1, 1});
-                        if (color.size() != 4 || number(color[3]) < 0 || number(color[3]) > 1)
-                            fail("gltf-material", "Invalid base color factor");
-                        m["alpha"] =
-                            alpha_mode == "OPAQUE" ? 255 : static_cast<int>(number(color[3]) * 255);
-                        m["color"] = Json{color[0], color[1], color[2]};
-                    }
-                    for (const char *key :
-                         {"collision", "ground", "visible", "soil", "texture", "color", "alpha"})
-                        if (options.contains(key))
-                            m[key] = options[key];
-                    mesh(m, placed, instance);
-                }
-            }
-            for (const auto &child : node.value("children", Json::array()))
-                walk(child.get<int>(), placed, depth + 1);
-            stack.erase(ni);
+        auto node_index = [&](const Json &value) {
+            if (!value.is_number_integer() || value.get<int64_t>() < 0 ||
+                value.get<uint64_t>() >= nodes.size() || value.get<uint64_t>() > INT32_MAX)
+                fail("gltf-nodes", "Scene and child node references require valid integer indices");
+            return value.get<int>();
         };
+        std::set<int> stack, visited;
+        std::function<void(int, const Matrix &, const std::string &, int)> walk =
+            [&](int ni, const Matrix &parent, const std::string &parent_id, int depth) {
+                if (depth >= static_cast<int>(hierarchy::max_depth) || ni < 0 ||
+                    static_cast<size_t>(ni) >= nodes.size() || !stack.insert(ni).second ||
+                    !visited.insert(ni).second)
+                    fail("gltf-nodes",
+                         "Invalid, cyclic, shared-parent or overdeep glTF node graph");
+                const auto &node = nodes[ni];
+                const Matrix local = matrix(node);
+                const Matrix placed = multiply(parent, local);
+                // The instance parent remains identity for legacy inline/marker data.
+                // Apply instance placement once, in each retained glTF scene root.
+                const auto node_id =
+                    hierarchy::append_node(out, instance, static_cast<size_t>(ni), node, parent_id,
+                                           parent_id.empty() ? placed : local);
+                if (node.contains("skin") || node.contains("weights"))
+                    fail("gltf-feature", "Only static mesh nodes are supported");
+                if (node.contains("mesh")) {
+                    const size_t mi = node["mesh"].get<size_t>();
+                    if (mi >= doc.value("meshes", Json::array()).size())
+                        fail("gltf-mesh", "Invalid mesh reference");
+                    for (const auto &primitive : doc["meshes"][mi]["primitives"]) {
+                        if (primitive.value("mode", 4) != 4 || primitive.contains("targets"))
+                            fail("gltf-primitive", "Only static triangle primitives are supported");
+                        Json m;
+                        m["vertices"] = accessor(primitive["attributes"].value("POSITION", -1), 3);
+                        m["triangles"] = Json::array();
+                        Json indices = Json::array();
+                        if (primitive.contains("indices"))
+                            indices = accessor(primitive["indices"].get<int>(), 1);
+                        else
+                            for (size_t k = 0; k < m["vertices"].size(); ++k)
+                                indices.push_back(k);
+                        if (indices.size() % 3)
+                            fail("gltf-primitive",
+                                 "Triangle index count is not divisible by three");
+                        for (size_t k = 0; k < indices.size(); k += 3)
+                            m["triangles"].push_back(
+                                Json{indices[k], indices[k + 1], indices[k + 2]});
+                        if (primitive["attributes"].contains("TEXCOORD_0"))
+                            m["uvs"] =
+                                accessor(primitive["attributes"]["TEXCOORD_0"].get<int>(), 2);
+                        if (primitive.contains("material")) {
+                            const size_t material = primitive["material"].get<size_t>();
+                            if (material >= doc.value("materials", Json::array()).size())
+                                fail("gltf-material", "Invalid material reference");
+                            const auto mat = doc["materials"][material];
+                            const auto pbr = mat.value("pbrMetallicRoughness", Json::object());
+                            const std::string alpha_mode =
+                                mat.value("alphaMode", std::string("OPAQUE"));
+                            if (alpha_mode != "OPAQUE" && alpha_mode != "MASK" &&
+                                alpha_mode != "BLEND")
+                                fail("gltf-material", "Unsupported material alpha mode");
+                            if (pbr.contains("baseColorTexture")) {
+                                const auto texture_index =
+                                    pbr["baseColorTexture"].at("index").get<size_t>();
+                                if (texture_index >= doc.value("textures", Json::array()).size())
+                                    fail("gltf-texture", "Invalid texture index");
+                                const auto image_index =
+                                    doc["textures"][texture_index].at("source").get<size_t>();
+                                if (image_index >= doc.value("images", Json::array()).size())
+                                    fail("gltf-image", "Invalid image index");
+                                const auto &image = doc["images"][image_index];
+                                std::string image_bytes;
+                                if (image.contains("uri"))
+                                    image_bytes = bytes(
+                                        content.resource(owner, (fs::path(path).parent_path() /
+                                                                 image["uri"].get<std::string>())
+                                                                    .generic_string()));
+                                else {
+                                    const auto vi = image.at("bufferView").get<size_t>();
+                                    if (vi >= doc.value("bufferViews", Json::array()).size())
+                                        fail("gltf-image", "Invalid image buffer view");
+                                    const auto &view = doc["bufferViews"][vi];
+                                    const auto bi = view.at("buffer").get<size_t>(),
+                                               offset = view.value("byteOffset", size_t{}),
+                                               length = view.at("byteLength").get<size_t>();
+                                    if (bi >= buffers.size() || offset > buffers[bi].size() ||
+                                        length > buffers[bi].size() - offset)
+                                        fail("gltf-image", "Image buffer exceeds its source");
+                                    image_bytes = buffers[bi].substr(offset, length);
+                                }
+                                const double cutoff = number(mat.value("alphaCutoff", Json(0.5)));
+                                if (cutoff < 0 || cutoff > 1)
+                                    fail("gltf-material", "Alpha cutoff must be from zero to one");
+                                const auto key =
+                                    sha256(image_bytes + alpha_mode + std::to_string(cutoff));
+                                if (!out["textures"].contains(key)) {
+                                    auto image_data = texture_image(png(image_bytes));
+                                    if (alpha_mode == "OPAQUE")
+                                        image_data["alpha"] = Json::array();
+                                    else if (alpha_mode == "MASK")
+                                        for (auto &alpha : image_data["alpha"])
+                                            alpha = alpha.get<int>() >= cutoff * 255 ? 255 : 0;
+                                    out["textures"][key] = image_data;
+                                }
+                                m["image"] = key;
+                            }
+                            const Json color = pbr.value("baseColorFactor", Json{1, 1, 1, 1});
+                            if (color.size() != 4 || number(color[3]) < 0 || number(color[3]) > 1)
+                                fail("gltf-material", "Invalid base color factor");
+                            m["alpha"] = alpha_mode == "OPAQUE"
+                                             ? 255
+                                             : static_cast<int>(number(color[3]) * 255);
+                            m["color"] = Json{color[0], color[1], color[2]};
+                        }
+                        for (const char *key : {"collision", "ground", "visible", "soil", "texture",
+                                                "color", "alpha"})
+                            if (options.contains(key))
+                                m[key] = options[key];
+                        mesh(m, identity(), instance, node_id, &placed);
+                    }
+                }
+                for (const auto &child : node.value("children", Json::array()))
+                    walk(node_index(child), placed, node_id, depth + 1);
+                stack.erase(ni);
+            };
         const int scene = doc.value("scene", 0);
         if (scene < 0 || static_cast<size_t>(scene) >= doc.value("scenes", Json::array()).size())
             fail("gltf-scene", "A static world source must select a scene");
         for (const auto &node : doc["scenes"][scene].value("nodes", Json::array()))
-            walk(node.get<int>(), placement, 0);
+            walk(node_index(node), placement, {}, 0);
     }
 
     void asset(const Definition &d, const Json &placement, const std::string &id) {
@@ -675,6 +703,8 @@ void validate_compiled_world(const Json &world) {
                 fail("world-degenerate", "Compiled world contains a degenerate triangle");
         }
     }
+    const auto hierarchy_instances = hierarchy::validate(world);
+    instances.insert(hierarchy_instances.begin(), hierarchy_instances.end());
     const auto markers = world.value("markers", Json::array());
     if (!markers.is_array() || markers.size() > kMaxMarkers)
         fail("world-markers", "Compiled marker count exceeds its native budget");

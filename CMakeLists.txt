@@ -56,6 +56,7 @@ add_library(cc_content STATIC
   src/content/persistence.cpp
   src/content/world.cpp
   src/content/world_fields.cpp
+  src/content/world_hierarchy.cpp
   third_party/miniz/miniz_tinfl.c
   src/mech3/source_archive.cpp)
 target_include_directories(cc_content PUBLIC src third_party)
@@ -71,6 +72,7 @@ add_library(mw3core STATIC
   src/mech3/content_base.cpp
   src/mech3/content_world.cpp
   src/mech3/content_world_catalog.cpp
+  src/mech3/content_world_hierarchy.cpp
   src/mech3/content_world_readers.cpp
   src/mech3/content_campaign.cpp
   src/mech3/content_checkpoint.cpp
@@ -636,6 +638,7 @@ add_executable(mw3tests
   tests/test_content_store.cpp
   tests/test_content_lance.cpp
   tests/test_content_world.cpp
+  tests/test_content_world_hierarchy.cpp
   tests/test_content_campaign.cpp
   tests/test_content_checkpoint.cpp
   tests/test_content_hud.cpp

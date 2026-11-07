@@ -303,3 +303,33 @@ map-specific donor templates. The asset requires all four support and twelve
 collision markers. Live model pools never resize: insufficient capacity fails
 before any actor node is constructed. Field-base arm rigs continue using their
 existing donor world models and do not advertise static asset replacement.
+
+
+## Imported scene hierarchy
+
+Packages using imported scene nodes require `world.hierarchy` version 1.
+CompiledWorldV1 retains a `nodes` forest. Each entry contains exactly `id`,
+`instance`, `parent` (null for a scene root), `name` and `local_matrix`.
+IDs are deterministic `<instance>/gltf/<source-node-index>` bindings; names
+remain the authored glTF names, with `node_<index>` for unnamed nodes. Names
+must fit 35 native bytes without control characters; ambiguous sibling names
+are rejected. Names may repeat beneath separate parents.
+
+Matrices retain glTF column-major affine layout. An imported scene root includes
+its asset instance placement once; descendants retain their source-local matrix.
+Imported mesh chunks name their owning `node` and keep node-local vertices.
+Native Object3d nodes carry those matrices and actual parent/child links, so
+rendering, ground/projectile queries and objective node paths use the same tree.
+The whole transform chain determines mirrored triangle winding. Matrix and TRS
+fields are mutually exclusive. Cycles, shared-parent source nodes, missing or
+cross-instance bindings, singular/nonfinite transforms, out-of-bounds geometry,
+unknown compiled fields, more than 65,536 nodes or depth above 24 fail before
+native construction. Transform-only nodes count toward both budgets.
+
+Native objective paths begin with the unique asset instance or vehicle actor
+root and then traverse immediate imported child names, for example
+`["gate_01", "Building", "Door", "Latch"]`. An imported basename used as the
+first component fails with a path diagnostic. Managed path tags belong to live
+nodes and are copied with native tree copies; recycled node slots reset them.
+Inline meshes, heightfields, old compiled files without `nodes`, existing
+per-instance markers, and stock native lookup retain their existing contracts.

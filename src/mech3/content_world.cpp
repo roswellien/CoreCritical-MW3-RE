@@ -1,4 +1,5 @@
 #include "mech3/content_world.h"
+#include "mech3/content_world_hierarchy.h"
 #include "mech3/content_world_readers.h"
 
 #include <algorithm>
@@ -49,7 +50,6 @@ Json g_readers = Json::object();
 Json g_legacy_actors = Json::array();
 std::map<std::string, zimg::TextureEntry *> g_images;
 std::map<std::string, Json> g_vehicle_assets;
-uint32_t g_vehicle_node_serial = 0;
 std::set<std::string> g_registered_folders;
 
 void fill_reader(zrdr::Node &node, const Json &value, int depth) {
@@ -408,18 +408,12 @@ bool load_content_world(int32_t index) {
     zcls::world_set_size(root, bounds[2].get<float>(), -bounds[3].get<float>());
     zcls::world_make_grid(root, 64.0f, -64.0f);
     size_t i = 0;
-    std::map<std::string, zcls::Node *> instances;
+    const auto hierarchy = build_content_hierarchy(world, root, true);
     for (const auto &chunk : world["chunks"]) {
-        const std::string instance = chunk.value("instance", std::string("terrain"));
-        zcls::Node *&parent = instances[instance];
-        if (!parent) {
-            parent = zcls::object3d_create();
-            zcls::node_set_name(parent, instance.c_str());
-            parent->set_flags(parent->flags() & ~0x1000000u);
-            zcls::world_add_child(root, parent);
-        }
+        auto *parent = hierarchy.chunk_parent(chunk);
         zcls::Node *node = zcls::object3d_create();
-        const auto name = "cc_" + std::to_string(i++);
+        const auto name =
+            std::string(chunk.contains("node") ? "__cc_mesh_" : "cc_") + std::to_string(i++);
         zcls::node_set_name(node, name.c_str());
         node->set_flags((node->flags() & ~(8u | 16u | 0x1000000u)) | 4u |
                         (chunk.value("ground", true) ? 8u : 0u) |
@@ -435,8 +429,8 @@ bool load_content_world(int32_t index) {
     }
     for (const auto &marker : world.value("markers", Json::array())) {
         const auto instance = marker.at("instance").get<std::string>();
-        const auto parent = instances.find(instance);
-        if (parent == instances.end())
+        const auto parent = hierarchy.instances.find(instance);
+        if (parent == hierarchy.instances.end())
             fail("world-marker", "Native marker has no geometry parent");
         auto *node = zcls::object3d_create();
         zcls::node_set_name(node, marker.at("name").get_ref<const std::string &>().c_str());
@@ -552,9 +546,11 @@ zcls::Node *create_content_vehicle_node(const char *vehicle_type, const char *na
     auto *root = zcls::object3d_create();
     zcls::node_set_name(root, native_name);
     root->set_flags(root->flags() & ~0x1000000u);
+    const auto hierarchy = build_content_hierarchy(geometry, root, false);
+    size_t chunk_index=0;
     for (const auto &chunk : geometry.at("chunks")) {
         auto *node = zcls::object3d_create();
-        const auto name = "cv_" + std::to_string(g_vehicle_node_serial++);
+        const auto name=std::string(chunk.contains("node")?"__cc_mesh_":"cc_")+std::to_string(chunk_index++);
         zcls::node_set_name(node, name.c_str());
         node->set_flags((node->flags() & ~(8u | 16u | 0x1000000u)) | 4u |
                         (chunk.value("collision", true) ? 16u : 0u));
@@ -563,7 +559,7 @@ zcls::Node *create_content_vehicle_node(const char *vehicle_type, const char *na
             zcls::object3d_set_opacity(node, 0);
             zcls::object3d_use_opacity(node, 1);
         }
-        zcls::object3d_add_child(root, node);
+        zcls::object3d_add_child(hierarchy.chunk_parent(chunk), node);
         zcls::update_node(node);
         g_sources.emplace(node, chunk);
     }
@@ -587,7 +583,6 @@ void clear_content_world() {
     g_sources.clear();
     g_images.clear();
     g_vehicle_assets.clear();
-    g_vehicle_node_serial = 0;
     g_readers = Json::object();
     g_legacy_actors = Json::array();
     g_digest.clear();
