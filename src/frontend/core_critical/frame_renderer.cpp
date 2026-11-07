@@ -1,12 +1,21 @@
 #include "frame_renderer.hpp"
 #include "frontend/sdl/cpu_interval.h"
+#include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
+#include "gamez/zutil/zutl_path.h"
 #include "prepared_draw.hpp"
 #include "prepared_draw_cache.hpp"
 #include "prepared_models.hpp"
 #include "render_worker.hpp"
 #include "renderer/geometry/reference.hpp"
+#include "renderer/material_normals.hpp"
+
+namespace mw34::materials {
+void set_active_surface_key(const SurfaceKey &key);
+void clear_active_surface_key();
+bool get_active_surface_key(SurfaceKey *out);
+} // namespace mw34::materials
 
 #include "frontend/sdl/sdl_child.h"
 #include "platform/wsi_surface.hpp"
@@ -174,6 +183,9 @@ struct Texture {
   const ::platform::prepared::Image *replacement{};
   unsigned source_width{}, source_height{};
   std::vector<std::uint32_t> pixels;
+  std::string name;
+  mw34::materials::SurfaceKey surface_key{};
+  std::uint64_t group_load_epoch{0};
 };
 
 std::vector<uint32_t> image_pixels(const ::platform::prepared::Image &image,
@@ -216,6 +228,15 @@ cc::geometry::Mode parse_geometry(const std::string &mode) {
       "--cc-geometry supports legacy, partial, gpu or cpu-reference");
 }
 
+sdlfe::CoreCriticalAssets
+sanitize_prepared_assets(sdlfe::CoreCriticalAssets assets) {
+  if (assets.models.empty()) {
+    assets.lighting = "off";
+    assets.normals.clear();
+  }
+  return assets;
+}
+
 class FrameRenderer final : public VulkanFrameRenderer {
 public:
   explicit FrameRenderer(SDL_Window *window, sdlfe::RendererBackend backend,
@@ -235,7 +256,8 @@ public:
         hwnd_(cc_mw3_re::platform::get_window_hwnd(window)),
         native_wsi_(backend == sdlfe::RendererBackend::core_critical_wsi),
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
-        prepared_(assets), geometry_mode_(parse_geometry(assets.geometry)),
+        prepared_(sanitize_prepared_assets(assets)),
+        geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),
         prepared_cache_enabled_(bridge_config_.prepared_cache) {
@@ -298,6 +320,20 @@ public:
 #include "geometry_frame_adapter.inc"
 #include "geometry_reference_adapter.inc"
 #include "prepared_gpu_adapter.inc"
+#include "renderer/surface_normals_stage.inc"
+
+  int32_t surface_normal_texture(int normal_index) {
+    const auto found = surface_normal_textures_.find(normal_index);
+    if (found != surface_normal_textures_.end()) {
+      return found->second;
+    }
+    const auto &norm_img = surface_normal_image(normal_index);
+    const auto handle = create_texture(
+        int(norm_img.width), int(norm_img.height),
+        reinterpret_cast<const uint8_t *>(norm_img.pixels32.data()), 1);
+    surface_normal_textures_.emplace(normal_index, handle);
+    return handle;
+  }
 
   bool wants_model_context() const override { return !prepared_.empty(); }
   bool replaces_model_geometry() const override {
@@ -327,7 +363,11 @@ public:
                        : "Core Critical Vulkan/DXGI";
   }
   void set_shape(const sdlfe::FrameShape *shape) override { shape_ = shape; }
-  void reset_scene_resources() override { reset_pending_ = true; }
+  void reset_scene_resources() override {
+    reset_pending_ = true;
+    ++group_load_epoch_;
+    surface_normal_textures_.clear();
+  }
 
   ~FrameRenderer() override {
     try {
@@ -475,6 +515,11 @@ public:
     auto &entry = textures_[handle];
     entry.width = unsigned(width);
     entry.height = unsigned(height);
+    mw34::materials::SurfaceKey active_key{};
+    if (mw34::materials::get_active_surface_key(&active_key)) {
+      entry.surface_key = active_key;
+    }
+    entry.group_load_epoch = group_load_epoch_;
     update_texture(handle, width, height, rgba);
     return handle;
   }
@@ -510,9 +555,18 @@ public:
 
   int32_t create_named_texture(const char *name, int width, int height,
                                const uint8_t *rgba, uint8_t type) override {
+    mw34::materials::SurfaceKey active_key{};
+    mw34::materials::get_active_surface_key(&active_key);
     const auto *replacement = prepared_.named_texture(name);
-    if (!replacement)
-      return create_texture(width, height, rgba, type);
+    if (!replacement) {
+      int32_t handle = create_texture(width, height, rgba, type);
+      auto &entry = textures_[handle];
+      if (name)
+        entry.name = name;
+      entry.surface_key = active_key;
+      entry.group_load_epoch = group_load_epoch_;
+      return handle;
+    }
     if (!rgba || width <= 0 || height <= 0)
       throw std::runtime_error("Invalid named texture input");
     const auto pixels =
@@ -524,6 +578,10 @@ public:
     entry.replacement = replacement;
     entry.source_width = unsigned(width);
     entry.source_height = unsigned(height);
+    if (name)
+      entry.name = name;
+    entry.surface_key = active_key;
+    entry.group_load_epoch = group_load_epoch_;
     ++named_textures_;
     return handle;
   }
@@ -664,6 +722,69 @@ private:
     draw.count = drawn;
     draw.texture =
         state.texture < 0 ? -1 : int(bind_texture(state.texture, state.sharp));
+    if (lighting_.enabled && state.texture >= 0) {
+      const auto &tex_entry = textures_.at(state.texture);
+      const auto key = tex_entry.surface_key;
+      const auto epoch = tex_entry.group_load_epoch;
+      const auto tex_name = tex_entry.name;
+      if (epoch == group_load_epoch_ && key.hash != 0) {
+        int norm_idx = lighting_.normals ? surface_normal_index(key, true) : -1;
+        if (norm_idx >= 0) {
+          int norm_handle = surface_normal_texture(norm_idx);
+          draw.normal_texture = int(bind_texture(norm_handle, false));
+        } else {
+          draw.normal_texture = -1;
+        }
+        auto tl = std::make_shared<mw34::sun::Tl>();
+        const auto &proj = zmth::projection();
+        if (proj.near_z > 0 && proj.fx_near > 0 && proj.fy_near > 0 &&
+            viewport_[2] > 0 && viewport_[3] > 0) {
+          tl->projection = {
+              proj.near_z,
+              proj.fx_near * float(scene_.width) / float(viewport_[2]),
+              proj.fy_near * float(scene_.height) / float(viewport_[3]),
+              (proj.cx - float(viewport_[0])) * float(scene_.width) /
+                  float(viewport_[2]),
+              (proj.cy - float(viewport_[1])) * float(scene_.height) /
+                  float(viewport_[3]),
+              proj.far_z > 0 ? proj.far_z : 1000.0f};
+          const float *m = zmth::view().camera.m;
+          tl->camera_world = {m[0], m[3],  m[6], m[9], m[1], m[4],
+                              m[7], m[10], m[2], m[5], m[8], m[11]};
+        } else {
+          tl->projection = {1.0f,
+                            float(scene_.width),
+                            float(scene_.height),
+                            float(scene_.width) * .5f,
+                            float(scene_.height) * .5f,
+                            1000.0f};
+          tl->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        }
+        draw.sun_tl = std::move(tl);
+        auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
+            drawn, std::array<float, 3>{0, 0, 0});
+        draw.lit_normals = std::move(norms);
+        if (norm_idx >= 0 && !logged_first_normal_trace_) {
+          logged_first_normal_trace_ = true;
+          std::fprintf(stderr,
+                       "[SURFACE_NORMAL_TRACE] First authenticated surface "
+                       "normal bound: "
+                       "name=%s key={w=%u, h=%u, fmt=%u, hash=0x%llx} slot=%d "
+                       "normal_slot=%d uv_transform=[%d,%d] "
+                       "proj=[near=%f, fx_near=%f, fy_near=%f, cx=%f, cy=%f] "
+                       "viewport=[%d,%d,%d,%d] scene=[%u,%u] v0=[sx=%f, sy=%f, "
+                       "sz=%f, rhw=%f, u=%f, v=%f]\n",
+                       tex_name.c_str(), key.width, key.height, key.format,
+                       (unsigned long long)key.hash, draw.texture,
+                       draw.normal_texture, state.address_u, state.address_v,
+                       proj.near_z, proj.fx_near, proj.fy_near, proj.cx,
+                       proj.cy, viewport_[0], viewport_[1], viewport_[2],
+                       viewport_[3], scene_.width, scene_.height,
+                       vertices[0].sx, vertices[0].sy, vertices[0].sz,
+                       vertices[0].rhw, vertices[0].tu, vertices[0].tv);
+        }
+      }
+    }
     const bool sharp = state.sharp && state.texture >= 0 &&
                        !textures_.at(state.texture).held_copy;
     draw.sampler = (state.address_u == 3 ? 3U : 1U) << 4 |
@@ -698,9 +819,21 @@ private:
       auto &previous = scene_.draws.back();
       if (!previous.model && previous.depth_only == draw.depth_only &&
           previous.texture == draw.texture &&
+          previous.normal_texture == draw.normal_texture &&
+          bool(previous.sun_tl) == bool(draw.sun_tl) &&
+          bool(previous.lit_normals) == bool(draw.lit_normals) &&
           previous.sampler == draw.sampler &&
           previous.key.packed() == draw.key.packed() &&
           std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
+        if (previous.lit_normals && draw.lit_normals) {
+          auto merged_normals =
+              std::make_shared<std::vector<std::array<float, 3>>>(
+                  *previous.lit_normals);
+          merged_normals->insert(merged_normals->end(),
+                                 draw.lit_normals->begin(),
+                                 draw.lit_normals->end());
+          previous.lit_normals = std::move(merged_normals);
+        }
         previous.count += drawn;
         return;
       }
@@ -865,7 +998,8 @@ private:
                               : vk::Renderer::WindowSurface{};
     renderer_ = std::make_unique<vk::Renderer>(
         vk::Renderer::ColorTarget::rgba8, std::move(source), quality_,
-        !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy,
+        !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy ||
+            lighting_.enabled,
         lighting_, geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
     texture_limit_ = renderer_->max_texture_dimension(native_window_);
@@ -1028,6 +1162,9 @@ private:
   std::map<const ::platform::prepared::Batch *,
            std::shared_ptr<const vk::ModelGeometry>>
       prepared_geometry_;
+  std::uint64_t group_load_epoch_{1};
+  std::map<int, int32_t> surface_normal_textures_;
+  bool logged_first_normal_trace_{false};
   std::uint64_t prepared_batches_{}, retired_model_draws_{},
       cpu_clipped_triangles_{}, named_textures_{};
   bool suppress_model_draws_{};
