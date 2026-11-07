@@ -124,6 +124,24 @@ bool content_hierarchy_child(zcls::Node *parent, const char *name, zcls::Node **
     *result = nullptr;
     if (!name)
         return true;
+    if (parent->cls() == 2) {
+        // Spatially partitioned children keep the world as their immediate
+        // parent but live in its cell arrays, outside world->children.
+        for (auto *item = zcls::list_head(zcls::kAllNodes); item; item = item->next) {
+            auto *node = item->node;
+            if (!node || std::strcmp(node->name(), name) != 0)
+                continue;
+            bool direct = false;
+            for (int32_t i = 0; i < node->parent_count(); ++i)
+                direct = direct || node->parents[i] == parent;
+            if (!direct)
+                continue;
+            if (*result && *result != node)
+                fail("world-node-path", "Managed world child name is ambiguous");
+            *result = node;
+        }
+        return true;
+    }
     for (int32_t i = 0; i < parent->child_count(); ++i)
         if (std::strcmp(parent->children[i]->name(), name) == 0) {
             *result = parent->children[i];
