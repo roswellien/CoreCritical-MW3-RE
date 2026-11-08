@@ -27,6 +27,7 @@ class ArchiveReader {
     std::string path;   // '/'-separated, as stored
     int64_t size = -1;  // -1 when the archive does not say (a stream)
     bool dir = false;
+    bool special = false; // links/devices are never valid managed package payloads
   };
   // Reads up to `n` bytes into `buf`: the count, 0 at the end, -1 on an error.
   using ReadFn = std::function<int64_t(uint8_t* buf, size_t n)>;

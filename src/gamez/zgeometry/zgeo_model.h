@@ -155,6 +155,10 @@ struct Hooks {
   void (*weiler_free)(void* polygon) = nullptr;                       // 0x0050fab0
   zmod::Model* (*model_alloc)();                                      // 0x00538fe0
   zcls::Node* (*world_node)();                                        // zDEClient's 0x005020b0
+  // Supplies extra world-space candidates without changing native render ownership;
+  // callback must preserve geometry/hierarchy, supply live world-space nodes and
+  // scope candidates to supplied world/cell. Future adapter owns validation/lifetime.
+  void (*collect_clip_nodes)(zcls::Node* world, zcls::Partition* cell, std::vector<zcls::Node*>& output) = nullptr;
   Hooks();
 };
 Hooks& hooks();

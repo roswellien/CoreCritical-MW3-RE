@@ -14,6 +14,7 @@
 #include "gamez/zutil/zfix.h"
 #include "gamez/zweapon/zweapon.h"
 #include "mech3/mech_names.h"
+#include "mech3/content_registry.h"
 #include "mech3/cheats.h"
 
 #pragma STDC FP_CONTRACT OFF
@@ -112,7 +113,7 @@ WeaponType::WeaponType(Node* node, WeaponDef* d)
   float v = def->velocity;
   if (v < 100.0f) v = 100.0f;
   else if (v > 5000.0f) v = 5000.0f;
-  if (id >= 0x11 && id <= 0x14) lrm_flight = crt::x87_mul_f24(range, 0.7) / v;  // LRM5..LRM20
+  if (weapon_is_lrm(id)) lrm_flight = crt::x87_mul_f24(range, 0.7) / v;  // LRM5..LRM20
   strike_lock.at = &strike_point;
 }
 
@@ -1114,7 +1115,11 @@ void configure_weapons(Handle mech, WeaponManager* m, Config* cfg, Config** kept
       Weapon* w = m->find(a->weapon, 0);
       if (w && a->count && w->bin) w->bin->add(a->count);
     } else if (it->kind() == 3) {
-      const int32_t e = static_cast<EquipmentItem*>(it)->equipment;
+      const int32_t e = equipment_family(static_cast<EquipmentItem*>(it)->equipment);
+      if (e < 0 || e >= 15) {
+        zerr::report(0x400, "content", 0, "Equipment item has no implemented behavior family");
+        continue;
+      }
       if (e == 11) {
         if (g_calls.add_jump_jet) g_calls.add_jump_jet(mech);
       } else {

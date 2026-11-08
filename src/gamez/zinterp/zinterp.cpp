@@ -4,6 +4,7 @@
 // this one is named for the module (docs/interp.md).
 #include "gamez/zinterp/zinterp.h"
 #include "gamez/zmodel/gmod_init.h"
+#include "platform/host_path.h"
 
 #include <sys/stat.h>
 
@@ -34,6 +35,7 @@
 #include "gamez/zmodel/gmod_matl.h"
 #include "gamez/zrender/zrndr_flare.h"
 #include "gamez/zutil/zutl_path.h"
+#include "mech3/content_base.h"
 #include "gamez/zvideo/zvid_format.h"
 
 namespace zint {
@@ -201,6 +203,7 @@ int file_getc(ScriptFile& sf) {
 }
 
 ScriptFile* open_loose(const char* name) {
+  mech3::validate_content_script_source(name);
   std::FILE* f = zutl::open(name, "rb");
   if (!f) return nullptr;
   auto* sf = new ScriptFile;
@@ -213,8 +216,17 @@ ScriptFile* open_loose(const char* name) {
 // mtime in the mounts (zutl_path.h); 0 when it exists.
 int stat_mtime(const char* name, int32_t* mtime) {
   const std::string p = zutl::find(name);
+  if (p.empty())
+    return -1;
+#if defined(_WIN32)
+  struct _stat st;
+  if (::_wstat(platform::host_path(std::filesystem::u8path(p)).c_str(), &st) != 0)
+    return -1;
+#else
   struct stat st;
-  if (p.empty() || ::stat(p.c_str(), &st) != 0) return -1;
+  if (::stat(p.c_str(), &st) != 0)
+    return -1;
+#endif
   *mtime = static_cast<int32_t>(st.st_mtime);
   return 0;
 }
@@ -775,6 +787,9 @@ ScriptFile* archive_find(Interp& in, const char* name) {
       break;
     }
   if (idx == -1) return nullptr;
+  // An explicitly selected managed gameplay file is an override regardless of
+  // installation/copy timestamps. Unclaimed stock files keep recovered rules.
+  if (mech3::content_managed_script_source(name)) return nullptr;
   int32_t mtime;
   if (stat_mtime(name, &mtime) == 0 && static_cast<double>(mtime) - in.dir[idx].timestamp > 0) return nullptr;
   // Ours (docs/modding.md, M3): a script starts past the directory and runs

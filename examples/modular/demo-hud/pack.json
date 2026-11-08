@@ -1,0 +1,31 @@
+{
+  "schema_version": 3,
+  "game_id": "mw3",
+  "id": "demo-hud",
+  "version": "1.0.0",
+  "files": {},
+  "dependencies": [],
+  "required_capabilities": {"hud-layouts": 1},
+  "definitions": [{
+    "kind": "hud",
+    "id": "demo-hud:compact",
+    "behavior": "native-widgets-v1",
+    "data": {
+      "reference_width": 640,
+      "reference_height": 480,
+      "widgets": {
+        "MFD": {"visible": true, "position": {"x": 532, "y": 366, "anchor_x": "right", "anchor_y": "bottom"}, "size": {"width": 100, "height": 100}},
+        "TARGET": {"visible": true, "position": {"x": 8, "y": 366, "anchor_y": "bottom"}, "size": {"width": 100, "height": 100}},
+        "TIMER": {"visible": false},
+        "WEAPONS": {"visible": true},
+        "EQUIPMENT": {"visible": true},
+        "COMPASS": {"visible": true},
+        "GAUGES": {"visible": true},
+        "RADAR": {"visible": true, "position": {"x": 320, "y": 90, "anchor_x": "center"}, "radius": 54, "zoom_position": {"x": 320, "y": 240, "anchor_x": "center", "anchor_y": "center"}, "zoom_radius": 180},
+        "RETICLE": {"visible": true},
+        "OBJECTIVES": {"visible": true, "position": {"x": 12, "y": 64}}
+      }
+    }
+  }],
+  "patches": []
+}

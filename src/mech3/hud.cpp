@@ -1,4 +1,5 @@
 #include "mech3/hud.h"
+#include "mech3/content_hud.h"
 
 #include <cmath>
 #include <cstdarg>
@@ -6,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 
 #include "crt/msvc_math.h"
 #include "crt/msvc_rand.h"
@@ -332,7 +334,10 @@ void HudObjectives::fill() {
   scores.clear();
   auto put = [&](const std::string& s) { set_text("%s", s.c_str()); };  // vt+0x7c
   auto msg = [&](int32_t id) { return std::string(k.message(id)); };
-  if (o && o->desc) {
+  if (!src.content_name.empty()) {
+    put(src.content_name);
+    lines = 1;
+  } else if (o && o->desc) {
     put(*o->desc);
     lines = 1;
   } else {
@@ -858,11 +863,14 @@ uint32_t HudRadar::select_map() {
 }
 
 // Mech3.exe 1.2 @ 0x0043da40
-void HudRadar::toggle_zoom() { set_zoom(zoomed == 0); }
+void HudRadar::toggle_zoom() {
+  if (presentation_visible) set_zoom(zoomed == 0);
+}
 
 // Mech3.exe 1.2 @ 0x0043dc10: turned back off when no map is found; off,
 // straight to the size and place it steps toward.
 void HudRadar::toggle_map() {
+  if (!presentation_visible) return;
   active = !active;
   if (active && !select_map()) active = !active;
   if (!active) {
@@ -1100,6 +1108,7 @@ void HudMfd::set_mode(int32_t m) {
 // list, only while the mode is the one shown (TARGET without a live target
 // shows none); at pixel doubling straight to the nav list.
 void HudMfd::cycle_mode() {
+  if (!presentation_visible) return;
   if (pixel_double()) {
     mode = 3;
     return;
@@ -1427,6 +1436,7 @@ void HudZoomWindow::place_camera() {
 // a circle masks its four corners first, with quarter fans of the clear
 // texture at depth 0.99 (0x0057bd50), and clears the depth again after.
 void HudZoomWindow::draw3d(float dt) {
+  if (!can_present()) return;
   if ((flags & ztwod::kHidden) && zoom == 0.0f) return;
   HudHooks& h = *g_hooks;
   place_camera();
@@ -1484,6 +1494,7 @@ void HudZoomWindow::render_view(float dt) {
 
 // Mech3.exe 1.2 @ 0x00442e00
 void HudZoomWindow::toggle_lock() {
+  if (!presentation_visible) return;
   x174 = !x174;
   if (x174) show_for(-1.0f);
   else hide();
@@ -1722,6 +1733,8 @@ bool hud_anchor(const char* piece, const char* key, int32_t w, int32_t h, int32_
 }
 
 bool Hud::pos(zrdr::Node* n, const char* piece, const char* key, int32_t out[2]) const {
+  if (content_hud_selected() &&
+      content_hud_position(piece, key, hud_hooks().display_w(), hud_hooks().display_h(), out)) return true;
   if (!ivec2(n, key, out)) return false;
   if (anchor_w > 0) hud_anchor(piece, key, anchor_w, anchor_h, out);
   return true;
@@ -1731,6 +1744,7 @@ bool Hud::pos(zrdr::Node* n, const char* piece, const char* key, int32_t out[2])
 // is (FIX (bug) in the constructor, hud.md section 3).
 void Hud::setup(Mech* m) {
   ++g_hud_setups;
+  apply_content_visibility();
   HudHooks& k = *g_hooks;
   if (m) mech = m;
   reader = k.load_hud_zrd();
@@ -1746,9 +1760,9 @@ void Hud::setup(Mech* m) {
   if (block) {
     int32_t a[2], b[2];
     zrdr::Node* n = zrdr::find(block, "MFD");
-    if (n && ivec2(n, "size", b) && pos(n, "MFD", "position", a)) mfd.place(a[0], a[1], b[0], b[1]);
+    if (n && (content_hud_size("MFD", b) || ivec2(n, "size", b)) && pos(n, "MFD", "position", a)) mfd.place(a[0], a[1], b[0], b[1]);
     n = zrdr::find(block, "TARGET");
-    if (n && ivec2(n, "size", b) && pos(n, "TARGET", "position", a)) target.place(a[0], a[1], b[0], b[1]);
+    if (n && (content_hud_size("TARGET", b) || ivec2(n, "size", b)) && pos(n, "TARGET", "position", a)) target.place(a[0], a[1], b[0], b[1]);
     n = zrdr::find(block, "TIMER");
     if (n && pos(n, "TIMER", "position", a)) timer.set_pos(a[0], a[1]);
   }
@@ -1768,6 +1782,16 @@ void Hud::setup(Mech* m) {
     reader = reinterpret_cast<zrdr::Node*>(static_cast<intptr_t>(zrdr::free_node(reader)));
     block = nullptr;
   }
+}
+
+void Hud::apply_content_visibility() {
+  const std::pair<const char*, ztwod::Object2D*> widgets[] = {
+      {"MFD", &mfd}, {"TARGET", &target}, {"TIMER", &timer}, {"WEAPONS", &weapons},
+      {"EQUIPMENT", &equipment}, {"COMPASS", &compass}, {"GAUGES", &gauges},
+      {"RADAR", &radar}, {"RETICLE", &reticle}, {"OBJECTIVES", &objectives}};
+  for (const auto& entry : widgets)
+    entry.second->set_presentation_visible(content_hud_visible(entry.first));
+  reticle.zoom.set_presentation_visible(reticle.presentation_visible);
 }
 
 // Mech3.exe 1.2 @ 0x0043baf0
@@ -1869,7 +1893,8 @@ void Hud::static_tick(float dt) {
   // Not while the radar shows zoomed over the mission map.
   if (active && ((radar.flags & ztwod::kHidden) || !radar.zoomed || !radar.active)) {
     k.static_target();
-    auto draw = [&](const ztwod::Rect* r, float level) {  // 0x0043cca0
+    auto draw = [&](const ztwod::Rect* r, float level, bool visible) {  // 0x0043cca0
+      ztwod::PresentationScope presentation(visible);
       if (level > 0.9f) level = 0.9f;  // 0x005c00a0
       else if (level < 0.0f) level = 0.0f;
       k.static_fill(r, level, zvid::pack_bytes(0x20, 0x40, 0x20), zvid::pack_bytes(0x40, 0x80, 0x40),
@@ -1881,13 +1906,13 @@ void Hud::static_tick(float dt) {
       if (const ztwod::Rect* q = target.shown_rect()) {
         ztwod::Rect r = *q;
         r.right += 1, r.bottom += 1;
-        draw(&r, statics[0].level);
+        draw(&r, statics[0].level, target.presentation_visible);
       }
     }
-    if (!(mfd.flags & ztwod::kHidden) && statics[1].level > 0.0f) draw(mfd.shown_rect(), statics[1].level);
-    if (!(weapons.flags & ztwod::kHidden) && statics[2].level > 0.0f) draw(&weapons.panel.rect, statics[2].level);
+    if (!(mfd.flags & ztwod::kHidden) && statics[1].level > 0.0f) draw(mfd.shown_rect(), statics[1].level, mfd.presentation_visible);
+    if (!(weapons.flags & ztwod::kHidden) && statics[2].level > 0.0f) draw(&weapons.panel.rect, statics[2].level, weapons.presentation_visible);
     if (!(weapons.flags & ztwod::kHidden) && !(equipment.flags & ztwod::kHidden) && statics[2].level > 0.0f)
-      draw(&equipment.panel.rect, statics[2].level);
+      draw(&equipment.panel.rect, statics[2].level, equipment.presentation_visible);
   }
   for (int i = 0; i < 4; ++i) {
     Static& s = statics[i];
@@ -1937,6 +1962,15 @@ void HudRadar::attach(void* hud) {
   cx[1] = k.display_w() / 2;
   cy[1] = k.display_h() / 2;
   r[1] = k.display_h() * 0xb4 / 0x1e0;
+  if (content_hud_selected()) {
+    int32_t point[2];
+    if (content_hud_position("RADAR", "position", k.display_w(), k.display_h(), point))
+      cx[0] = point[0], cy[0] = point[1];
+    if (content_hud_position("RADAR", "zoom_position", k.display_w(), k.display_h(), point))
+      cx[1] = point[0], cy[1] = point[1];
+    content_hud_radius(false, &r[0]);
+    content_hud_radius(true, &r[1]);
+  }
   to_r = r[zoomed];
   to_x = cx[zoomed];
   to_y = cy[zoomed];
@@ -2077,9 +2111,18 @@ void HudObjectives::data_update(float) {
   place_above(p[0], p[1]);
 }
 
+void HudObjectives::toggle() {
+  if (!presentation_visible) return;
+  if (flags & ztwod::kHidden) show_for(-1.0f);
+  else hide();
+}
+
 // Mech3.exe 1.2 @ 0x004468b0
 void HudObjectives::place_above(int32_t px, int32_t py) {
-  set_pos(px, panel.rect.top - panel.rect.bottom - 1 + py);
+  int32_t point[2];
+  if (content_hud_selected() && content_hud_position("OBJECTIVES", "position", hud_hooks().display_w(), hud_hooks().display_h(), point))
+    set_pos(point[0], point[1]);
+  else set_pos(px, panel.rect.top - panel.rect.bottom - 1 + py);
   const int32_t y = get_y();
   panel.set_pos(get_x() - 4, y);
 }
@@ -2161,6 +2204,7 @@ void HudEquipment::read_layout(Hud* h) {
   if (h->block) {
     if (zrdr::Node* n = zrdr::find(h->block, "EQUIPMENT")) {
       zrdr::get_int(n, "width", &column);
+      content_hud_width("EQUIPMENT", &column);
       int32_t a[2];
       if (h->pos(n, "EQUIPMENT", "position", a)) place(a[0], a[1], 0);
     }
@@ -2189,6 +2233,7 @@ void HudWeapons::read_layout(Hud* h) {
   if (h->block) {
     if (zrdr::Node* n = zrdr::find(h->block, "WEAPONS")) {
       zrdr::get_int(n, "width", &column);
+      content_hud_width("WEAPONS", &column);
       int32_t a[2];
       if (h->pos(n, "WEAPONS", "position", a)) set_pos(a[0], a[1]);
     }
@@ -2309,7 +2354,7 @@ void HudTarget::attach(void* h) {
 }
 
 // Mech3.exe 1.2 @ 0x00444230
-void HudReticle::draw3d(float dt) { zoom.draw3d(dt); }
+void HudReticle::draw3d(float dt) { if (can_present()) zoom.draw3d(dt); }
 
 // Mech3.exe 1.2 @ 0x00444250
 void HudReticle::attach(void* h) {
@@ -2384,6 +2429,7 @@ void HudPanel::draw3d(float) {
 
 // Mech3.exe 1.2 @ 0x0043ad70: the corners go in from the last vertex back.
 void HudPanel::draw_quad() {
+  if (!can_present()) return;
   if (ztwod::host().video_mode() == 0 || alpha == 0xff) return Image::draw();
   float v[4][3] = {{corners[3][0], corners[3][1], corners[3][2]},
                    {corners[2][0], corners[2][1], corners[2][2]},
@@ -2437,6 +2483,7 @@ ztwod::Rect& radar_rect() { return g_radar_rect; }
 // yellow, red by its +0xbc), the polylines' points turned by the mech into
 // the radar, the box and cone drawn. Then the contacts (part 2).
 void HudRadar::update(float dt) {
+  ztwod::PresentationScope presentation(presentation_visible);
   HudHooks& h = *g_hooks;
   Hud* hd = static_cast<Hud*>(source);
   bool moved = false;
@@ -2811,6 +2858,7 @@ void HudCompass::update(float dt) {
 
 // Mech3.exe 1.2 @ 0x00447410
 void HudObjectives::update(float dt) {
+  ztwod::PresentationScope presentation(presentation_visible);
   if (flags & ztwod::kHidden) return;
   panel.update(dt);
   TextBox::update(dt);
@@ -2896,6 +2944,7 @@ void HudZoomWindow::update(float dt) {
 // Mech3.exe 1.2 @ 0x004441a0: the reticle itself only while the zoom window
 // is away; nothing more once the HUD is off and its mech dead.
 void HudReticle::update(float dt) {
+  ztwod::PresentationScope presentation(presentation_visible);
   zoom.update(dt);
   Hud* h = static_cast<Hud*>(source);
   if (h && h->mech && hud_hooks().mech_dead(h->mech) && h->active == 0) return;
@@ -3011,6 +3060,7 @@ const ztwod::Rect* HudMfd::shown_rect() {
 
 // Mech3.exe 1.2 @ 0x00442500
 void HudMfd::draw3d(float dt) {
+  if (!can_present()) return;
   switch (shown_mode()) {
     case 1: view->draw3d(dt); break;
     case 2: damage.draw3d(dt); break;
@@ -3300,6 +3350,7 @@ void HudTarget::track(float dt) {
 
 // Mech3.exe 1.2 @ 0x00441410
 void HudTarget::draw3d(float dt) {
+  if (!can_present()) return;
   switch (shown_mode()) {
     case 1: {
       HudHooks& h = hud_hooks();
@@ -3325,8 +3376,8 @@ void Hud::draw3d(float dt) {
   const bool on = active != 0;
   if (ztwod::host().video_mode() != 0) {
     HudHooks& h = hud_hooks();
-    const bool mfd1 = mfd.shown_mode() == 1;
-    const bool tgt1 = target.shown_mode() == 1;
+    const bool mfd1 = mfd.presentation_visible && mfd.shown_mode() == 1;
+    const bool tgt1 = target.presentation_visible && target.shown_mode() == 1;
     if (on && tgt1) {
       const ztwod::Rect r = frame_rect(*target.shown_rect());  // FIX (B): onto the frame
       h.dirty_rect(&r);
@@ -3339,11 +3390,11 @@ void Hud::draw3d(float dt) {
     if (on) {
       if (tgt1) target.view->panel.draw_quad();
       if (mfd1) mfd.view->panel.draw_quad();
-      if (!(weapons.flags & ztwod::kHidden)) weapons.panel.draw_quad();
-      if (!(weapons.flags & ztwod::kHidden) && !(equipment.flags & ztwod::kHidden)) equipment.panel.draw_quad();
+      if (weapons.presentation_visible && !(weapons.flags & ztwod::kHidden)) weapons.panel.draw_quad();
+      if (equipment.presentation_visible && !(weapons.flags & ztwod::kHidden) && !(equipment.flags & ztwod::kHidden)) equipment.panel.draw_quad();
     }
     message_panel_draw();
-    if (!(objectives.flags & ztwod::kHidden)) objectives.panel.draw_quad();
+    if (objectives.presentation_visible && !(objectives.flags & ztwod::kHidden)) objectives.panel.draw_quad();
     h.flush_transparent();
     h.scene_end();
   }

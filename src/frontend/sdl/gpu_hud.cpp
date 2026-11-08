@@ -38,7 +38,20 @@ GpuHud::GpuHud(FrameRenderer& renderer, const HudOptions& options)
     : renderer_(renderer), options_(options) {
   if (options.mode != "core-critical")
     throw std::runtime_error("GPU HUD requires core-critical mode");
+  if (!options.artwork.empty() && !options.package_artwork.empty())
+    throw std::runtime_error("Package-selected HUD artwork cannot use an untracked artwork directory");
+  if (options.package_artwork.size() > 256)
+    throw std::runtime_error("Package-selected HUD artwork exceeds its sprite limit");
   if (!options.artwork.empty()) artwork_ = platform::load_hud_artwork(options.artwork);
+}
+std::shared_ptr<const platform::HudImage> GpuHud::artwork_image(uint64_t identity) {
+  const auto cached = artwork_.find(identity);
+  if (cached != artwork_.end()) return cached->second;
+  const auto source = options_.package_artwork.find(identity);
+  if (source == options_.package_artwork.end()) return {};
+  auto image = platform::load_hud_sprite(source->second());
+  artwork_.emplace(identity, image);
+  return image;
 }
 GpuHud::~GpuHud() {
   cancel();
@@ -293,10 +306,8 @@ void GpuHud::image(const zimg::Texture* source, int32_t x, int32_t y, uint16_t k
   if (enhanced) {
     selected = std::move(enhanced);
     ++text_hits_;
-  } else if (auto found =
-                 artwork_.find(platform::hud_identity(source->width, source->height, normalized));
-             found != artwork_.end()) {
-    selected = found->second;
+  } else if (auto artwork = artwork_image(platform::hud_identity(source->width, source->height, normalized))) {
+    selected = std::move(artwork);
     ++hits_;
   } else {
     auto cached = sources_.find(source);

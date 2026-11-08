@@ -21,6 +21,7 @@ Slider::~Slider() {
 
 // Mech3.exe 1.2 @ 0x0059e1c0
 void Slider::draw() {
+  if (!can_present()) return;
   if (!empty || !fill) return;
   erase();
   if (fill_src.left != fill_src.right) host().blit(fill, fill_dx + x, fill_dy + y, 0, &fill_src);

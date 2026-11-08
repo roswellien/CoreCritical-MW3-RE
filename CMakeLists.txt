@@ -43,7 +43,46 @@ target_compile_features(cc_geometry_resources PUBLIC cxx_std_17)
 if(MSVC)
   target_compile_options(cc_geometry_resources PRIVATE /EHsc)
 endif()
+file(SHA256 "${CMAKE_SOURCE_DIR}/third_party/nlohmann/json.hpp" MW3_JSON_SHA256)
+if(NOT MW3_JSON_SHA256 STREQUAL "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63")
+  message(FATAL_ERROR "Vendored nlohmann/json 3.12.0 differs from its published artifact")
+endif()
+add_library(cc_content STATIC
+  src/content/hash.cpp
+  src/content/io.cpp
+  src/content/resolve.cpp
+  src/content/legacy.cpp
+  src/content/store.cpp
+  src/content/persistence.cpp
+  src/content/world.cpp
+  src/content/world_fields.cpp
+  src/content/world_hierarchy.cpp
+  third_party/miniz/miniz_tinfl.c
+  src/mech3/source_archive.cpp)
+target_include_directories(cc_content PUBLIC src third_party)
+set_target_properties(cc_content PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(mw3core STATIC
+  src/mech3/content_registry.cpp
+  src/mech3/content_legacy.cpp
+  src/mech3/content_state.cpp
+  src/mech3/content_pilot.cpp
+  src/mech3/content_network.cpp
+  src/mech3/content_playtest.cpp
+  src/mech3/content_base.cpp
+  src/mech3/content_world.cpp
+  src/mech3/content_world_state.cpp
+  src/mech3/content_world_catalog.cpp
+  src/mech3/content_world_hierarchy.cpp
+  src/mech3/content_world_readers.cpp
+  src/mech3/content_campaign.cpp
+  src/mech3/content_checkpoint.cpp
+  src/mech3/content_campaign_items.cpp
+  src/mech3/content_campaign_snapshot.cpp
+  src/mech3/content_stock_campaign.cpp
+  src/mech3/content_hud.cpp
+  src/mech3/content_textures.cpp
+  src/platform/content_visuals.cpp
   src/gamez/zmodel/gmod_geometry.cpp
   src/platform/prepared_visuals.cpp
   src/platform/prepared_hud.cpp
@@ -80,11 +119,9 @@ add_library(mw3core STATIC
   src/mech3/patch12_world.cpp
   src/mech3/patch_import.cpp
   src/mech3/disc_install.cpp
-  src/mech3/source_archive.cpp
   src/mech3/source_map.cpp
   src/mech3/source_install.cpp
   src/mech3/game_setup.cpp
-  third_party/miniz/miniz_tinfl.c
   src/gamez/zutil/zutl_zar.cpp
   src/gamez/zsave/zsave.cpp
   src/gamez/zclass/camera.cpp
@@ -310,6 +347,7 @@ add_library(mw3core STATIC
   src/mech3/music.cpp
 )
 target_include_directories(mw3core PUBLIC src)
+target_link_libraries(mw3core PUBLIC cc_content)
 target_link_libraries(mw3core PUBLIC cc_geometry_resources)
 if(MSVC)
   target_compile_options(mw3core PRIVATE /EHsc)
@@ -377,21 +415,28 @@ find_path(LIBARCHIVE_INCLUDE archive.h
 find_library(LIBARCHIVE_LIB NAMES archive archive_static
              HINTS "${CMAKE_SOURCE_DIR}/deps/archive/lib" /opt/homebrew/opt/libarchive/lib /usr/local/opt/libarchive/lib)
 if(LIBARCHIVE_INCLUDE AND LIBARCHIVE_LIB)
+  target_include_directories(cc_content PUBLIC "${LIBARCHIVE_INCLUDE}")
+  target_link_libraries(cc_content PUBLIC "${LIBARCHIVE_LIB}")
   target_include_directories(mw3core PUBLIC "${LIBARCHIVE_INCLUDE}")
   target_link_libraries(mw3core PUBLIC "${LIBARCHIVE_LIB}")
   if(LIBARCHIVE_LIB MATCHES "\\.(a|lib)$")  # static: its own libraries beside it
     target_compile_definitions(mw3core PUBLIC LIBARCHIVE_STATIC)  # the tests write archives with it too
+    target_compile_definitions(cc_content PUBLIC LIBARCHIVE_STATIC)
     find_library(MW3_LZMA_LIB NAMES lzma liblzma HINTS "${CMAKE_SOURCE_DIR}/deps/archive/lib")
     find_library(MW3_Z_LIB NAMES z zlibstatic zlib zs HINTS "${CMAKE_SOURCE_DIR}/deps/archive/lib")
     target_link_libraries(mw3core PUBLIC ${MW3_LZMA_LIB} ${MW3_Z_LIB})
+    target_link_libraries(cc_content PUBLIC ${MW3_LZMA_LIB} ${MW3_Z_LIB})
     if(WIN32)
       target_link_libraries(mw3core PUBLIC bcrypt)
+      target_link_libraries(cc_content PUBLIC bcrypt)
     endif()
   endif()
   target_compile_definitions(mw3core PUBLIC MW3_HAVE_LIBARCHIVE=1)
+  target_compile_definitions(cc_content PUBLIC MW3_HAVE_LIBARCHIVE=1)
   message(STATUS "libarchive: ${LIBARCHIVE_LIB}")
 else()
   target_compile_definitions(mw3core PUBLIC MW3_HAVE_LIBARCHIVE=0)
+  target_compile_definitions(cc_content PUBLIC MW3_HAVE_LIBARCHIVE=0)
   message(STATUS "libarchive not found: SETUP reads folders, drives, .iso and .cue only")
 endif()
 
@@ -399,8 +444,10 @@ endif()
 # which rounds differently from the original (CLAUDE.md, FPU precision).
 if(NOT MSVC)
   target_compile_options(mw3core PRIVATE -ffp-contract=off)
+  target_compile_options(cc_content PRIVATE -ffp-contract=off)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")  # clang-cl
   target_compile_options(mw3core PRIVATE /clang:-ffp-contract=off)
+  target_compile_options(cc_content PRIVATE /clang:-ffp-contract=off)
 endif()
 
 # Linked into the shared probe below: position-independent (the Mac's default;
@@ -553,6 +600,12 @@ if(MSVC)
   target_compile_options(mw3prepared_checks PRIVATE /EHsc)
 endif()
 add_test(NAME mw3prepared_checks COMMAND mw3prepared_checks)
+add_executable(mw3content tools/content/main.cpp)
+target_link_libraries(mw3content PRIVATE mw3core)
+add_test(NAME mw3content_cli_unicode
+  COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mw3content>" "-DROOT=${CMAKE_BINARY_DIR}"
+          -P "${CMAKE_SOURCE_DIR}/tools/content/check_cli_unicode.cmake")
+
 add_executable(mw3tests
   tests/main.cpp
   tests/test_znet.cpp
@@ -583,6 +636,20 @@ add_executable(mw3tests
   tests/test_movie_shape.cpp
   tests/test_fmv_stream.cpp
   tests/test_mods.cpp
+  tests/test_content_native.cpp
+  tests/test_content_legacy.cpp
+  tests/test_content_base.cpp
+  tests/test_content_store.cpp
+  tests/test_content_lance.cpp
+  tests/test_content_world.cpp
+  tests/test_content_world_hierarchy.cpp
+  tests/test_content_world_state.cpp
+  tests/test_content_campaign.cpp
+  tests/test_content_checkpoint.cpp
+  tests/test_content_hud.cpp
+  tests/test_content_system.cpp
+  tests/test_content_playtest.cpp
+  tests/test_content_textures.cpp
   tests/test_bounded_readers.cpp
   tests/test_bounded_media.cpp
   tests/test_hooks.cpp
@@ -605,6 +672,7 @@ add_test(NAME mw3geometry_checks COMMAND mw3geometry_checks)
 option(MW3_CORE_CRITICAL_VULKAN "Build the experimental Core Critical Vulkan/DXGI renderer" OFF)
 find_package(SDL3 CONFIG QUIET)
 if(MW3_CORE_CRITICAL_VULKAN)
+  target_compile_definitions(mw3core PUBLIC MW3_CONTENT_PREPARED_VISUALS=1)
   if(NOT WIN32 OR NOT SDL3_FOUND)
     message(FATAL_ERROR "The Core Critical Vulkan renderer requires Windows x64 and SDL3")
   endif()
@@ -618,6 +686,7 @@ if(SDL3_FOUND)
   # Platform implementations on SDL (docs/program.md): window and message
   # pump, input, render3d, sound, music; the debug world loader.
   add_library(mw3sdl STATIC
+    src/frontend/sdl/content_visuals.cpp
     src/frontend/debug_world.cpp
     src/frontend/sdl/sdl_input.cpp
     src/frontend/sdl/sdl_force.cpp
@@ -633,6 +702,7 @@ if(SDL3_FOUND)
     src/frontend/sdl/sdl_child.cpp
   )
   target_link_libraries(mw3sdl PUBLIC mw3core SDL3::SDL3 enet miniupnpc)
+  target_compile_definitions(mw3core PUBLIC MW3_CONTENT_HUD_ARTWORK=1)
   if(MSVC)
     target_compile_options(mw3sdl PRIVATE /EHsc)
   endif()

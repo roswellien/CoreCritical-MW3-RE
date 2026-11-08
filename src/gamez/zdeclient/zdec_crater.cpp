@@ -357,12 +357,26 @@ int32_t crater_make(const zwep::CraterOrder* order) {
 void craters_reset() {
   for (zcls::Node* node : g_craters.touched) {
     if (!node) continue;
-    zcls::reread(node, 1);  // 0x004ff730
+    if (!g_hooks.restore_node || !g_hooks.restore_node(node)) zcls::reread(node, 1);  // 0x004ff730
     const int32_t x = node->get<int32_t>(0x4c), z = node->get<int32_t>(0x50);
     if (x < 0 || z < 0) continue;
-    zcls::Node* world = node->parents[0];
-    zcls::World* w = world ? static_cast<zcls::World*>(world->data) : nullptr;
-    if (w) w->rows[z][x].raw[0x39] = 0;  // 0x004f22f0
+    zcls::World* w = nullptr;
+    std::set<const zcls::Node*> visited;
+    visited.insert(node);
+    zcls::Node* curr = (node->parent_count() > 0 && node->parents) ? node->parents[0] : nullptr;
+    while (curr && visited.insert(curr).second) {
+      if (curr->cls() == 2) {
+        w = static_cast<zcls::World*>(curr->data);
+        break;
+      }
+      curr = (curr->parent_count() > 0 && curr->parents) ? curr->parents[0] : nullptr;
+    }
+    if (!w || !w->rows) continue;
+    const int32_t cols = w->get<int32_t>(0x88), rows = w->get<int32_t>(0x8c);
+    if (cols <= 0 || rows <= 0 || x >= cols || z >= rows) continue;
+    zcls::Partition* row = w->rows[z];
+    if (!row) continue;
+    row[x].raw[0x39] = 0;  // 0x004f22f0
   }
   while (zcls::Node* node = zcls::list_find_by_name(6, kFeature)) {
     while (node->parent_count() > 0) zcls::node_remove_child(node->parents[0], node);

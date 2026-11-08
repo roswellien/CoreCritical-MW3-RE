@@ -1,0 +1,61 @@
+{
+  "schema_version": 3,
+  "id": "demo-chassis",
+  "name": "Independent Bushwacker Variant",
+  "version": "1.0.0",
+  "game_id": "mw3",
+  "description": "Project-authored modular content demonstration; original game assets are supplied by the player.",
+  "dependencies": [
+    {
+      "id": "demo-equipment",
+      "version": "1.0.0"
+    },
+    {
+      "id": "demo-weapons",
+      "version": "1.0.0"
+    }
+  ],
+  "required_capabilities": {
+    "chassis-definitions": 1
+  },
+  "definitions": [
+    {
+      "kind": "chassis",
+      "id": "demo-chassis:scout",
+      "behavior": "mw3:biped@1",
+      "data": {
+        "name": "demo_scout",
+        "label": "Demo Scout Bushwacker",
+        "base": "stock:bushwacker",
+        "tech": 2,
+        "mass": 55.0,
+        "weight_class": 1,
+        "model_name": "bushwacker",
+        "reader": {},
+        "loadouts": [
+          {
+            "name": "Modular Demonstration",
+            "base_index": 0,
+            "weapons": [
+              {
+                "id": "demo-weapons:laser",
+                "tech": 2,
+                "firepoint": 0,
+                "group": 0
+              }
+            ],
+            "equipment": [
+              {
+                "id": "demo-equipment:guardian",
+                "tech": 2,
+                "part": 7,
+                "count": 1
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "files": {}
+}

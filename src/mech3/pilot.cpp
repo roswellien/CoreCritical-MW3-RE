@@ -1,5 +1,9 @@
 // The pilot, its file and the pilot list (docs/pilot.md).
 #include "mech3/pilot.h"
+#include "mech3/content_campaign.h"
+#include "mech3/content_registry.h"
+#include "mech3/content_state.h"
+#include "platform/host_path.h"
 
 #include <cstring>
 #include <filesystem>
@@ -25,20 +29,23 @@ namespace fs = std::filesystem;
 std::FILE* open_existing(const std::string& path) {
   const std::string w = zutl::write_path(path.c_str());
   std::error_code ec;
-  if (!fs::is_regular_file(w, ec)) {
+  if (!fs::is_regular_file(platform::host_path(fs::u8path(w)), ec)) {
     const std::string src = zutl::find(path.c_str());
-    if (src.empty() || !fs::is_regular_file(src, ec)) return nullptr;
-    fs::create_directories(fs::path(w).parent_path(), ec);
-    if (!fs::copy_file(src, w, fs::copy_options::overwrite_existing, ec)) return nullptr;
+    if (src.empty() || !fs::is_regular_file(platform::host_path(fs::u8path(src)), ec))
+      return nullptr;
+    fs::create_directories(platform::host_path(fs::u8path(w).parent_path()), ec);
+    if (!fs::copy_file(platform::host_path(fs::u8path(src)), platform::host_path(fs::u8path(w)),
+                       fs::copy_options::overwrite_existing, ec))
+      return nullptr;
   }
-  return std::fopen(w.c_str(), "r+b");
+  return platform::file_open(fs::u8path(w), "r+b");
 }
 std::FILE* open_always(const std::string& path) {
   if (std::FILE* f = open_existing(path)) return f;
   const std::string w = zutl::write_path(path.c_str());
   std::error_code ec;
-  fs::create_directories(fs::path(w).parent_path(), ec);
-  return std::fopen(w.c_str(), "w+b");
+  fs::create_directories(platform::host_path(fs::u8path(w).parent_path()), ec);
+  return platform::file_open(fs::u8path(w), "w+b");
 }
 
 // FIX (A) for MoveFileA and DeleteFileA: in the write dir; MoveFileA fails
@@ -46,13 +53,16 @@ std::FILE* open_always(const std::string& path) {
 void move_file(const char* from, const char* to) {
   const std::string a = zutl::write_path(from), b = zutl::write_path(to);
   std::error_code ec;
-  if (!fs::exists(a, ec)) return;
-  if (fs::exists(b, ec) && !fs::equivalent(a, b, ec)) return;  // a new case of the same name moves
-  fs::rename(a, b, ec);
+  if (!fs::exists(platform::host_path(fs::u8path(a)), ec))
+    return;
+  if (fs::exists(platform::host_path(fs::u8path(b)), ec) &&
+      !fs::equivalent(platform::host_path(fs::u8path(a)), platform::host_path(fs::u8path(b)), ec))
+    return; // a new case of the same name moves
+  fs::rename(platform::host_path(fs::u8path(a)), platform::host_path(fs::u8path(b)), ec);
 }
 bool delete_file(const char* path) {
   std::error_code ec;
-  return fs::remove(zutl::write_path(path), ec);
+  return fs::remove(platform::host_path(fs::u8path(zutl::write_path(path))), ec);
 }
 
 // ReadFile / WriteFile of a 4-byte field: false on an error, not at the end
@@ -84,8 +94,15 @@ Pilot::Pilot(const char* n) : version(kVersion) {
 // Mech3.exe 1.2 @ 0x00477e10, with the base's 0x004794c0
 Pilot::~Pilot() {
   if (dirty) {
-    open();
-    if (write_header()) write();
+    if (active_content()) {
+      try { save_managed_pilot(*this); }
+      catch (const std::exception &error) {
+        std::fprintf(stderr, "mw3 content pilot save: %s\n", error.what());
+      }
+    } else {
+      open();
+      if (write_header()) write();
+    }
   }
   close();
   for (Game*& g : campaigns) delete g, g = nullptr;
@@ -113,6 +130,12 @@ std::string Pilot::file_path() const { return std::string("pilots\\") + name + "
 bool Pilot::open() {
   if (file) return false;
   const std::string path = file_path();
+  if (active_content()) {
+    // Managed saves use a separate atomic writer. Reading must never repair an
+    // incompatible header in place or manufacture a missing checkpoint index.
+    file = platform::file_open(fs::u8path(zutl::write_path(path.c_str())), "rb");
+    return file != nullptr;
+  }
   bool create = false;
   file = open_existing(path);
   if (!file) {
@@ -139,7 +162,8 @@ bool Pilot::open() {
 bool Pilot::write_header() {
   if (!file) return false;
   std::fseek(file, 0, SEEK_SET);
-  return wr4(file, &magic) && wr4(file, &version) && wr4(file, &x0c);
+  if (!wr4(file, &magic) || !wr4(file, &version) || !wr4(file, &x0c)) return false;
+  return !active_content() || write_managed_pilot_identity(file);
 }
 
 // Two pilot names name the same file: without case (ASCII and the
@@ -161,6 +185,7 @@ bool same_name(const char* a, const char* b) {
 // The save the creators and the rename do inline (0x004788b0, 0x00478a40,
 // 0x00477fe0, 0x00478f10): open, the header, the games, close.
 bool Pilot::save() {
+  if (active_content()) return save_managed_pilot(*this);
   open();
   const bool ok = write_header();
   if (ok) write();
@@ -182,9 +207,17 @@ bool Pilot::read() {
   std::fread(&n, 1, 4, file);
   if (n && campaigns.capacity() < n + 1 && n < 0x10000) campaigns.reserve(n + 1);
   for (; n; --n) {
-    auto* c = new CampaignGame(this);  // new(200), read
-    if (c->readable()) campaigns.push_back(c);
-    else delete c;
+    // Managed validation can throw while reading a campaign. Finish construction
+    // before loading so every partially read slot remains owned on failure.
+    std::unique_ptr<CampaignGame> c;
+    if (active_content()) {
+      c = std::make_unique<CampaignGame>(this, 0, 0);
+      c->a8 = c->ac = 0;
+      c->load();
+    } else {
+      c = std::make_unique<CampaignGame>(this);  // new(200), read
+    }
+    if (c->readable()) campaigns.push_back(c.release());
     if (std::feof(file)) break;
   }
   return true;
@@ -196,10 +229,17 @@ bool Pilot::write() {
   multi->save();
   action_game->save();
   lab->save();
-  const int32_t n = static_cast<int32_t>(campaigns.size()) - 1;
+  std::vector<Game*> saved;
+  for(size_t i=0;i<campaigns.size();++i) {
+    auto* game=dynamic_cast<CampaignGame*>(campaigns[i]);
+    if (i == 0 && (!game || game->content_mission.empty())) continue;
+    if(game && game->content_placeholder)continue;
+    saved.push_back(campaigns[i]);
+  }
+  const int32_t n = static_cast<int32_t>(saved.size());
   std::fwrite(&n, 1, 4, file);
   if (n)
-    for (size_t i = 1; i < campaigns.size(); ++i) campaigns[i]->save();
+    for (Game* game : saved) game->save();
   dirty = 0;
   return true;
 }
@@ -220,6 +260,7 @@ bool Pilot::rename(const char* n) {
     const std::string from = c->path();
     const std::string to = c->path_for(n);
     move_file(from.c_str(), to.c_str());
+    if (!c->content_mission.empty()) move_file((from+".ccsave").c_str(),(to+".ccsave").c_str());
   }
   std::strncpy(name, n, sizeof name - 1);
   move_file(old_path.c_str(), file_path().c_str());
@@ -229,7 +270,12 @@ bool Pilot::rename(const char* n) {
 
 // Mech3.exe 1.2 @ 0x004781e0, with 0x00433ca0 for each campaign
 bool Pilot::delete_files() {
-  for (Game* g : campaigns) delete_file(static_cast<CampaignGame*>(g)->path());
+  for (Game* g : campaigns) {
+    auto* campaign=static_cast<CampaignGame*>(g);
+    const std::string path=campaign->path();
+    delete_file(path.c_str());
+    if (!campaign->content_mission.empty()) delete_file((path+".ccsave").c_str());
+  }
   dirty = 0;
   return delete_file(file_path().c_str());
 }
@@ -265,26 +311,32 @@ bool Pilot::record_mission(bool next) {
   const bool fix = zfix::options().bugs;
   CampaignGame* g = static_cast<CampaignGame*>(current)->next_mission(next, !fix);
   if (g && g != current) {
+    std::unique_ptr<CampaignGame> pending(g);
     const int32_t m = g->mission_number(), op = g->operation();
     auto it = campaigns.begin();
     for (; it != campaigns.end(); ++it) {
       if ((*it)->type() != kCampaign) continue;
       auto* c = static_cast<CampaignGame*>(*it);
+      if (active_content() && c->content_run != g->content_run) continue;
       if (c->operation() == op && c->mission_number() == m) break;
     }
     bool filed = true;
     if (it == campaigns.end()) {
+      if (!g->content_mission.empty()) save_content_campaign(*g);
       campaigns.push_back(g);
+      pending.release();
     } else if (pilot_hooks().message_box(1, 7, 0xfb3) == 1) {
+      if (!g->content_mission.empty()) save_content_campaign(*g);
       Game* old = *it;
       *it = g;
+      pending.release();
       delete old;
     } else {
-      delete g;
+      pending.reset();
       g = static_cast<CampaignGame*>(*it);
       filed = false;
     }
-    if (fix && filed) pilot_hooks().save_world(g->path(), 2);
+    if (fix && filed && g->content_mission.empty()) pilot_hooks().save_world(g->path(), 2);
     current = g;
   }
   save();
@@ -322,8 +374,41 @@ Pilot* find_pilot(const char* name) {
 // (dirty from its constructor) writes it again.
 Pilot* load_pilot(const char* name, bool reload) {
   Pilot* p = find_pilot(name);
+  if (p && !reload) return p;
+  if (active_content()) {
+    auto staged = std::make_unique<Pilot>(name);
+    staged->dirty = 0;
+    const auto previous_action = action_setup();
+    try {
+      if (!staged->open()) return nullptr;
+      int32_t header[3]{};
+      if (std::fread(header, 4, 3, staged->file) != 3 || header[0] != staged->magic ||
+          header[1] != staged->version)
+        cc::content::fail("pilot-header", "Managed pilot header is incompatible or corrupt");
+      staged->x0c = header[2];
+      read_managed_pilot_identity(staged->file);
+      if (!staged->read() || std::ferror(staged->file) || std::feof(staged->file))
+        cc::content::fail("pilot-read", "Managed pilot record is truncated or corrupt");
+      staged->close();
+    } catch (const std::exception& error) {
+      action_setup() = previous_action;
+      std::fprintf(stderr, "mw3 content pilot load: %s\n", error.what());
+      return nullptr;
+    }
+    staged->dirty = 1;
+    Pilot* loaded = staged.release();
+    if (p) {
+      for (Pilot*& entry : g_pilots)
+        if (entry == p) entry = loaded;
+      if (g_current == p) g_current = loaded;
+      p->dirty = 0;
+      delete p;
+    } else {
+      g_pilots.push_back(loaded);
+    }
+    return loaded;
+  }
   if (!p) p = new Pilot(name);  // new(0x84)
-  else if (!reload) return p;
   p->open();
   bool ok = false;
   if (p->file) {
@@ -373,7 +458,7 @@ bool delete_pilot(const char* name) {
 // bytes are skipped (they crashed the exe, see the constructor).
 void load_pilots() {
   std::error_code ec;
-  fs::create_directories(zutl::write_path("pilots\\games"), ec);
+  fs::create_directories(platform::host_path(fs::u8path(zutl::write_path("pilots\\games"))), ec);
   for (const std::string& file : zutl::list("pilots\\*.mw3")) {
     std::string n = file;  // _splitpath's file name
     const size_t slash = n.find_last_of("\\/:");

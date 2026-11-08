@@ -10,6 +10,7 @@
 #include "gamez/zutil/zfix.h"
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/mech_reader.h"
+#include "mech3/content_registry.h"
 
 #pragma STDC FP_CONTRACT OFF
 
@@ -18,6 +19,13 @@ namespace mech3 {
 namespace {
 // DIK codes the frame reads (0x00406440).
 constexpr int32_t kKeyL = 0x26, kKeyM = 0x32, kKeySpace = 0x39, kKeyS = 0x1f;
+
+// Standalone missions use campaign records for stable saves, while the briefing
+// retains Instant Action's unrestricted loadout selection.
+bool standalone_content_briefing() {
+  const auto* game = current_pilot() ? current_pilot()->campaign() : nullptr;
+  return game && !game->content_mission.empty() && game->content_campaign.empty();
+}
 }  // namespace
 
 int32_t& briefing_reached() {
@@ -429,7 +437,7 @@ void BriefingScreen::set_loaded(bool on) {
   if ((loaded != 0) == on) return;
   Engine& e = engine();
   bool lab = on, abort_on = on, replay = on, salvage = false, auto_launch = false;
-  switch (e.game_kind()) {
+  switch (standalone_content_briefing() ? kInstantAction : e.game_kind()) {
     case kMechLab:
       salvage = on;
       break;
@@ -755,11 +763,13 @@ Store* lab_store_build(Store& lab, Store* game, Store* salvage) {
 }
 Store* BriefingScreen::build_lab_store() {
   Engine& e = engine();
+  if (standalone_content_briefing()) return e.game_store();
   return lab_store_build(lab_store, e.game_store(), e.campaign_salvage());
 }
 
 // Mech3.exe 1.2 @ 0x00408bd0
 void BriefingScreen::refresh() {
+  if (standalone_content_briefing()) return;
   Engine& e = engine();
   Store* salvage = e.campaign_salvage();
   Store* game = e.game_store();
@@ -815,14 +825,17 @@ void lance_slot(GameSlot& s, Store& store, bool keep) {
   int32_t mech = s.mech;
   if (mech == -1) return;
   const Config* cfg = s.config;
+  const int32_t count = chassis_count();
+  if (mech < 0 || mech >= count) mech = -1;
   if (!keep) {
-    while (!store.has_mech(mech)) {  // 0x00409f00
-      mech = (mech + 1) % 19;
-      if (mech == s.mech) {
-        mech = -1;
-        break;
-      }
+    // Search each session chassis once. A fixed stock modulus could never
+    // return to an added chassis, hanging when the store had no replacement.
+    int32_t checked = 0;
+    while (mech >= 0 && !store.has_mech(mech) && checked < count) {
+      mech = (mech + 1) % count;
+      ++checked;
     }
+    if (checked == count) mech = -1;
   }
   const MechDfn* dfn = mech_dfn(mech);  // 0x004846a0: none for -1
   if (!dfn || mech == -1) {

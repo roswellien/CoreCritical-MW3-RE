@@ -1,0 +1,47 @@
+{
+  "schema_version": 3,
+  "id": "demo-paint",
+  "name": "Authored Checker Skin",
+  "version": "1.0.0",
+  "game_id": "mw3",
+  "description": "Project-authored modular content demonstration; original game assets are supplied by the player.",
+  "dependencies": [
+    {
+      "id": "demo-chassis",
+      "version": "1.0.0"
+    }
+  ],
+  "required_capabilities": {
+    "skin-definitions": 1,
+    "named-textures": 1
+  },
+  "definitions": [
+    {
+      "kind": "texture",
+      "id": "demo-paint:checker",
+      "behavior": "rgb565-v1",
+      "data": {
+        "name": "ccdemo_checker",
+        "file": "checker.bwtex",
+        "image": "ccdemo_checker"
+      }
+    },
+    {
+      "kind": "skin",
+      "id": "demo-paint:checker_skin",
+      "behavior": "mw3:skin@1",
+      "data": {
+        "name": "demo_checker",
+        "label": "Authored Checker Skin",
+        "chassis": "demo-chassis:scout",
+        "texture": "ccdemo_checker"
+      }
+    }
+  ],
+  "files": {
+    "checker.bwtex": {
+      "bytes": 100,
+      "sha256": "0222e9c3c0d0d1aba0d9b826263f47e8717aa1f4e3f8d187620cea5a071d815b"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+# Preserve upstream artifact bytes and its published integrity pin on Windows.
+third_party/nlohmann/json.hpp -text
+# The upstream MIT license intentionally has a space on its first line.
+third_party/nlohmann/LICENSE.MIT -text -whitespace

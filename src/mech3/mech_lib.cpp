@@ -7,6 +7,7 @@
 #include "gamez/zimage/zimg_texture.h"
 #include "gamez/zsound/zsnd.h"
 #include "mech3/mech_names.h"
+#include "mech3/content_registry.h"
 #include "mech3/mech_reader.h"
 
 namespace mech3 {
@@ -70,15 +71,15 @@ zcls::Node* load_tree(const char* name) { return g_lib ? zcls::mechlib_load(*g_l
 // (0x00609440) in the exe.
 zcls::Node* mech_model(int32_t roster, int32_t variant) {
   char name[0x40];
-  if (variant == 0) std::snprintf(name, sizeof name, "mech_%s.flt", mech_name(roster));
-  else std::snprintf(name, sizeof name, "mech_%s_%d.flt", mech_name(roster), variant);
+  if (variant == 0) std::snprintf(name, sizeof name, "mech_%s.flt", chassis_model_name(roster));
+  else std::snprintf(name, sizeof name, "mech_%s_%d.flt", chassis_model_name(roster), variant);
   return load_in_group_3(name);
 }
 
 // Mech3.exe 1.2 @ 0x004847e0. Its own buffer (0x00609000).
 zcls::Node* hud_model(int32_t roster) {
   char name[0x40];
-  std::snprintf(name, sizeof name, "mech_%s_hud.flt", mech_name(roster));
+  std::snprintf(name, sizeof name, "mech_%s_hud.flt", chassis_model_name(roster));
   return load_in_group_3(name);
 }
 

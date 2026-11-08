@@ -268,7 +268,7 @@ public:
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
         sun_explicit_(assets.sun_explicit),
-        prepared_(sanitize_prepared_assets(assets), assets.materials),
+        prepared_(sanitize_prepared_assets(assets)),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
         bridge_config_(configure_bridge(backend, quality, assets)),

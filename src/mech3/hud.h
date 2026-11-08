@@ -102,6 +102,7 @@ class HudObjectives : public ztwod::TextBox {
   void hide() override;              // +0x64  0x00446850
   void set_text(const char* format, ...) override;  // +0x7c  0x00446930: and a blank score beside it
   void fill();                       // 0x00446ad0: the lines from the mission's objectives
+  void toggle();                    // Widget interaction respects authored visibility.
   void add_objective(uint8_t done, const char* text);  // 0x00446970: "Completed" / "In Progress" beside it
   void add_more(uint8_t done, const char* score, const char* text);  // 0x00446a20: score null: none
   void data_update(float dt);        // 0x00446900: shown, kept above the message panel's point
@@ -542,6 +543,7 @@ class HudHooks : public zgame::Unported {
     uint8_t aborting = 0;                    // +0x56 [0x00609926]: lost
     int32_t game_type = 1;                   // vt+0x2c
     int32_t operation = 0, mission = 0;      // vt+0x48, vt+0x4c
+    std::string content_name;               // Managed missions have author-facing titles.
     const char* action_name = nullptr;       // Instant Action's game (0x00479460) vt+0x0c; null none
     const char* training_name = nullptr;     // 0x00437060 of 0x004794a0(vt+0x4c)
   };
@@ -1070,6 +1072,7 @@ class Hud : public ztwod::Layer {
   static int32_t live();             // ours, for the tests: the HUDs made and not freed
   static int32_t setups();           // ours, for the tests: setup's runs (the mode change's refit, 0x0041cdc0)
   void setup(Mech* m);               // 0x0043bb80: hud.zrd's layout for the video mode, the mech given out
+  void apply_content_visibility();  // Presentation only; native flags and timers stay intact.
   void set_active(int32_t on) override;  // +0x04  0x0043baf0: the radar shown or hidden
   // The mech's power down and up (Mech::finish_power_down, Mech::power):
   // the HUD off with the reticle hidden, then back as it was.

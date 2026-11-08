@@ -1,4 +1,6 @@
 #include "mech3/player.h"
+#include "mech3/content_registry.h"
+#include "mech3/content_world.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -167,7 +169,7 @@ void player_setup(bool full) {
     if (suffix) *suffix++ = '\0';
     if (!whole) std::memcpy(r->raw + 4, frame + 0x34, 0xcc);
     int32_t mech = r->get<int32_t>(0xc4);
-    mech = mech > 0x12 ? 0x12 : (mech < -1 ? -1 : mech);
+    mech = mech >= chassis_count() ? chassis_count() - 1 : (mech < -1 ? -1 : mech);
     // A campaign's lancemate the player configures (pilot can_configure,
     // +0xcc bit 7) on the player's team is a slot of the campaign, kept
     // from mission to mission; the mech is made at launch.
@@ -179,7 +181,8 @@ void player_setup(bool full) {
       h.campaign_set_lancemate(campaign, mates++, slot);
       continue;
     }
-    create_vehicle(h.reader_find(vehicles, type), r, type, full_name, suffix);
+    if (!create_vehicle(h.reader_find(vehicles, type), r, type, full_name, suffix) && content_mission_actor_required(full_name))
+      cc::content::fail("mission-actor", "Required managed actor could not be constructed from its native model and controller", {}, content_selected_mission(), full_name);
   }
   if (campaign) h.campaign_set_lancemates(campaign, mates);
   h.reader_free(vehicles);
@@ -226,7 +229,7 @@ int32_t create_controlled_vehicle(Handle def, const char* type, const char* name
 int32_t create_basic_vehicle(Handle def, ai::AivRecord* rec, const char* type, const char* name, Handle ctl,
                              Handle* out) {
   PlayerHooks& h = *g_hooks;
-  const Handle v = std::strncmp(type, "mobilehq", 9) == 0 ? h.mobilehq_create(ctl, type, name)
+  const Handle v = content_vehicle_field_base(type) ? h.mobilehq_create(ctl, type, name)
                                                            : h.vehicle_create(ctl, type, name);
   *out = v;
   if (!v) {

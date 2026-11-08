@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "gamez/zgeometry/zgeo_model.h"
 
 #include <cmath>
@@ -639,6 +640,7 @@ int clip_cell(const float* points, int32_t n, zcls::Partition* cell, ClipSet& se
   cc.nodes.reserve(static_cast<size_t>(cell_nodes));
   std::vector<zcls::Node*> keep, cut;  // flag 0x20000, 0x10000 (both need 4)
   auto sort = [&](zcls::Node* node) {
+    if (!node) return;
     const uint32_t f = node->flags();
     if (!(f & 4)) return;
     if (f & 0x20000) keep.push_back(node);
@@ -647,6 +649,16 @@ int clip_cell(const float* points, int32_t n, zcls::Partition* cell, ClipSet& se
   zcls::Node* world = hooks().world_node ? hooks().world_node() : nullptr;
   for (int32_t i = 0; world && i < world->child_count(); ++i) sort(world->children[i]);
   for (int16_t i = 0; i < cell_nodes; ++i) sort(cell->nodes[i]);
+  if (world && hooks().collect_clip_nodes) {
+    std::vector<zcls::Node*> extra;
+    hooks().collect_clip_nodes(world, cell, extra);
+    for (zcls::Node* node : extra) {
+      if (!node) continue;
+      if (std::find(keep.begin(), keep.end(), node) != keep.end()) continue;
+      if (std::find(cut.begin(), cut.end(), node) != cut.end()) continue;
+      sort(node);
+    }
+  }
   for (zcls::Node* node : cut)
     if (snap_outline(*c, node)) box_of(c->box, c->points.data(), c->count);
   c->weiler = weiler_new(c->points.data(), c->count, 0);

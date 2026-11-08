@@ -70,6 +70,10 @@ CraterState& craters();
 
 // What a crater calls outside zDEClient and zGeometry.
 struct CraterHooks {
+  // A host can restore immutable generated geometry that has no archive entry.
+  // Return false to retain the ordinary gamez.zbd reread path. The host clears
+  // its callback after crater teardown and before releasing its source state.
+  bool (*restore_node)(zcls::Node *node) = nullptr;
   // zEntity's record write (0x005a8a50 ECX context, EDX name, stack record
   // and size): the save that sends the craters to a joining player.
   void (*write_record)(void* context, const char* name, const void* record, int32_t size) = nullptr;

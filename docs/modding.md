@@ -1,5 +1,12 @@
 # Mods
 
+For additive weapons, equipment, chassis, worlds, missions, campaigns and native
+HUD layouts, use the shared [modular content system](modular-content-system.md).
+The `mw3content` CLI validates, compiles, packages and resolves profiles for the
+game, launcher and Studio. The legacy folder overlays described below remain
+available separately; managed profiles import only the explicit adapters in
+[legacy content adapters](legacy-content-adapters.md).
+
 Ours (Owen, 2026-11-01: "players and hobbyists can add their own game data
 without any change to the exe later"; small, "nothing big and dramatic").
 With no mods enabled nothing is mounted and nothing in play changes; nothing

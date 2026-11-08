@@ -161,6 +161,7 @@ void PolyLine::set_point(int32_t i, int32_t px, int32_t py) {
 // Mech3.exe 1.2 @ 0x005a38f0: within its clip rect (each line clipped), or
 // with `round` within the circle across it, or the lines as they are.
 void PolyLine::draw() {
+  if (!can_present()) return;
   erase();
   if (count == 0) return;
   if (clip && !round) return host().line_list(&pts[0][0], count - 1, clip, color);

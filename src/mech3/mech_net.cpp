@@ -29,6 +29,9 @@
 #include "mech3/mech_reader.h"
 #include "mech3/mech_skin.h"
 #include "mech3/weapon.h"
+#include "mech3/content_network.h"
+#include "mech3/content_state.h"
+#include "mech3/content_registry.h"
 
 namespace mech3 {
 
@@ -54,6 +57,7 @@ void call(NetRoute fn, NetMech* m, uint32_t from, const uint8_t* msg, size_t siz
 
 NetGame& net_game() { return g_net; }
 NetCalls& net_calls() { return g_calls; }
+void net_set_lobby_left(void (*fn)(uint32_t)) { g_calls.lobby_left = fn; }
 
 NetMech* net_mech(uint32_t owner) {
   for (NetMech* m : g_net.mechs)
@@ -1025,11 +1029,23 @@ bool net_launch_player(Mech& m, const std::vector<uint32_t>& p, int32_t skin, bo
   m.net_acked = 1;
   const uint32_t local = znet::local_id();
   if (p.empty()) return false;
-  const uint32_t n = p[0] & 0xffff;
+  std::vector<uint32_t> managed;
+  const std::vector<uint32_t>* payload=&p;
+  if(managed_gameplay_session()) {
+    try {
+      std::unique_ptr<Config> config(unpack_managed_config(p.data(),p.size()));
+      if(config->mech!=roster)return false;
+      const auto id=content_skin_id(roster,skin);
+      if(id.empty())return false;
+      managed=pack_managed_config(*config,id);payload=&managed;
+    } catch(const std::exception& error) {std::fprintf(stderr,"mw3 content network: %s\n",error.what());return false;}
+  }
+  const uint32_t n = (*payload)[0] & 0xffff;
+  if(n>payload->size()*4)return false;
   std::vector<uint8_t> rec(n + 0xc, 0);
   const uint32_t kind = 2;
   std::memcpy(rec.data(), &kind, 4);
-  std::memcpy(rec.data() + 0xc, p.data(), std::min<size_t>(n, 4 * p.size()));
+  std::memcpy(rec.data() + 0xc, payload->data(), n);
   std::memcpy(rec.data() + 8, &roster, 4);
   std::memcpy(rec.data() + 4, &skin, 4);
   m.set_team(c.team_of ? c.team_of(local) : 0);
@@ -1148,7 +1164,19 @@ void net_mech_create(uint32_t from) {
     if (size >= 0xc + 0x34) {
       std::vector<uint32_t> packed((size - 0xc) / 4);
       std::memcpy(packed.data(), rec.data() + 0xc, 4 * packed.size());
-      cfg = c.unpack ? c.unpack(packed.data(), packed.size()) : Config::unpacked(packed.data(), packed.size());
+      if(managed_gameplay_session()) {
+        try {
+          std::string skin_id;
+          cfg=unpack_managed_config(packed.data(),packed.size(),&skin_id);
+          if(cfg->mech!=roster||skin_id.empty()) {delete cfg;cfg=nullptr;}
+          else {
+            // A peer may omit another player's cosmetic package. The stable
+            // identity cannot select an unrelated local skin by numeric index.
+            skin=content_skin_index(roster,skin_id);
+            if(skin<0)skin=0;
+          }
+        } catch(const std::exception& error) {std::fprintf(stderr,"mw3 content network: %s\n",error.what());delete cfg;cfg=nullptr;}
+      } else cfg = c.unpack ? c.unpack(packed.data(), packed.size()) : Config::unpacked(packed.data(), packed.size());
     }
     if (cfg) {
       if (c.valid ? c.valid(*cfg) : cfg->validate(false)) {
