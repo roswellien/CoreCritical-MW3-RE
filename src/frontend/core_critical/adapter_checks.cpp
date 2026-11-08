@@ -12,10 +12,13 @@
 #include "renderer/campaign_environment_policy.hpp"
 #include "renderer/campaign_lighting.hpp"
 #include "renderer/campaign_sun_settings.hpp"
+#include "renderer/effect_light_observations.hpp"
+#include "renderer/effect_lighting_stage.inc"
 #include "renderer/material_normals.hpp"
 #include "renderer/native_surface_identity.hpp"
 #include "renderer/surface_detail.hpp"
 #include "renderer/surface_materials.hpp"
+#include <limits>
 
 namespace mw34::materials {
 void set_active_surface_key(const SurfaceKey &key);
@@ -31,6 +34,7 @@ bool get_active_surface_key(SurfaceKey *out);
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 #include <string_view>
 
@@ -50,6 +54,8 @@ void require(bool condition, const char *message) {
   }
 }
 
+#include "local_light_checks.inc"
+
 void quad(platform::Render3D &renderer, float low, float high, float depth,
           uint32_t color, const platform::DrawState &state = {}) {
   const platform::TLVertex vertices[] = {{low, low, depth, 1, color, 0, 0, 0},
@@ -58,6 +64,8 @@ void quad(platform::Render3D &renderer, float low, float high, float depth,
                                          {low, high, depth, 1, color, 0, 0, 1}};
   renderer.draw(platform::Primitive::kFan, vertices, 4, state);
 }
+
+#include "local_light_gpu_checks.inc"
 
 void check_scene(SDL_Window *window, sdlfe::RendererBackend backend) {
   auto renderer = make_check_renderer(window, backend);
@@ -1950,6 +1958,7 @@ int main(int argc, char **argv) {
                                       (native_wsi ? SDL_WINDOW_VULKAN : 0));
   int result = 0;
   try {
+    check_local_light_core();
     check_renderer_bridge_config();
     cc_mw3_re::platform::run_platform_checks();
     require(window != nullptr, SDL_GetError());
@@ -2051,8 +2060,10 @@ int main(int argc, char **argv) {
       check_prepared(window, backend, quality, material_check);
     } else if (quality_check)
       check_quality(window, backend, quality);
-    else
+    else {
+      check_local_light_gpu(window, backend);
       check_scene(window, backend);
+    }
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;

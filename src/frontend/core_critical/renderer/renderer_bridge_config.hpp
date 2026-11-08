@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,7 @@ struct RendererBridgeConfig {
 
   // Fixtures / Local Lights / Shadow Atlas
   bool effect_lights{false};
+  std::string effect_light_catalog;
   bool fixture_lights{false};
   bool fixture_shadows{false};
   bool fixture_atlas_reuse{true};
@@ -84,6 +86,25 @@ struct RendererBridgeConfig {
 
   static RendererBridgeConfig from_diagnostic_env() {
     RendererBridgeConfig cfg;
+    auto read_env_bool = [](const char *name, bool fallback) {
+      const char *value = std::getenv(name);
+      if (!value)
+        return fallback;
+      if (std::strcmp(value, "0") == 0)
+        return false;
+      if (std::strcmp(value, "1") == 0)
+        return true;
+      throw std::runtime_error(
+          std::string("Invalid boolean environment value: ") + name);
+    };
+    cfg.effect_lights = read_env_bool("MW34_EFFECT_LIGHTS", false);
+    cfg.fixture_lights =
+        read_env_bool("MW34_FIXTURE_LIGHTS", cfg.effect_lights);
+    if (cfg.fixture_lights && !cfg.effect_lights)
+      throw std::runtime_error(
+          "MW34_FIXTURE_LIGHTS requires MW34_EFFECT_LIGHTS");
+    if (const char *path = std::getenv("MW34_EFFECT_LIGHT_CATALOG"))
+      cfg.effect_light_catalog = path;
     if (const char *path = std::getenv("MW34_NATIVE_MATERIALS"))
       cfg.native_material_sidecar = path;
     if (const char *id = std::getenv("MW34_NATIVE_MATERIAL_ID"))

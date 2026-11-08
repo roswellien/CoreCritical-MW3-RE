@@ -5,6 +5,7 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zmodel/gmod_fogcalc.h"
+#include "gamez/zutil/ztimer.h"
 #include "gamez/zutil/zutl_path.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
 #include "prepared_draw.hpp"
@@ -12,9 +13,13 @@
 #include "prepared_models.hpp"
 #include "render_worker.hpp"
 #include "renderer/campaign_sun_settings.hpp"
+#include "renderer/effect_light_observations.hpp"
+#include "renderer/effect_lighting_stage.inc"
 #include "renderer/geometry/reference.hpp"
 #include "renderer/material_normals.hpp"
 #include "renderer/native_surface_identity.hpp"
+#include <filesystem>
+#include <fstream>
 
 namespace mw34::materials {
 void set_active_surface_key(const SurfaceKey &key);
@@ -283,6 +288,7 @@ public:
     // initialization error boundary instead of unwinding legacy game loaders.
     if (lighting_.normals)
       surface_normals_load();
+    local_lights_load();
     initialize_renderer();
     if (assets.render_thread) {
       worker_ = std::make_unique<RenderWorker>(8, 128 * 1024 * 1024, [] {
@@ -341,7 +347,9 @@ public:
 #include "geometry_reference_adapter.inc"
 #include "prepared_gpu_adapter.inc"
 #include "renderer/surface_normals_stage.inc"
-
+private:
+#include "renderer/local_light_runtime.inc"
+public:
   int32_t surface_normal_texture(int normal_index) {
     const auto found = surface_normal_textures_.find(normal_index);
     if (found != surface_normal_textures_.end()) {
@@ -446,6 +454,7 @@ public:
     VisualFloatScope fp_guard;
     // Drain packets queued for the previous mission before switching state.
     drain();
+    local_lights_clear();
     const auto id = mw34::campaign::canonical_mission_id(identity.world_index,
                                                          identity.number);
     mw34::campaign::ResolvedMissionLighting resolved{};
@@ -507,6 +516,7 @@ public:
       std::fprintf(stderr, "Core Critical render worker shutdown: %s\n",
                    error.what());
     }
+    local_lights_report();
     if (worker_) {
       worker_->stop();
       const auto statistics = worker_->statistics();
@@ -751,8 +761,16 @@ public:
   void set_fog_color(uint8_t red, uint8_t green, uint8_t blue) override {
     fog_ = {red / 255.0f, green / 255.0f, blue / 255.0f};
   }
-  void begin_scene() override { ensure_extent(); }
-  void end_scene() override { flush(); }
+  void begin_scene() override {
+    if (!scene_.draws.empty())
+      flush();
+    ensure_extent();
+    local_lights_begin();
+  }
+  void end_scene() override {
+    flush();
+    local_active_ = false;
+  }
 
   void draw(Primitive primitive, const TLVertex *vertices, int count,
             const DrawState &state) override {
@@ -768,6 +786,7 @@ public:
     }
     if (suppress_model_draws_)
       return;
+    local_lights_observe(vertices, count, state);
     append_draw(primitive, vertices, count, state,
                 state.sharp || (state.depth_always &&
                                 !authenticated_deferred_world_draw()));
@@ -1439,8 +1458,6 @@ RendererBridgeConfig configure_bridge(sdlfe::RendererBackend backend,
   config.normal_maps_enabled = (assets.lighting == "normal");
 
   // Other defaults
-  config.effect_lights = false;
-  config.fixture_lights = false;
   config.fixture_shadows = false;
   config.fixture_atlas_reuse = true;
   config.fixture_atlas_tracked = false;

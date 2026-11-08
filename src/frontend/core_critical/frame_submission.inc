@@ -3,6 +3,7 @@ void flush() override {
     if (scene_.order.empty()) {
         return;
     }
+    local_lights_attach();
     CpuInterval interval(cpu_profile_ ? &render_ticks_ : nullptr);
     if (cpu_profile_)
         ++render_calls_;
@@ -51,23 +52,25 @@ void flush() override {
 
 private:
 static std::size_t packet_bytes(const vk::Scene &scene) {
-    std::size_t bytes = sizeof(scene) + scene.vertices.capacity() +
-                        (scene.color.capacity() + scene.depth.capacity()) * sizeof(uint16_t) +
-                        scene.draws.capacity() * sizeof(vk::Draw) +
-                        scene.order.capacity() * sizeof(vk::Command) +
-                        scene.textures.capacity() * sizeof(vk::TextureRef);
-    for (const auto &texture : scene.textures)
-        bytes += texture.pixels.capacity() * sizeof(uint16_t) +
-                 texture.pixels32.capacity() * sizeof(uint32_t);
-    for (const auto &draw : scene.draws) {
-        if (draw.model && draw.model->geometry) {
-            const auto &geometry = *draw.model->geometry;
-            bytes += geometry.vertices.capacity() * sizeof(vk::ModelVertex) +
-                     geometry.indices.capacity() * sizeof(uint32_t);
-        }
-        if (draw.lit_normals)
-            bytes += draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
+  // sizeof(scene) includes the owned fixed local-light Uniform.
+  std::size_t bytes =
+      sizeof(scene) + scene.vertices.capacity() +
+      (scene.color.capacity() + scene.depth.capacity()) * sizeof(uint16_t) +
+      scene.draws.capacity() * sizeof(vk::Draw) +
+      scene.order.capacity() * sizeof(vk::Command) +
+      scene.textures.capacity() * sizeof(vk::TextureRef);
+  for (const auto &texture : scene.textures)
+    bytes += texture.pixels.capacity() * sizeof(uint16_t) +
+             texture.pixels32.capacity() * sizeof(uint32_t);
+  for (const auto &draw : scene.draws) {
+    if (draw.model && draw.model->geometry) {
+      const auto &geometry = *draw.model->geometry;
+      bytes += geometry.vertices.capacity() * sizeof(vk::ModelVertex) +
+               geometry.indices.capacity() * sizeof(uint32_t);
     }
+    if (draw.lit_normals)
+      bytes += draw.lit_normals->capacity() * sizeof(std::array<float, 3>);
+  }
     for (const auto &clear : scene.clears)
         bytes += clear.rects.capacity() * sizeof(VkRect2D);
     return bytes;
