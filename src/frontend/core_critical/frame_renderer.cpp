@@ -363,15 +363,13 @@ public:
     surface_normals_load(); // Reset clears catalogs; deferred admission can be
                             // first.
     const auto &key = textures_[texture].surface_key;
-    const auto &cache = surface_normals_.cache;
-    if (!cache.bindings.count(key) && !cache.world_bindings.count(key))
-      return {};
     auto receipt = std::make_shared<NativeDeferredBinding>();
     receipt->owner = material_binding_owner_;
     receipt->key = textures_[texture].surface_key;
     receipt->epoch = group_load_epoch_;
     receipt->version = textures_[texture].version;
     receipt->texture = texture;
+    receipt->surface_parameters = native_surface_parameters(key, texture);
     receipt->normal_index = surface_normal_index(receipt->key, true, texture);
     return receipt;
   }
@@ -915,6 +913,16 @@ private:
           tl->camera_world = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
         }
         draw.sun_tl = std::move(tl);
+        if (lighting_.normals) {
+          draw.surface_parameters =
+              deferred_surface_parameters(key, state.texture);
+          if (draw.surface_parameters[3] > .5f && proj.near_z > 0 &&
+              proj.fx_near > 0 && proj.fy_near > 0 && viewport_[2] > 0 &&
+              viewport_[3] > 0) {
+            const auto &eye = draw.sun_tl->camera_world;
+            draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
+          }
+        }
         auto norms = std::make_shared<std::vector<std::array<float, 3>>>(
             drawn, std::array<float, 3>{0, 0, 0});
         draw.lit_normals = std::move(norms);
@@ -982,6 +990,8 @@ private:
            (previous.sun_tl->camera_world == draw.sun_tl->camera_world &&
             previous.sun_tl->projection == draw.sun_tl->projection)) &&
           bool(previous.lit_normals) == bool(draw.lit_normals) &&
+          previous.surface_parameters == draw.surface_parameters &&
+          previous.surface_eye == draw.surface_eye &&
           previous.sampler == draw.sampler &&
           previous.key.packed() == draw.key.packed() &&
           std::memcmp(&previous.push, &draw.push, sizeof(draw.push)) == 0) {
@@ -1139,6 +1149,7 @@ private:
         prepared_geometry(*source.batch), lighting_.enabled,
         cpu_profile_ ? &prepared_cpu_ : nullptr, prepared_cache_enabled_);
     auto draw = staged->draw;
+    apply_surface_material(draw, source, lighting_.normals);
     draw.first = unsigned(scene_.vertices.size() / sizeof(TLVertex));
     draw.texture = int(bind_texture(prepared_texture(*source.texture), false));
     if (source.normal && lighting_.normals)

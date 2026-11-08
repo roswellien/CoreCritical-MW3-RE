@@ -76,6 +76,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
                             source.world, fog);
     for (auto index = first; index < scene_.draws.size(); ++index) {
       auto &draw = scene_.draws[index];
+      apply_surface_material(draw, source, lighting_.normals);
       draw.sampler |= 0x10000U;
       draw.push.mode[3] = 0; // Preserve prepared smooth-normal orientation.
       if (normal >= 0)
@@ -102,6 +103,7 @@ void emit_gpu_prepared(const PreparedBatchDraw &source,
         (context.cy - viewport_[1]) * scene_.height / viewport_[3] - .5f,
         context.far_z};
     vk::Draw draw{};
+    apply_surface_material(draw, source, lighting_.normals);
     draw.model = std::move(instance);
     draw.geometry_debug_normals = geometry_debug_;
     draw.count = unsigned(geometry->vertices.size());

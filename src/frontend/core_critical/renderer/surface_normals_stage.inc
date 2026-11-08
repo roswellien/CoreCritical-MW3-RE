@@ -30,6 +30,7 @@ struct NativeDeferredBinding final : ::platform::DeferredMaterialBinding {
   mw34::materials::SurfaceKey key{};
   std::uint64_t epoch{}, version{};
   int texture{-1}, normal_index{-1};
+  std::array<float, 4> surface_parameters{};
 };
 const std::shared_ptr<const int> material_binding_owner_ =
     std::make_shared<const int>(0);
@@ -266,6 +267,21 @@ bool native_surface_binding_matches(const mw34::materials::SurfaceKey &key,
   return true;
 }
 
+std::array<float, 4>
+native_surface_parameters(const mw34::materials::SurfaceKey &key, int texture) {
+  if (!lighting_.normals || bridge_config_.native_material_sidecar.empty())
+    return {};
+  surface_normals_load();
+  if (!native_surface_binding_matches(key, texture))
+    return {};
+  const auto &pack = *surface_normals_.native_material_pack;
+  const auto index = pack.bindings.at(native_context_.material.polygon);
+  if (index == mw34::materials::no_surface_material)
+    return {};
+  const auto &record = *pack.records.at(index);
+  return {record.roughness, record.reflectivity, record.metallic, 1.f};
+}
+
 int surface_normal_index(const mw34::materials::SurfaceKey &input_key,
                          bool enabled = true, int texture_handle = -1) {
   if (!enabled || !surface_normals_enabled()) {
@@ -301,10 +317,8 @@ std::uint64_t resident_normal_decoded_bytes() const {
   return surface_normals_.cache.world_bytes;
 }
 
-int deferred_surface_normal_index(const mw34::materials::SurfaceKey &key,
-                                  int texture) {
-  if (!deferred_material_binding_)
-    return surface_normal_index(key, true, texture);
+const NativeDeferredBinding *
+validated_deferred_binding(const mw34::materials::SurfaceKey &key, int texture) {
   const auto *binding = dynamic_cast<const NativeDeferredBinding *>(
       deferred_material_binding_.get());
   if (!binding || binding->owner.lock() != material_binding_owner_ ||
@@ -313,17 +327,36 @@ int deferred_surface_normal_index(const mw34::materials::SurfaceKey &key,
       binding->version != textures_[texture].version || binding->key < key ||
       key < binding->key) {
     reject_surface_binding("stale or foreign deferred material admission");
-    return -1;
+    return nullptr;
   }
-  return binding->normal_index;
+  return binding;
+}
+
+int deferred_surface_normal_index(const mw34::materials::SurfaceKey &key,
+                                  int texture) {
+  if (!deferred_material_binding_)
+    return surface_normal_index(key, true, texture);
+  const auto *binding = validated_deferred_binding(key, texture);
+  return binding ? binding->normal_index : -1;
+}
+
+std::array<float, 4>
+deferred_surface_parameters(const mw34::materials::SurfaceKey &key, int texture) {
+  if (!deferred_material_binding_)
+    return native_surface_parameters(key, texture);
+  const auto *binding = validated_deferred_binding(key, texture);
+  return binding ? binding->surface_parameters : std::array<float, 4>{};
 }
 
 bool authenticated_deferred_world_draw() const {
   const auto *binding = dynamic_cast<const NativeDeferredBinding *>(
       deferred_material_binding_.get());
-  return binding && binding->normal_index >= 0 &&
+  return binding && (binding->normal_index >= 0 ||
+                     binding->surface_parameters[3] > .5f) &&
          binding->owner.lock() == material_binding_owner_ &&
          binding->epoch == group_load_epoch_ && binding->texture >= 0 &&
          std::size_t(binding->texture) < textures_.size() &&
-         binding->version == textures_[binding->texture].version;
+         binding->version == textures_[binding->texture].version &&
+         !(binding->key < textures_[binding->texture].surface_key) &&
+         !(textures_[binding->texture].surface_key < binding->key);
 }

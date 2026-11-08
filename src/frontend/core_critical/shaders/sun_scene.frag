@@ -16,6 +16,7 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
  vec4 projection; vec4 extra;
+ vec4 surfaceParameters; vec4 surfaceEye;
  vec4 world0; vec4 world1; vec4 world2;
  vec4 shadow0; vec4 shadow1; vec4 shadow2; vec4 shadowParams;
  vec4 skyEye; vec4 skyTint; vec4 skyGlow; vec4 skyGrade; vec4 skyBlend;
@@ -214,6 +215,39 @@ vec3 waterNormal(vec3 N,float mask) {
     float fade=1.0-smoothstep(2.0,10.0,footprint);
     return normalize(N+vec3(slope.x,0,slope.y)*(sun.detail.y*mask*fade));
 }
+vec3 surfaceBrdf(vec3 albedo, vec3 N, vec3 V, vec3 L, vec3 parameters) {
+    float roughness = clamp(parameters.x, 0.045, 1.0);
+    float reflectivity = parameters.y;
+    float metallic = parameters.z;
+
+    float alpha = roughness * roughness;
+    float a2 = alpha * alpha;
+
+    float NoV = clamp(dot(N, V), 0.0, 1.0);
+    float NoL = clamp(dot(N, L), 0.0, 1.0);
+    if (NoV <= 0.0 || NoL <= 0.0) return vec3(0.0);
+
+    vec3 H = V + L;
+    if (dot(H, H) < 1e-12) return vec3(0.0);
+    H = normalize(H);
+
+    float VoH = clamp(dot(V, H), 0.0, 1.0);
+    float NoH = clamp(dot(N, H), 0.0, 1.0);
+
+    float d = 1.0 + (a2 - 1.0) * NoH * NoH;
+    float D = a2 / max(3.14159265359 * d * d, 1e-12);
+
+    float G1V = 2.0 * NoV / (NoV + sqrt(a2 + (1.0 - a2) * NoV * NoV));
+    float G1L = 2.0 * NoL / (NoL + sqrt(a2 + (1.0 - a2) * NoL * NoL));
+
+    vec3 F0 = mix(vec3(reflectivity), albedo, metallic);
+    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VoH, 5.0);
+
+    vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / 3.14159265359;
+    vec3 spec = D * G1V * G1L * F / max(4.0 * NoV * NoL, 1e-7);
+
+    return diffuse + spec;
+}
 void main() {
     uint flags = draw.mode.x;
     diffuse = (flags & 1u) != 0u ? colorFlat : colorSmooth;
@@ -336,6 +370,17 @@ void main() {
 #else
     vec3 rgb = operation(draw.mode.y).rgb*(sun.extra.w>3.5?vec3(1.0):illumination);
 #endif
+    if(sun.surfaceParameters.w>.5 && sun.surfaceEye.w>.5){
+        vec3 toEye=sun.surfaceEye.xyz-worldPosition;
+        if(dot(toEye,toEye)>1e-12){
+            vec3 albedo=operation(draw.mode.y).rgb;
+            vec3 response=surfaceBrdf(clamp(albedo,vec3(0),vec3(1)),n,
+                normalize(toEye),sun.direction.xyz,sun.surfaceParameters.xyz);
+            // Replace only directional Lambert lighting. Preserve ambient,
+            // local lights, emission, alpha, original specular and fog.
+            rgb+=(response-albedo)*sun.sunColor.rgb*sun.direction.w*direct;
+        }
+    }
     if(waterDetail){
         vec3 eye=vec3(sun.normal0.w,sun.normal1.w,sun.normal2.w);
         vec3 V=normalize(eye-worldPosition),H=normalize(V+sun.direction.xyz);

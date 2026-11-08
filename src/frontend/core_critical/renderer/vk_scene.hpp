@@ -158,6 +158,10 @@ struct Draw {
   bool condition_schematic{};
   bool depth_only{};
   std::uint32_t emission_index{mw34::submission::DrawEmissions::none};
+  // Sun material surface parameters (roughness, reflectivity, metallic, active)
+  // and eye (world xyz, valid); owned values, zero preserves the legacy path.
+  std::array<float, 4> surface_parameters{};
+  std::array<float, 4> surface_eye{};
   bool geometry_debug_normals{};
 };
 struct Clear {
@@ -1424,6 +1428,12 @@ private:
           }
           if (draw.geometry_debug_normals)
             u.ambient[3] = 1;
+          if (environment.normals && draw.surface_parameters[3] > .5f &&
+              draw.surface_eye[3] > .5f && !draw.sky && !draw.key.blend &&
+              !draw.condition_schematic && !draw.geometry_debug_normals) {
+            u.surface_parameters = draw.surface_parameters;
+            u.surface_eye = draw.surface_eye;
+          }
           if (skyEyeValid) {
             const auto &e =
                 draw.sun_tl && !draw.sky ? draw.sun_tl->camera_world : skyEye;

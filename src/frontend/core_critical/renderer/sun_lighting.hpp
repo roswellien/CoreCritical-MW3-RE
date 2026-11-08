@@ -3,6 +3,7 @@
 #pragma once
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -150,6 +151,9 @@ struct alignas(16) Uniform {
   std::array<float, 12> normal{};
   std::array<float, 4> direction{}, color{}, ambient{};
   std::array<float, 4> projection{}, extra{};
+  // Material surface: (roughness, reflectivity, metallic, active) and eye
+  // (world xyz, valid); zero values preserve the legacy lighting path.
+  std::array<float, 4> surface_parameters{}, surface_eye{};
   // Shadow receivers: true local-to-world rows, world-to-sun-clip rows and
   // (active, world units per texel, depth bias in sun clip, opacity).
   std::array<float, 12> world{}, shadow{};
@@ -170,7 +174,9 @@ struct alignas(16) Uniform {
   std::array<std::array<float, 4>, 32> emission_regions{};
   std::array<float, 4> geometry_fog0{}, geometry_fog1{};
 };
-static_assert(sizeof(Uniform) == 944);
+static_assert(sizeof(Uniform) == 976);
+static_assert(offsetof(Uniform, surface_parameters) == 128);
+static_assert(offsetof(Uniform, surface_eye) == 144);
 struct Tl {
   std::array<float, 12> camera_world{};
   std::array<float, 6> projection{};
