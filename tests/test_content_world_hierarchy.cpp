@@ -1,6 +1,7 @@
 #include "check.h"
 #include "content/world.h"
 #include "content/world_hierarchy.h"
+#include "content/persistence.h"
 #include "gamez/zclass/class.h"
 #include "gamez/zclass/cls_di.h"
 #include "gamez/zclass/cls_node.h"
@@ -10,11 +11,20 @@
 #include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zreader/zreader.h"
+#include "gamez/zsave/zsave.h"
+#include "gamez/zutil/zutl_path.h"
+#include "gamez/zutil/zutl_zar.h"
+#include "gamez/zdeclient/zdec_crater.h"
+#include "mech3/content_base.h"
+#include "mech3/content_campaign.h"
+#include "mech3/content_network.h"
 #include "mech3/content_registry.h"
 #include "mech3/content_world.h"
 #include "mech3/content_world_hierarchy.h"
+#include "mech3/content_world_state.h"
 #include "mech3/mech_objective.h"
 #include "mech3/mission.h"
+#include "mech3/pilot.h"
 #include "mech3/veh_controls.h"
 
 #include <cmath>
@@ -150,8 +160,8 @@ struct NativeScene {
         EXPECT(mech3::load_content_world(index));
     }
     ~NativeScene() {
-        zcls::classes_reset();
         mech3::clear_content_world();
+        zcls::classes_reset();
         mech3::activate_content(previous);
     }
 };
@@ -184,6 +194,143 @@ struct NativeObjectiveHooks final : mech3::ObjectiveHooks {
     int32_t game_type() override { return 0; }
 };
 } // namespace
+
+TEST(content_world_hierarchy_managed_snapshot_restores_new_scene_and_preflights_callbacks) {
+    struct Hooks final : mech3::PilotHooks {
+        int loads = 0;
+        void store_fill(mech3::Store&, int32_t) override {}
+        int32_t store_add_mech(mech3::Store&, int32_t, const char*) override { return 0; }
+        bool load_world(const char* path, int32_t kind) override {
+            ++loads;
+            return PilotHooks::load_world(path, kind);
+        }
+    } hooks;
+    struct Restore {
+        mech3::PilotHooks* hooks = &mech3::pilot_hooks();
+        zutl::Mounts mounts = zutl::mounts();
+        ~Restore() {
+            mech3::clear_content_world();
+            zsave::shutdown();
+            mech3::set_pilot_hooks(hooks);
+            zutl::mounts() = mounts;
+            mech3::clear_content_base_digest_cache();
+        }
+    } restore;
+    const auto directory = cc::content::fs::path(MW3_TEST_TMP) / "activation-integration";
+    cc::content::fs::create_directories(directory);
+    zutl::mounts() = {};
+    zutl::set_write_dir(directory.string());
+    mech3::set_pilot_hooks(&hooks);
+    zsave::init();
+    Fixture fixture;
+    for (auto& definition : fixture.content->definitions)
+        if (definition.id == "hierarchy:mission") definition.data["persist_world"] = true;
+    mech3::Pilot pilot("ActivationIntegration");
+    pilot.dirty = 0;
+    pilot.file = std::tmpfile();
+    EXPECT(pilot.file != nullptr);
+    if (!pilot.file) return;
+    mech3::CampaignGame game(&pilot, 1000, 1);
+    game.content_mission = "hierarchy:mission";
+    game.slot.mech = -1;
+    mech3::bind_content_campaign_run(game);
+    cc::content::fs::path bundle_path;
+    auto latch = []() {
+        return zcls::node_find_in_tree(
+            zcls::list_find_by_name(zcls::kAllNodes, "fixture"), "Latch");
+    };
+    std::vector<uint8_t> snapshot;
+    std::string digest;
+    uint64_t first_allocation = 0;
+    {
+        NativeScene scene(fixture);
+        bundle_path = cc::content::fs::u8path(
+            zutl::write_path((std::string(game.path()) + ".ccsave").c_str()));
+        cc::content::fs::create_directories(bundle_path.parent_path());
+        auto* node = latch();
+        EXPECT(node != nullptr);
+        if (!node) return;
+        first_allocation = node->allocation_id;
+        zcls::node_set_active(node, 0);
+        snapshot = mech3::capture_content_world_snapshot(game.path());
+        digest = mech3::content_world_digest();
+    }
+    {
+        NativeScene scene(fixture);
+        auto* node = latch();
+        EXPECT(node && node->allocation_id != first_allocation && (node->flags() & 4));
+        if (!node) return;
+        const Json state = {{"campaign", game.content_campaign}, {"mission", game.content_mission},
+                            {"graph", game.content_state}, {"world_snapshot", true},
+                            {"snapshot_mission", game.content_mission}, {"world_digest", digest},
+                            {"base_digest", mech3::content_base_digest()},
+                            {"simulation_options", mech3::content_simulation_options()}};
+        cc::content::save_bundle(bundle_path, state, snapshot, *fixture.content);
+        EXPECT(mech3::restore_content_campaign(game));
+        EXPECT(hooks.loads == 1 && (node->flags() & 4) == 0);
+
+        // A throwing native callback must close the temporary file and leave
+        // the already accepted bundle untouched, then permit another capture.
+        const auto accepted_hash = cc::content::file_sha256(bundle_path);
+        zdec::craters().history.push_back(zdec::HistoryEntry{});
+        EXPECT(rejects([&] { mech3::capture_content_world_snapshot(game.path()); }));
+        EXPECT(zsave::manager()->archive.file == nullptr);
+        EXPECT(cc::content::file_sha256(bundle_path) == accepted_hash);
+        zdec::craters().history.clear();
+        EXPECT(!mech3::capture_content_world_snapshot(game.path()).empty());
+        for (const auto& file : cc::content::fs::directory_iterator(bundle_path.parent_path()))
+            EXPECT(file.path().filename().string().find(".snapshot-") != 0);
+
+        // Put a real sentinel entry first in native archive order. A direct
+        // native load proves the control callback runs without managed preflight.
+        uint32_t footer[2]{};
+        std::memcpy(footer, snapshot.data() + snapshot.size() - 8, 8);
+        const size_t table = snapshot.size() - 8 - footer[1] * sizeof(zutl_zar::Entry);
+        std::vector<zutl_zar::Entry> entries(footer[1]);
+        std::memcpy(entries.data(), snapshot.data() + table, entries.size() * sizeof(entries[0]));
+        auto corrupt_activation = snapshot;
+        for (const auto& entry : entries)
+            if (std::strcmp(entry.name, "ContentWorld/Activation") == 0)
+                corrupt_activation[entry.start] = '!';
+        cc::content::save_bundle(bundle_path, state, corrupt_activation, *fixture.content);
+        zcls::node_set_active(node, 1);
+        EXPECT(rejects([&] { mech3::restore_content_campaign(game); }));
+        EXPECT(hooks.loads == 1 && (node->flags() & 4));
+        std::vector<uint8_t> with_sentinel(snapshot.begin(), snapshot.begin() + table);
+        zutl_zar::Entry sentinel{};
+        std::snprintf(sentinel.name, sizeof sentinel.name, "%s", "Sentinel/Value");
+        sentinel.start = static_cast<uint32_t>(with_sentinel.size());
+        sentinel.length = 1;
+        with_sentinel.push_back(42);
+        entries.insert(entries.begin(), sentinel);
+        const auto* entry_bytes = reinterpret_cast<const uint8_t*>(entries.data());
+        with_sentinel.insert(with_sentinel.end(), entry_bytes,
+                             entry_bytes + entries.size() * sizeof(entries[0]));
+        footer[1] = static_cast<uint32_t>(entries.size());
+        const auto* tail = reinterpret_cast<const uint8_t*>(footer);
+        with_sentinel.insert(with_sentinel.end(), tail, tail + 8);
+        int sentinel_calls = 0;
+        zsave::add("Sentinel", nullptr,
+                   [](zsave::Context&, const char*, const void*, uint32_t, void* user) {
+                       ++*static_cast<int*>(user);
+                   }, 500, &sentinel_calls);
+        const auto control = directory / "sentinel-control.zbd";
+        {
+            std::ofstream output(control, std::ios::binary);
+            output.write(reinterpret_cast<const char*>(with_sentinel.data()), with_sentinel.size());
+        }
+        EXPECT(zsave::load(control.generic_string().c_str(), 2));
+        EXPECT(sentinel_calls == 1);
+        sentinel_calls = 0;
+        for (const auto& entry : entries)
+            if (std::strcmp(entry.name, "ContentWorld/Activation") == 0)
+                with_sentinel[entry.start] = '!';
+        cc::content::save_bundle(bundle_path, state, with_sentinel, *fixture.content);
+        zcls::node_set_active(node, 1);
+        EXPECT(rejects([&] { mech3::restore_content_campaign(game); }));
+        EXPECT(hooks.loads == 1 && sentinel_calls == 0 && (node->flags() & 4));
+    }
+}
 
 TEST(content_world_hierarchy_retains_transform_only_nodes_and_local_bindings) {
     Fixture fixture;

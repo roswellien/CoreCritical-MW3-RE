@@ -1,4 +1,5 @@
 #include "mech3/content_campaign.h"
+#include "mech3/content_world_state.h"
 #include "platform/host_path.h"
 
 #include <algorithm>
@@ -867,6 +868,7 @@ bool restore_content_campaign(CampaignGame &game) {
                  "The accepted mission snapshot does not match the loaded native world");
         return false;
     }
+    validate_content_world_snapshot(saved.world, true);
     const auto relative = std::string(game.path()) + ".restore";
     const auto temporary = zutl::write_path(relative.c_str());
     struct Cleanup {

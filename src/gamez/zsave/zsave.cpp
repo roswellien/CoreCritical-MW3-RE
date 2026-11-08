@@ -85,10 +85,21 @@ bool save(const char* path, int32_t kind) {
   zutl_zar::add(m->archive, kHeader, header, 8);
   // 0x005a92e0: std::list::sort, a stable merge by priority (0x005a8c90).
   m->list.sort([](const Registrant& a, const Registrant& b) { return a.priority < b.priority; });
+  struct ScopeArchive {
+    Manager* mgr;
+    bool committed = false;
+    ~ScopeArchive() {
+      if (mgr && !committed) {
+        mgr->archive.dirty = false;
+        zutl_zar::close(mgr->archive);
+      }
+    }
+  } scope{m};
   for (Registrant& r : m->list) {
     Context ctx{m, &r};
     if (r.save) r.save(ctx, r.user);  // 0x005a91b0
   }
+  scope.committed = true;
   zutl_zar::close(m->archive);
   return true;
 }

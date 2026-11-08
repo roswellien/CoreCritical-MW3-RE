@@ -17,6 +17,7 @@
 
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zsave/zsave.h"
+#include "mech3/content_world_state.h"
 #include "gamez/zrender/zrndr_draw.h"
 #include "gamez/zclass/camera.h"
 #include "gamez/zclass/class.h"
@@ -1862,7 +1863,10 @@ struct WiredMissionHooks : MissionHooks {
   // its world goes with it: the next load's nets and waynets, built before
   // the world parameters are read again, then see no world (as in the exe).
   void delete_608c84(Handle) override { world_hooks().world = nullptr, world_hooks().camera = nullptr; }
-  void classes_free() override { zcls::classes_reset(); }  // 0x004f8fb0
+  void classes_free() override {
+    clear_content_world_activation();
+    zcls::classes_reset();  // 0x004f8fb0
+  }
   void models_free() override {  // 0x00526920 with the materials' 0x005372c0
     zmod::ModelPool& p = zmod::models();
     for (int32_t i = 0; i < p.count; ++i) zmod::model_release(&p.slots[i]);  // 0x00539150
@@ -1953,6 +1957,7 @@ struct WiredMissionHooks : MissionHooks {
   // zClass's reset 0x004f8f70 and zModel's 0x00526800: fresh pools and the
   // draw table ([0x0074a2e0] = 0x0053f2e0 on Direct3D).
   void classes_reset() override {
+    clear_content_world_activation();
     zcls::nodes() = zcls::NodePool{};
     zcls::nodes().free_head = -1;
     zcls::lists() = zcls::Lists{};
@@ -2546,7 +2551,7 @@ void GameEngine::model_use_gfx_flags(const char* name, int32_t flags) {
   zmod::use_gfx_flags(name, static_cast<uint32_t>(flags));
 }
 int32_t GameEngine::weapons_init() { return zwep::startup(); }
-void GameEngine::save_init() { zsave::init(); }
+void GameEngine::save_init() { zsave::init(); register_content_world_activation(); }
 void GameEngine::save_shutdown() { zsave::shutdown(); }
 void GameEngine::anim_enable(int32_t on) { zeff::anim_enable_save(on); }
 void GameEngine::weapons_set_mode(int32_t v) { zwep::set_network(v); }

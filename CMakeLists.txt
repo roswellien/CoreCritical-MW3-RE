@@ -71,6 +71,7 @@ add_library(mw3core STATIC
   src/mech3/content_playtest.cpp
   src/mech3/content_base.cpp
   src/mech3/content_world.cpp
+  src/mech3/content_world_state.cpp
   src/mech3/content_world_catalog.cpp
   src/mech3/content_world_hierarchy.cpp
   src/mech3/content_world_readers.cpp
@@ -641,6 +642,7 @@ add_executable(mw3tests
   tests/test_content_lance.cpp
   tests/test_content_world.cpp
   tests/test_content_world_hierarchy.cpp
+  tests/test_content_world_state.cpp
   tests/test_content_campaign.cpp
   tests/test_content_checkpoint.cpp
   tests/test_content_hud.cpp

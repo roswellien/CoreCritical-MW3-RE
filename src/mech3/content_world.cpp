@@ -1,5 +1,6 @@
 #include "mech3/content_world.h"
 #include "mech3/content_world_hierarchy.h"
+#include "mech3/content_world_state.h"
 #include "mech3/content_world_readers.h"
 
 #include <algorithm>
@@ -370,6 +371,7 @@ bool load_content_world(int32_t index) {
     const auto it = g_worlds.find(index);
     if (it == g_worlds.end())
         return false;
+    clear_content_world();
     if (!g_compiled.count(it->second)) {
         const auto content = active_content();
         const auto *definition = content->find("world", it->second);
@@ -409,6 +411,8 @@ bool load_content_world(int32_t index) {
     zcls::world_make_grid(root, 64.0f, -64.0f);
     size_t i = 0;
     const auto hierarchy = build_content_hierarchy(world, root, true);
+    std::vector<zcls::Node*> chunk_nodes;
+    chunk_nodes.reserve(world["chunks"].size());
     for (const auto &chunk : world["chunks"]) {
         auto *parent = hierarchy.chunk_parent(chunk);
         zcls::Node *node = zcls::object3d_create();
@@ -427,7 +431,14 @@ bool load_content_world(int32_t index) {
         zcls::update_node(node);
         zcls::object3d_add_child(parent, node);
         g_sources.emplace(node, chunk);
+        chunk_nodes.push_back(node);
     }
+    struct MarkerEntry {
+        std::string instance;
+        std::string name;
+        zcls::Node* node;
+    };
+    std::vector<MarkerEntry> marker_nodes;
     for (const auto &marker : world.value("markers", Json::array())) {
         const auto instance = marker.at("instance").get<std::string>();
         const auto parent = hierarchy.instances.find(instance);
@@ -441,6 +452,7 @@ bool load_content_world(int32_t index) {
                                        position[2].get<float>());
         zcls::object3d_add_child(parent->second, node);
         zcls::update_node(node);
+        marker_nodes.push_back({instance, marker.at("name").get<std::string>(), node});
     }
     auto *window = zcls::window_create();
     zcls::node_set_name(window, "window1");
@@ -475,6 +487,32 @@ bool load_content_world(int32_t index) {
     // The archive loader performs the same explicit renderer initialization.
     zcls::world_push_fog(root);
     zcls::frame_update();
+    std::map<std::string, zcls::Node*> activation;
+    for (const auto& [name, node] : hierarchy.instances) {
+        if (node && node->cls() == 5)
+            activation.emplace("root:" + name, node);
+    }
+    for (const auto& [id, node] : hierarchy.nodes) {
+        if (node && node->cls() == 5)
+            activation.emplace("node:" + id, node);
+    }
+    // The exact world digest uniquely and deterministically pins the chunks array order.
+    // Therefore chunk:0, chunk:1, ... are 1:1 and invariant for this exact digest.
+    for (size_t c = 0; c < chunk_nodes.size(); ++c) {
+        auto* node = chunk_nodes[c];
+        if (node && node->cls() == 5)
+            activation.emplace("chunk:" + std::to_string(c), node);
+    }
+    for (size_t m = 0; m < marker_nodes.size(); ++m) {
+        auto* node = marker_nodes[m].node;
+        if (node && node->cls() == 5) {
+            std::string key = "marker:" + marker_nodes[m].instance + "/" + marker_nodes[m].name;
+            if (activation.count(key))
+                fail("world-marker", "Authored marker key collision: " + key);
+            activation.emplace(std::move(key), node);
+        }
+    }
+    bind_content_world_activation(g_digest, std::move(activation));
     return true;
 }
 namespace {
@@ -580,6 +618,7 @@ zcls::Node *create_content_vehicle_node(const char *vehicle_type, const char *na
     return root;
 }
 void clear_content_world() {
+    clear_content_world_activation();
     if (zdec::crater_hooks().restore_node == restore_content_node)
         zdec::crater_hooks().restore_node = nullptr;
     g_sources.clear();

@@ -1,4 +1,5 @@
 #include "mech3/content_campaign.h"
+#include "mech3/content_world_state.h"
 #include "mech3/content_state.h"
 #include "platform/host_path.h"
 
@@ -131,6 +132,7 @@ std::vector<uint8_t> capture_content_world_snapshot(const std::string &path) {
     }
     if (headers != 1)
         fail("save-native", "Native world snapshot lacks its unique header");
+    validate_content_world_snapshot(bytes, false);
     return bytes;
 }
 } // namespace mech3

@@ -47,6 +47,8 @@ struct Node {                      // 0xd4-byte pool slot
   // tree copies preserve them without changing original serialized node bytes.
   bool content_hierarchy_parent = false;
   bool content_hierarchy_root = false;
+  // Host-only lifetime identity; recycled slots must not inherit saved bindings.
+  uint64_t allocation_id = 0;
 
   template <typename T> T get(int off) const {
     T v;
