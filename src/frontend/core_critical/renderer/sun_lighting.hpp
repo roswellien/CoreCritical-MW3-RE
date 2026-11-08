@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -173,8 +174,11 @@ struct alignas(16) Uniform {
   std::array<float, 4> emission_params{};
   std::array<std::array<float, 4>, 32> emission_regions{};
   std::array<float, 4> geometry_fog0{}, geometry_fog1{};
+  // Raster tile columns, rows, SSBO word offset and active flag for this draw.
+  std::array<std::uint32_t, 4> tiled_lights{};
 };
-static_assert(sizeof(Uniform) == 976);
+static_assert(sizeof(Uniform) == 992);
+static_assert(offsetof(Uniform, tiled_lights) == 976);
 static_assert(offsetof(Uniform, surface_parameters) == 128);
 static_assert(offsetof(Uniform, surface_eye) == 144);
 struct Tl {
