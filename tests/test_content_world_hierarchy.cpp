@@ -1,3 +1,4 @@
+#include "gamez/zclass/cls_data.h"
 #include "check.h"
 #include "content/world.h"
 #include "content/world_hierarchy.h"
@@ -611,4 +612,200 @@ TEST(content_world_hierarchy_paths_require_instance_root_and_tags_follow_native_
     EXPECT(!mech3::content_hierarchy_child(recycled, "Latch", &unused));
     EXPECT(zcls::node_destroy(recycled) == 0);
     zcls::immediate_delete() = immediate;
+}
+
+TEST(content_world_crater_reset_uses_world_ancestor_and_validates_partition) {
+    Fixture fixture;
+    NativeScene scene(fixture);
+
+    zcls::Node *world_node = zcls::list_find_by_name(zcls::kWorlds, "world1");
+    zcls::Node *fixture_node = zcls::list_find_by_name(zcls::kAllNodes, "fixture");
+    EXPECT(world_node != nullptr);
+    EXPECT(fixture_node != nullptr);
+    if (!world_node || !fixture_node) return;
+
+    auto *world = static_cast<zcls::World *>(world_node->data);
+    EXPECT(world != nullptr);
+    EXPECT(world && world->rows != nullptr);
+    if (!world || !world->rows) return;
+
+    const int32_t orig_cols = world->get<int32_t>(0x88);
+    const int32_t orig_rows = world->get<int32_t>(0x8c);
+    EXPECT(orig_cols > 0 && orig_rows > 0);
+
+    static int restore_calls = 0;
+    restore_calls = 0;
+
+    zcls::Partition fallback_row0[2]{};
+    zcls::Partition fallback_row1[2]{};
+    zcls::Partition *fallback_rows[2] = {fallback_row0, fallback_row1};
+    const bool use_fallback_grid = (orig_cols < 2 && orig_rows < 2);
+
+    zcls::Partition **orig_row_ptr = world->rows;
+    zcls::Partition *orig_first_row = world->rows[0];
+
+    zcls::Node *direct_child = zcls::object3d_create();
+    zcls::Node *nested_parent = zcls::object3d_create();
+    zcls::Node *nested_child = zcls::object3d_create();
+    zcls::Node *orphan_node = zcls::object3d_create();
+    zcls::Node *null_parent_node = zcls::object3d_create();
+    zcls::Node *cycle_a = zcls::object3d_create();
+    zcls::Node *cycle_b = zcls::object3d_create();
+    zcls::Node *neg_idx_node = zcls::object3d_create();
+    zcls::Node *oob_idx_node = zcls::object3d_create();
+
+    zcls::Node *null_parent_slot[1] = {nullptr};
+    zcls::Node *cycle_a_parents[1] = {cycle_b};
+    zcls::Node *cycle_b_parents[1] = {cycle_a};
+
+    zcls::Node **orig_np_parents = null_parent_node->parents;
+    const int32_t orig_np_count = null_parent_node->parent_count();
+    zcls::Node **orig_ca_parents = cycle_a->parents;
+    const int32_t orig_ca_count = cycle_a->parent_count();
+    zcls::Node **orig_cb_parents = cycle_b->parents;
+    const int32_t orig_cb_count = cycle_b->parent_count();
+
+    struct ScopedResetGuard {
+        zdec::CraterHooks saved_hooks;
+        zdec::CraterState saved_state;
+        zcls::World *world;
+        zcls::Partition **orig_rows;
+        zcls::Partition *orig_row0;
+        int32_t orig_cols;
+        int32_t orig_rowcount;
+        zcls::Node *np;
+        zcls::Node **np_parents;
+        int32_t np_count;
+        zcls::Node *ca;
+        zcls::Node **ca_parents;
+        int32_t ca_count;
+        zcls::Node *cb;
+        zcls::Node **cb_parents;
+        int32_t cb_count;
+        ~ScopedResetGuard() {
+            np->parents = np_parents;
+            np->put<int32_t>(0x54, np_count);
+            ca->parents = ca_parents;
+            ca->put<int32_t>(0x54, ca_count);
+            cb->parents = cb_parents;
+            cb->put<int32_t>(0x54, cb_count);
+            if (orig_rows) orig_rows[0] = orig_row0;
+            world->rows = orig_rows;
+            world->put<int32_t>(0x88, orig_cols);
+            world->put<int32_t>(0x8c, orig_rowcount);
+            zdec::craters().touched.clear();
+            zdec::craters() = std::move(saved_state);
+            zdec::crater_hooks() = saved_hooks;
+        }
+    } guard{
+        zdec::crater_hooks(),
+        zdec::craters(),
+        world,
+        orig_row_ptr,
+        orig_first_row,
+        orig_cols,
+        orig_rows,
+        null_parent_node,
+        orig_np_parents,
+        orig_np_count,
+        cycle_a,
+        orig_ca_parents,
+        orig_ca_count,
+        cycle_b,
+        orig_cb_parents,
+        orig_cb_count,
+    };
+
+    if (use_fallback_grid) {
+        world->rows = fallback_rows;
+        world->put<int32_t>(0x88, 2);
+        world->put<int32_t>(0x8c, 2);
+    }
+    const int32_t cols = world->get<int32_t>(0x88);
+    const int32_t rows = world->get<int32_t>(0x8c);
+    const int32_t nested_x = (cols > 1) ? 1 : 0;
+    const int32_t nested_z = (cols > 1) ? 0 : 1;
+
+    zcls::object3d_add_child(world_node, direct_child);
+    zcls::object3d_add_child(fixture_node, nested_parent);
+    zcls::object3d_add_child(nested_parent, nested_child);
+    zcls::object3d_add_child(world_node, neg_idx_node);
+    zcls::object3d_add_child(world_node, oob_idx_node);
+
+    null_parent_node->parents = null_parent_slot;
+    null_parent_node->put<int32_t>(0x54, 1);
+    cycle_a->parents = cycle_a_parents;
+    cycle_a->put<int32_t>(0x54, 1);
+    cycle_b->parents = cycle_b_parents;
+    cycle_b->put<int32_t>(0x54, 1);
+
+    direct_child->put<int32_t>(0x4c, 0);
+    direct_child->put<int32_t>(0x50, 0);
+    nested_child->put<int32_t>(0x4c, nested_x);
+    nested_child->put<int32_t>(0x50, nested_z);
+    orphan_node->put<int32_t>(0x4c, 0);
+    orphan_node->put<int32_t>(0x50, 0);
+    null_parent_node->put<int32_t>(0x4c, 0);
+    null_parent_node->put<int32_t>(0x50, 0);
+    cycle_a->put<int32_t>(0x4c, 0);
+    cycle_a->put<int32_t>(0x50, 0);
+    neg_idx_node->put<int32_t>(0x4c, -1);
+    neg_idx_node->put<int32_t>(0x50, 0);
+    oob_idx_node->put<int32_t>(0x4c, cols);
+    oob_idx_node->put<int32_t>(0x50, rows);
+
+    zdec::crater_hooks().restore_node = [](zcls::Node *) -> bool {
+        ++restore_calls;
+        return true;
+    };
+
+    world->rows[0][0].raw[0x39] = 7;
+    world->rows[nested_z][nested_x].raw[0x39] = 9;
+
+    zdec::craters().touched.clear();
+    zdec::craters().touched.insert(direct_child);
+    zdec::craters().touched.insert(orphan_node);
+    zdec::craters().touched.insert(null_parent_node);
+    zdec::craters().touched.insert(cycle_a);
+    zdec::craters().touched.insert(neg_idx_node);
+    zdec::craters().touched.insert(oob_idx_node);
+    zdec::craters_reset();
+
+    EXPECT(restore_calls == 6);
+    EXPECT(world->rows[0][0].raw[0x39] == 0);
+    EXPECT(world->rows[nested_z][nested_x].raw[0x39] == 9);
+
+    world->rows[0][0].raw[0x39] = 5;
+    zdec::craters().touched.clear();
+    zdec::craters().touched.insert(nested_child);
+    zdec::craters_reset();
+
+    EXPECT(restore_calls == 7);
+    EXPECT(world->rows[0][0].raw[0x39] == 5);
+    EXPECT(world->rows[nested_z][nested_x].raw[0x39] == 0);
+
+    world->rows[0][0].raw[0x39] = 11;
+    zcls::Partition *saved_row0 = world->rows[0];
+    world->rows[0] = nullptr;
+    zdec::craters().touched.clear();
+    zdec::craters().touched.insert(direct_child);
+    zdec::craters_reset();
+    world->rows[0] = saved_row0;
+    EXPECT(restore_calls == 8);
+    EXPECT(world->rows[0][0].raw[0x39] == 11);
+
+    zcls::Partition **saved_rows = world->rows;
+    world->rows = nullptr;
+    zdec::craters_reset();
+    world->rows = saved_rows;
+    EXPECT(restore_calls == 9);
+    EXPECT(world->rows[0][0].raw[0x39] == 11);
+
+    // These synthetic coordinates were never registered through world_link.
+    // Restore the unlinked coordinates before native scene teardown uses them.
+    for (auto *node : {direct_child, nested_child, orphan_node, null_parent_node,
+                       cycle_a, neg_idx_node, oob_idx_node}) {
+        node->put<int32_t>(0x4c, -1);
+        node->put<int32_t>(0x50, -1);
+    }
 }
