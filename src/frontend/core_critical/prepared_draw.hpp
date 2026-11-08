@@ -19,6 +19,21 @@ matrix_rows(const ::platform::prepared::Matrix &matrix) {
   return result;
 }
 
+inline void apply_surface_material(mw34::vkscene::Draw &draw,
+                                   const PreparedBatchDraw &source,
+                                   bool enabled) {
+  draw.surface_parameters = {};
+  draw.surface_eye = {};
+  if (!enabled || !source.surface_material)
+    return;
+  const auto &material = *source.surface_material;
+  const auto eye = matrix_rows(
+      mw34::donor::product(source.world, mw34::donor::inverse(source.camera)));
+  draw.surface_parameters = {material.roughness, material.reflectivity,
+                             material.metallic, 1.f};
+  draw.surface_eye = {eye[3], eye[7], eye[11], 1.f};
+}
+
 struct PreparedVertex {
   std::array<float, 3> camera{}, normal{}, color{};
   float visibility{}, u{}, v{};

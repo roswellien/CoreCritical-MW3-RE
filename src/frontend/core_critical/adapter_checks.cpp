@@ -5,6 +5,7 @@
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zimage/zimg_texture.h"
+#include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
@@ -410,7 +411,9 @@ void check_quality(SDL_Window *window, sdlfe::RendererBackend backend,
 
 namespace {
 std::string surface_metadata(const char *asset, const char *material,
-                             uint64_t mesh_hash) {
+                             uint64_t mesh_hash, float roughness = .7f,
+                             float reflectivity = .04f, float metallic = 0.f,
+                             bool bound = true) {
   prepared_fixture::Bytes metadata;
   metadata.value.assign("BWSFM1", 6);
   metadata.value.append(2, char(0));
@@ -419,7 +422,7 @@ std::string surface_metadata(const char *asset, const char *material,
   metadata.u32(1);
   metadata.u32(0);
   metadata.u64(mesh_hash);
-  metadata.u32(0);
+  metadata.u32(bound ? 0 : mw34::materials::no_surface_material);
   auto text = [&](const char *value) {
     metadata.u32(uint32_t(std::strlen(value)));
     metadata.value += value;
@@ -448,9 +451,9 @@ std::string surface_metadata(const char *asset, const char *material,
   metadata.f32(1);
   metadata.f32(0);
   metadata.f32(0);
-  metadata.f32(.7f);
-  metadata.f32(.04f);
-  metadata.f32(0);
+  metadata.f32(roughness);
+  metadata.f32(reflectivity);
+  metadata.f32(metallic);
   return metadata.value;
 }
 
@@ -998,6 +1001,7 @@ void check_terrain_surface_normals(SDL_Window *window,
                 checked_renderer->asset_statistics().binding_rejected_mismatch >
                     before_old_epoch.binding_rejected_mismatch,
             "Deferred admission survived scene resource reset");
+#include "native_material_only_checks.inc"
   }
 }
 
@@ -1119,7 +1123,8 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     const auto mesh = ::platform::prepared::read_mesh(mesh_input);
     const auto hash = mw34::materials::compute_mesh_uv_hash(
         mesh.batches, 0, mesh.batches.size());
-    const auto metadata = surface_metadata("authored:close", "authored", hash);
+    const auto metadata = surface_metadata("authored:close", "authored", hash,
+                                           .7f, .04f, 0.f, false);
     const auto path = folder / "materials.bin";
     options.materials.push_back({"authored", "0", path.u8string()});
     auto wrong = metadata;
@@ -1180,7 +1185,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   context.cx = context.cy = 32;
   context.ordinary = true;
   auto frame = [&](cc_mw3_re::VulkanFrameRenderer *target = nullptr,
-                   bool read = true) {
+                   bool read = true, bool early = false) {
     auto *active = target ? target : renderer.get();
     RenderBinding active_binding;
     zvid::set_render3d(active);
@@ -1191,22 +1196,29 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     std::feclearexcept(FE_ALL_EXCEPT);
     std::feraiseexcept(FE_DIVBYZERO);
     const auto rounding = std::fegetround();
-    active->begin_model_draw(context);
+    if (early)
+      require(active->submit_prepared_geometry(context, {}) ==
+                  cc::geometry::Submission::submitted,
+              "Material response did not reach early prepared submission");
+    else
+      active->begin_model_draw(context);
     const auto flags = std::fetestexcept(FE_ALL_EXCEPT);
     const auto next_rounding = std::fegetround();
     std::fesetenv(&saved);
     require(flags == FE_DIVBYZERO && rounding == next_rounding,
             "Visual rendering changed the native floating-point environment");
-    require(active->replaces_model_geometry(),
-            "Prepared model did not admit its authored source");
-    const auto queued = zvid::transparent_queue().count;
-    require(zvid::queue_transparent(6, 3, nullptr) == nullptr &&
-                zvid::transparent_queue().count == queued,
-            "Deferred source geometry escaped its replacement scope");
-    quad(*active, 0, 64, .9f, 0xffff00ff);
-    active->end_model_draw();
-    require(!active->replaces_model_geometry(),
-            "Prepared model scope did not end");
+    if (!early) {
+      require(active->replaces_model_geometry(),
+              "Prepared model did not admit its authored source");
+      const auto queued = zvid::transparent_queue().count;
+      require(zvid::queue_transparent(6, 3, nullptr) == nullptr &&
+                  zvid::transparent_queue().count == queued,
+              "Deferred source geometry escaped its replacement scope");
+      quad(*active, 0, 64, .9f, 0xffff00ff);
+      active->end_model_draw();
+      require(!active->replaces_model_geometry(),
+              "Prepared model scope did not end");
+    }
     if (!read)
       return std::vector<uint32_t>{};
     std::vector<uint32_t> pixels;
@@ -1363,7 +1375,8 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                              bool absent = false, bool mirror = false,
                              bool degenerate = false,
                              std::array<float, 3> source_normal = {0, 0, 1},
-                             bool rank_one_uv = false) {
+                             bool rank_one_uv = false, float roughness = -1.f,
+                             float reflectivity = .04f, float metallic = 0.f) {
     zvid::set_render3d(nullptr);
     renderer.reset();
     std::ofstream(folder / "mesh.bin", std::ios::binary)
@@ -1374,7 +1387,9 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     const auto mesh = ::platform::prepared::read_mesh(geometry);
     const auto hash = mw34::materials::compute_mesh_uv_hash(
         mesh.batches, 0, mesh.batches.size());
-    const auto metadata = surface_metadata("authored:close", "authored", hash);
+    const auto metadata = surface_metadata(
+        "authored:close", "authored", hash, roughness >= 0 ? roughness : .7f,
+        reflectivity, metallic, roughness >= 0);
     std::ofstream(folder / "materials.bin", std::ios::binary)
         .write(metadata.data(), metadata.size());
     std::ofstream(folder / "normals.bin", std::ios::binary)
@@ -1383,8 +1398,77 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     renderer = make_check_renderer(window, backend, quality, options);
     renderer->set_viewport(0, 0, 64, 64);
     zvid::set_render3d(renderer.get());
-    return frame();
+    return frame(nullptr, true,
+                 options.geometry == "gpu" ||
+                     options.geometry == "cpu-reference");
   };
+  {
+    const auto azimuth = options.sun_azimuth;
+    const auto elevation = options.sun_elevation;
+    const auto focal_x = context.fx_near, focal_y = context.fy_near;
+    context.fx_near = context.fy_near = 2000;
+    options.sun_azimuth = "270";
+    options.sun_elevation = "1";
+    auto response = [&](const char *mode, float roughness,
+                        float reflectivity = .04f, float metallic = 1.f) {
+      return render_material(mode, 0xffff8080, false, false, false, {0, 0, -1},
+                             false, roughness, reflectivity, metallic);
+    };
+    const auto smooth = response("normal", .1f);
+    const auto medium = response("normal", .7f);
+    const auto rough = response("normal", 1.f);
+    require(smooth != medium && medium != rough && smooth != rough,
+            "BWSFM roughness did not change directional response");
+    auto profile = [](const std::vector<uint32_t> &pixels) {
+      int peak = 0, width = 0;
+      for (int x = 0; x < 64; ++x)
+        peak = std::max(peak, int(pixels[32 * 64 + x] & 255));
+      const float half = 77.f + float(peak - 77) * .5f;
+      for (int x = 0; x < 64; ++x)
+        width += float(pixels[32 * 64 + x] & 255) >= half;
+      return std::array<int, 2>{peak, width};
+    };
+    const auto smooth_profile = profile(smooth);
+    const auto medium_profile = profile(medium);
+    const auto rough_profile = profile(rough);
+    std::fprintf(stderr,
+                 "[BWSFM_PROFILE] roughness=.1 peak=%d width=%d; "
+                 ".7 peak=%d width=%d; 1 peak=%d width=%d\n",
+                 smooth_profile[0], smooth_profile[1], medium_profile[0],
+                 medium_profile[1], rough_profile[0], rough_profile[1]);
+    // The LDR smooth peak can saturate; the finite panel also bounds width.
+    require(smooth_profile[0] > medium_profile[0] &&
+                medium_profile[0] > rough_profile[0] &&
+                smooth_profile[1] < medium_profile[1] &&
+                medium_profile[1] <= rough_profile[1],
+            "BWSFM highlight peak/width did not track roughness");
+    require(response("flat", .1f) == response("flat", 1.f),
+            "BWSFM response leaked into flat mode");
+    require(response("off", .1f) == response("off", 1.f),
+            "BWSFM response leaked into off mode");
+    require(response("normal", .7f, 0.f, 0.f) !=
+                response("normal", .7f, .5f, 0.f),
+            "BWSFM reflectivity did not affect dielectric response");
+    require(response("normal", .7f, .04f, 0.f) != medium,
+            "BWSFM metallic did not affect response");
+    require(response("normal", -1.f) != medium,
+            "Missing BWSFM record enabled material response");
+    const auto geometry_mode = options.geometry;
+    for (const char *mode : {"gpu", "cpu-reference"}) {
+      options.geometry = mode;
+      const auto actual = response("normal", .7f);
+      for (size_t pixel = 0; pixel < actual.size(); ++pixel)
+        for (unsigned shift : {0U, 8U, 16U})
+          require(std::abs(int((actual[pixel] >> shift) & 255) -
+                           int((medium[pixel] >> shift) & 255)) <= 2,
+                  "BWSFM GPU/reference response differs from prepared TL");
+    }
+    options.geometry = geometry_mode;
+    options.sun_azimuth = azimuth;
+    options.sun_elevation = elevation;
+    context.fx_near = focal_x;
+    context.fy_near = focal_y;
+  }
   const auto flat = render_material("flat", 0xffd980d9);
   require(render_material("normal", 0xffff8080) == flat,
           "Neutral BWNRM2 map changed flat material lighting");

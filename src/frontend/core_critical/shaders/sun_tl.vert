@@ -19,6 +19,7 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 normal0; vec4 normal1; vec4 normal2;
  vec4 direction; vec4 sunColor; vec4 ambient;
  vec4 projection; vec4 extra;
+ vec4 surfaceParameters; vec4 surfaceEye;
  vec4 world0; vec4 world1; vec4 world2;
  vec4 shadow0; vec4 shadow1; vec4 shadow2; vec4 shadowParams;
  vec4 skyEye; vec4 skyTint; vec4 skyGlow; vec4 skyGrade; vec4 skyBlend;
