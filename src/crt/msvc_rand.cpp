@@ -19,4 +19,6 @@ int msvc_rand() {
   return static_cast<int>((g_seed >> 16) & 0x7fff);
 }
 
+uint32_t msvc_rand_state() { return g_seed; }
+
 }  // namespace crt

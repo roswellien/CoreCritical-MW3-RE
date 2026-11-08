@@ -1,5 +1,6 @@
 void present() override {
   flush();
+  complete_local_light_packets();
   if (!resident_width_) {
     return;
   }

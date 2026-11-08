@@ -47,8 +47,9 @@
 //   --cc-aa MODE         off, fxaa, ssaa2 or ssaa4 on the Core Critical backend
 //   --cc-af LEVEL        1, 2, 4, 8 or 16 on the Core Critical backend
 //   --verbose            list every unported function reached at exit
-#include "platform/prepared_visuals.h"
 #include "crt/msvc_rand.h"
+#include "light_invariance.h"
+#include "platform/prepared_visuals.h"
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -1130,6 +1131,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       if (frame_last) frame_ms.push_back(static_cast<double>(now - frame_last) * 1000.0 / SDL_GetPerformanceFrequency());
       frame_last = now;
     };
+    sdlfe::LightSimulationTrace light_trace(
+        a.frames, !a.mission.empty() && !a.fly && !a.shot_any);
     bool launch = false, launch_done = false;
     if (!a.mission.empty() && !a.fly) {
       // Through the original's states: the Load state loads the mission
@@ -1425,6 +1428,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
           zwep::pool_stats(&ps);
           std::printf("mw3: frame %d, %d shots in flight\n", shots, ps.flying);
         }
+        light_trace.sample(shots);
         if ((!a.shot.empty() && shots >= a.shot_frame) || (a.frames > 0 && shots >= a.frames)) launch_done = true;
       };
     } else if (!a.mission.empty()) {
@@ -1779,6 +1783,7 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
                     s.size(), sum / s.size(), at(0.5), at(0.95), at(0.99), s.back());
       }
     }
+    light_trace.finish();
     // Save the buffered clock samples after timing, never with per-frame I/O.
     if (benchmark_timestamps && !frame_timestamps.empty()) {
       auto* output = std::fopen(benchmark_timestamps,"w");
