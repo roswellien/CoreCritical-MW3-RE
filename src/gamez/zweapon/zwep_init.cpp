@@ -1,5 +1,6 @@
 #include "gamez/zweapon/zwep_init.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -104,11 +105,11 @@ void read_effect(Node* parent, Effect* e, const char* key) {
   // FIX (bug): each sound list has room for 4; the original writes on past
   // them into the next fields. No shipped weapon has more (docs/fixes.md).
   if (Node* n = zrdr::find(b, "SOUND")) {
-    e->sound_count = count(n) - 1;
+    e->sound_count = std::clamp(count(n) - 1, 0, 4);
     for (int i = 1; i < count(n) && i <= 4; ++i) e->sounds[i - 1] = sound(item(n, i).s);
   }
   if (Node* n = zrdr::find(b, "BOUNCE_SOUND")) {
-    e->bounce_sound_count = count(n) - 1;
+    e->bounce_sound_count = std::clamp(count(n) - 1, 0, 4);
     for (int i = 1; i < count(n) && i <= 4; ++i) e->bounce_sounds[i - 1] = sound(item(n, i).s);
   }
 }
@@ -157,6 +158,7 @@ int init(Handle world, const char* path, int32_t arg, TypeCallback callback) {
       d->flags |= kDetonateOnWater;
       d->index = index++;
       d->impacts = new Effect[soils.size()]();  // one per soil name known now (zmod::soil_names)
+      d->impact_count = static_cast<int32_t>(soils.size());
       Node* n = zrdr::find(bal, item(bal, k).s);
       if (n) {
         d->key = item(bal, k).s;
@@ -358,6 +360,7 @@ void shutdown(void (*per_def)(WeaponDef* def)) {
     if (per_def) per_def(&d);
     delete[] d.impacts;
     d.impacts = nullptr;
+    d.impact_count = 0;
     std::free(const_cast<char*>(d.desc));
     d.desc = nullptr;
     std::free(const_cast<char*>(d.military_name));

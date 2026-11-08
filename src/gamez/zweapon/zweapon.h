@@ -137,6 +137,11 @@ struct HitHooks {
 };
 HitHooks& hit_hooks();
 
+// Checked soil selection: maps legacy unset (-1/UINT32_MAX) and out-of-range soils
+// to kSoilDefault, while preserving valid extended soil IDs within the definition's allocation.
+int32_t checked_soil(const WeaponDef* def, int32_t soil);
+int32_t soil_of(const WeaponDef* def, Handle material);
+
 float beam_damage(WeaponDef* def, Beam* b);                                        // 0x00583020
 uint32_t apply_damage(WeaponDef* def, Handle owner, const Vec3f3* from, HitRecord* hit, float damage,
                       Handle anim);                                                // 0x00583480

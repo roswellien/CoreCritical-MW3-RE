@@ -121,6 +121,8 @@ struct WeaponDef {             // 0x1f4
   float terrain_height = 0;            // +0x1e8  height over the ground the homing last saw (shared by all shots)
   DefCallback callback = nullptr;      // +0x1ec
   mech3::WeaponType* type = nullptr;   // +0x1f0  the MW3 side
+  // Port-owned extent of impacts; later soil-table changes cannot enlarge it.
+  int32_t impact_count = kSoilCount;
 };
 
 struct Vec3f3 {

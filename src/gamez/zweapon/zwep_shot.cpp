@@ -89,7 +89,6 @@ void play_at(Handle anim, const Vec3f3& p) {  // 0x00508aa0 at a point, unturned
   const float a[9] = {p.x, p.y, p.z, 0, 0, 0, 0, 0, 0};
   if (hit_hooks().effect) hit_hooks().effect(anim, a);
 }
-int32_t soil_of(Handle material) { return material && hit_hooks().soil ? hit_hooks().soil(material) : 0; }
 int32_t segment(const Vec3f3* from, const Vec3f3* to, HitList* out) {
   return g_rh.segment ? g_rh.segment(from, to, out) : 1;
 }
@@ -657,15 +656,17 @@ HitRecord* pick(WeaponDef* def, int32_t status, HitList* list) {
   if (status != 0) return nullptr;
   HitRecord* r = &list->rec[list->count];
   if (def->flags & kDetonateOnWater) return r;
-  if (soil_of(r->material) != kSoilWater) return r;
-  if (Handle a = def->impacts[kSoilWater].animation) play_at(a, r->point);
+  if (soil_of(def, r->material) != kSoilWater) return r;
+  if (def->impacts && def->impact_count > kSoilWater && def->impacts[kSoilWater].animation) {
+    play_at(def->impacts[kSoilWater].animation, r->point);
+  }
   const int n = list->total;
   if (n == 1) return nullptr;
   HitRecord* best = nullptr;
   double bd = HUGE_VAL;
   for (int i = list->count == 0 ? 1 : 0; i < n; ++i) {
     HitRecord* q = &list->rec[i];
-    if (soil_of(q->material) != kSoilWater && q != r && bd > static_cast<double>(q->distance_sq)) {
+    if (soil_of(def, q->material) != kSoilWater && q != r && bd > static_cast<double>(q->distance_sq)) {
       bd = q->distance_sq;
       list->count = static_cast<uint8_t>(i);
       best = q;
@@ -731,7 +732,7 @@ void mine_idle(WeaponDef* def, Projectile* p) {
 // quarter of its speed until it is slower than 0.2, then lies down (scaled to
 // 5); a thing with a damage handler sets it off.
 void mine_land(WeaponDef* def, Projectile* p, HitRecord* rec, Vec3f3* to) {
-  const int32_t soil = soil_of(rec->material);
+  const int32_t soil = soil_of(def, rec->material);
   HitList list;
   // The bounce length is the last one used (halved): a record at the shot's
   // own position passes (2) without one (none the first time: here 0).
@@ -857,7 +858,9 @@ void pool_stats(PoolStats* out) {
 
 // Mech3.exe 1.2 @ 0x00582f60: one of the soil's impact sounds, at random.
 void sound(WeaponDef* def, HitRecord* rec, int32_t soil, float volume) {
-  const Effect& e = def->impacts[soil];
+  if (!def || !def->impacts || !rec) return;
+  const int32_t checked = checked_soil(def, soil);
+  const Effect& e = def->impacts[checked];
   if (!e.sound_count) return;
   const uint32_t i = (static_cast<uint32_t>(crt::msvc_rand()) * static_cast<uint32_t>(e.sound_count)) >> 15;
   if (g_rh.sound_at) g_rh.sound_at(e.sounds[i], &rec->point, volume);
@@ -865,7 +868,9 @@ void sound(WeaponDef* def, HitRecord* rec, int32_t soil, float volume) {
 
 // Mech3.exe 1.2 @ 0x00582fc0: likewise a bounce sound.
 void bounce_sound(WeaponDef* def, HitRecord* rec, int32_t soil, float volume) {
-  const Effect& e = def->impacts[soil];
+  if (!def || !def->impacts || !rec) return;
+  const int32_t checked = checked_soil(def, soil);
+  const Effect& e = def->impacts[checked];
   if (!e.bounce_sound_count) return;
   const uint32_t i = (static_cast<uint32_t>(crt::msvc_rand()) * static_cast<uint32_t>(e.bounce_sound_count)) >> 15;
   if (g_rh.sound_at) g_rh.sound_at(e.bounce_sounds[i], &rec->point, volume);
