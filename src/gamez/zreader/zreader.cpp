@@ -1,4 +1,5 @@
 #include "gamez/zreader/zreader.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -6,6 +7,8 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <memory>
+#include <stdexcept>
 
 #include "crt/msvc_math.h"
 #include "crt/msvc_string.h"
@@ -659,6 +662,8 @@ LoadHook g_load_hook = nullptr;
 void set_load_hook(LoadHook hook) { g_load_hook = hook; }
 MissingHook g_missing_hook = nullptr;
 void set_missing_hook(MissingHook hook) { g_missing_hook = hook; }
+ComposeHook g_compose_hook = nullptr;
+void set_compose_hook(ComposeHook hook) { g_compose_hook = hook; }
 
 // Ours (docs/modding.md): a mod's loose text copy of an archive's entry, in
 // the mod at the archive's own folder (zbd\c1\world.zrd for zbd\c1\reader.zbd's
@@ -681,6 +686,9 @@ std::string mod_loose(const zutl_zar::Archive& a, const char* name) {
 Node* load(const char* path) {
   crt::msvc_splitpath_name(path, g_fname, g_ext);
   std::strncat(g_fname, g_ext, sizeof g_fname - std::strlen(g_fname) - 1);
+  // Keep the entry identity stable when composition loads another resource.
+  const std::string entry = g_fname;
+  auto composed = [&](Node* root) { return g_compose_hook ? g_compose_hook(entry.c_str(), root) : root; };
   // find_in_archives, keeping which archive answered (for the load hook)
   for (size_t i = 0; g_state.archives_created && i < g_state.archives.size(); ++i) {
     zutl_zar::Archive* a = g_state.archives[i];
@@ -688,11 +696,21 @@ Node* load(const char* path) {
     std::FILE* f = zutl_zar::seek(*a, zutl_zar::find(*a, g_fname), &length);
     if (!f) continue;
     if (const std::string loose = mod_loose(*a, g_fname); !loose.empty()) {
-      if (std::FILE* t = std::fopen(loose.c_str(), "rb")) {
-        Node* root = parse_text(t);
-        std::fclose(t);
-        if (root) return root;
+      zutl::verify_managed_read(loose);
+      std::unique_ptr<std::FILE, decltype(&std::fclose)> text(
+          platform::file_open(std::filesystem::u8path(loose), "rb"), &std::fclose);
+      if (text) {
+        Node *root = parse_text(text.get());
+        const bool read_failed = std::ferror(text.get()) != 0;
+        text.reset();
+        if (root && !read_failed)
+          return composed(root);
+        if (root)
+          free_node(root);
       }
+      if (zutl::mounts().strict_reads)
+        throw std::runtime_error("Required managed loose reader could not be opened or parsed: " +
+                                 loose);
     }
     Node* root = new_nodes(List, 1);
     g_entry_end = std::ftell(f) + static_cast<long>(length), g_depth = 0, g_broken = false;
@@ -701,16 +719,16 @@ Node* load(const char* path) {
     if (g_broken) {  // ours: a broken entry is read as no entry, said once
       free_node(root);
       std::printf("mw3: %s: its entry %s is broken (a count, type or nesting it cannot hold), not read\n", a->path, g_fname);
-      return g_missing_hook ? g_missing_hook(g_fname) : nullptr;
+      return composed(g_missing_hook ? g_missing_hook(entry.c_str()) : nullptr);
     }
     if (g_load_hook) g_load_hook(a->path, g_fname, root);
-    return root;
+    return composed(root);
   }
   std::FILE* f = zutl::open(path, "rb");
-  if (!f) return g_missing_hook ? g_missing_hook(g_fname) : nullptr;
+  if (!f) return composed(g_missing_hook ? g_missing_hook(entry.c_str()) : nullptr);
   Node* root = parse_text(f);
   std::fclose(f);
-  return root;
+  return composed(root);
 }
 
 }  // namespace zrdr

@@ -1,5 +1,7 @@
 #include "mech3/veh_basic_object.h"
 
+#include "mech3/content_registry.h"
+#include "mech3/content_world.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -215,16 +217,32 @@ void MotionAnim::set(const char* name) {
 }
 
 // Mech3.exe 1.2 @ 0x004ac320 (ECX the controls, EDX the type).
+Handle VehBasicHooks::node_in_tree(Handle node, const char* name) {
+  return zcls::node_find_in_tree(static_cast<zcls::Node*>(node), name);
+}
 BasicVehicle* vehicle_create(Handle ctl, const char* type, const char* name) {
+  if (active_content() && content_index("vehicle", type) >= 0 && !ctl)
+    cc::content::fail("vehicle-controller", "A managed vehicle requires an implemented native AI controller; parked/player controls are unavailable", {}, type);
   VehBasicHooks& h = *g_hooks;
   Handle node = h.node_named(name);
+  if (!node) node = create_content_vehicle_node(type, name);
   if (!node) {
-    const Handle model = h.node_named(type);
+    Handle model = h.node_named(type);
+    if (!model) model = h.node_named(content_vehicle_model(type));
     if (!model) return nullptr;
     node = h.node_clone(model);
     if (!node) return nullptr;
     h.node_set_name(node, name);
     h.world_add(node);
+  }
+  if (content_mission_actor_required(name)) {
+    for (const auto& group : {std::make_pair("support", 4), std::make_pair("collide", 12)})
+      for (int i = 0; i < group.second; ++i) {
+        char point[20];
+        std::snprintf(point, sizeof point, "%s%02d", group.first, i);
+        if (!h.node_in_tree(node, point))
+          cc::content::fail("vehicle-geometry", "Required managed vehicle lacks an authored support or collision point", {}, content_selected_mission(), point);
+      }
   }
   auto* v = new BasicVehicle;
   h.on_new(0xfc, v);
@@ -428,10 +446,10 @@ void vehicle_destroy(BasicVehicle& v) {
   v.controls = nullptr;
   if (node) {
     h.node_detach(node);
-    h.world_remove(node);
-    h.node_free(node);
     h.entity_set_node(v, nullptr);
     h.entity_unregister(v);
+    h.world_remove(node);
+    h.node_free(node);
   }
   if (v.motion.anim) {  // 0x004addb0 -> 0x004ade70
     h.anim_stop(v.motion.anim);

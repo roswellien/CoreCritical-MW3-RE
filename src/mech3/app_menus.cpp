@@ -19,6 +19,9 @@
 #include "gamez/zimage/zimg_library.h"
 #include "mech3/app.h"
 #include "mech3/app_engine.h"
+#include "mech3/content_campaign.h"
+#include "mech3/content_world.h"
+#include "mech3/content_registry.h"
 #include "mech3/mission_map.h"
 #include "mech3/app_mech.h"
 #include "mech3/app_states.h"
@@ -686,6 +689,12 @@ void GameEngine::pilot_record_mission(Handle p, int32_t a) {
 bool program_pilot_file(int op) {
   Pilot* p = current_pilot();
   if (!p) return false;
+  if (active_content()) {
+    if (op == 2) return p->save();
+    if (op == 0 || op == 1) return true;
+    p->close();
+    return true;
+  }
   switch (op) {
     case 0: return p->open();
     case 1: return p->write_header();
@@ -747,17 +756,23 @@ int32_t campaign_dir(const CampaignGame& c) {
 // launch's stand-in filled from it; a debug start keeps its own). A
 // campaign's, training's, Instant Action's and multiplayer's missions.
 void GameEngine::load_state_enter() {
-  if (launch_.active && launch_.auto_launch) return;
+  if (launch_.active && launch_.auto_launch &&
+      (!launch_.keep_pilot || consume_content_initial_launch())) return;
   Pilot* p = current_pilot();
   Game* g = p ? p->current : nullptr;
   Launch l;
   l.auto_launch = false;
   l.keep_pilot = true;
   l.type = g ? g->type() : -1;
+  const auto* managed_campaign=dynamic_cast<const CampaignGame*>(g);
+  const auto* managed_multiplayer=dynamic_cast<const MultiplayerGame*>(g);
+  if((!managed_campaign || managed_campaign->content_mission.empty()) &&
+     (!managed_multiplayer || managed_multiplayer->content_multiplayer_mission.empty()))clear_content_mission_selection();
   if (auto* c = dynamic_cast<CampaignGame*>(g)) {
     l.number = c->mission_number();
     l.op = c->operation();
     l.index = campaign_dir(*c);
+    content_campaign_launch(*c, l.index, l.number, l.op);
   } else if (auto* t = dynamic_cast<TrainingGame*>(g)) {
     l.number = t->mission;
     l.index = 5;  // t1
@@ -780,6 +795,9 @@ void GameEngine::load_state_enter() {
     l.number = m->x94;
     l.op = 0;
     l.multi = m;
+    if (!m->content_multiplayer_mission.empty()) {
+      start_content_mission(m->content_multiplayer_mission);
+    }
   } else {
     l.index = -1;
   }
@@ -801,7 +819,7 @@ void GameEngine::load_state_enter() {
 // scenario_desc: the game's vt+0x04 .. +0x10). A debug start has no pilot's
 // game: the one its launch names answers (ours).
 const char* GameEngine::game_text(int32_t slot) {
-  Pilot* p = launch_.auto_launch ? nullptr : current_pilot();
+  Pilot* p = launch_.keep_pilot ? current_pilot() : nullptr;
   if (Game* g = p ? p->current : nullptr) return g->game_text(slot);
   if (launch_.action) return launch_.action->game_text(slot);
   if (launch_.index == 5) return TrainingGame::text_of(slot, launch_.number);  // t1
@@ -830,6 +848,8 @@ uint8_t GameEngine::briefing_has_movie() { return app().fmv(); }
 // at its first mission. Nothing shows until zFMV is ported.
 void GameEngine::briefing_play_movie(uint32_t state) {
   if (state != states().load.addr()) return Engine::briefing_play_movie(state);
+  const auto* selected=current_pilot()?current_pilot()->campaign():nullptr;
+  if(selected && !selected->content_mission.empty())return;
   const Handle m = states().load.movie_;
   const Handle game = pilot_game(pilot());
   char name[32];
@@ -1186,7 +1206,11 @@ void GameEngine::lab_dfn_skins(Handle dfn, std::vector<LabSkin>* out) {
   out->clear();
   const auto* d = static_cast<const MechDfn*>(object_of(dfn));
   if (!d || !d->skins) return;
-  for (Skin* s : d->skins->skins) out->push_back({handle_of(s), s && s->name, s && s->name ? s->name : ""});
+  for (size_t i = 0; i < d->skins->skins.size(); ++i) {
+    Skin* s = d->skins->skins[i];
+    const char* label = content_skin_label(d->index, static_cast<int32_t>(i));
+    out->push_back({handle_of(s), s && s->name, label ? label : s && s->name ? s->name : ""});
+  }
 }
 Handle GameEngine::lab_dfn_configs(Handle dfn) {
   const auto* d = static_cast<const MechDfn*>(object_of(dfn));

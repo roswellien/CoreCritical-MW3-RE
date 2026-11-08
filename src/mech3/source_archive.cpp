@@ -1,4 +1,5 @@
 #include "mech3/source_archive.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -73,7 +74,13 @@ archive* reader(bool iso_only) {
 bool ArchiveReader::open_file(const std::string& path) {
   impl_.reset(new Impl);
   impl_->a = reader(false);
-  if (archive_read_open_filename(impl_->a, path.c_str(), 1 << 16) != ARCHIVE_OK) {
+#if defined(_WIN32)
+  const auto opened = archive_read_open_filename_w(
+      impl_->a, platform::host_path(std::filesystem::u8path(path)).c_str(), 1 << 16);
+#else
+  const auto opened = archive_read_open_filename(impl_->a, path.c_str(), 1 << 16);
+#endif
+  if (opened != ARCHIVE_OK) {
     error_ = archive_error_string(impl_->a) ? archive_error_string(impl_->a) : "cannot open";
     return false;
   }
@@ -155,6 +162,8 @@ bool ArchiveReader::next(Entry* out) {
   std::replace(out->path.begin(), out->path.end(), '\\', '/');
   out->size = archive_entry_size_is_set(e) ? archive_entry_size(e) : -1;
   out->dir = archive_entry_filetype(e) == AE_IFDIR;
+  out->special = archive_entry_symlink(e) || archive_entry_hardlink(e) ||
+                 (!out->dir && archive_entry_filetype(e) != AE_IFREG);
   impl_->in_entry = true;
   return true;
 }

@@ -9,6 +9,7 @@
 
 #include "gamez/zgame/unported.h"
 #include "mech3/mech_config.h"
+#include "content/content.h"
 
 // The pilot (docs/pilot.md): the player's record at [0x0060861c], one per
 // file in pilots\, and the five games it owns (the campaign saves, Instant
@@ -52,6 +53,8 @@ class PilotHooks : public zgame::Unported {
   // 0x005a8a70: zSave writes the world into a saved game (`kind` 2 here);
   // the ported zSave by default.
   virtual void save_world(const char* path, int32_t kind);
+  // Managed saves publish inventory only after a successful native snapshot.
+  virtual bool save_world_checked(const char* path, int32_t kind);
   // 0x005a8a90: zSave reads a saved game into the world; false when it did not.
   virtual bool load_world(const char* path, int32_t kind);
   // 0x004ac150: the game's message box; 1 for yes.
@@ -181,7 +184,7 @@ class CampaignGame : public Game {
   void save() override;              // vt+0x18  0x00434990
   void load() override;              // vt+0x1c  0x00434ae0
   int32_t type() const override { return kCampaign; }  // 0x00499270
-  const char* game_text(int32_t slot) override { return slot == 0x0c ? name() : nullptr; }
+  const char* game_text(int32_t slot) override;
   const char* name();                // vt+0x0c  0x00434900: "Op N, Mission M" (into text)
   const char* path();                // vt+0x14  0x00434980: its saved game (into text)
   const char* path_for(const char* pilot_name);  // 0x00434950
@@ -208,6 +211,13 @@ class CampaignGame : public Game {
   int32_t x9c = 0;                   // +0x9c  the mission's lancemates (0x00435230; never set by the constructors)
   int32_t mission = 0;               // +0xa0
   int32_t campaign = 0;              // +0xa4  the operation, 1..4
+  // Host-owned identities and graph state. Legacy binary fields retain their
+  // format without a profile. Managed records append a versioned run trailer;
+  // the expected run also binds the checked bundle and its filename.
+  std::string content_campaign, content_mission, content_run;
+  cc::content::Json content_state = cc::content::Json::object();
+  bool content_placeholder = false;
+  bool content_checkpoint_expected = false;
   int32_t a8 = 3;                    // +0xa8  set to +0xac on loading
   int32_t ac = 3;                    // +0xac
   uint8_t b0 = 0;                    // +0xb0
@@ -326,13 +336,15 @@ class MultiplayerGame : public Game {
   void load() override;              // vt+0x1c  0x004357d0
   int32_t type() const override { return kMultiplayer; }  // 0x0041ec30
   GameSlot* slot_at(int32_t i) { return i == 0 ? &slot : nullptr; }  // vt+0x34  0x00437800
-  int32_t world() const { return x94 << 8 | x90; }  // vt+0x4c (0x00437940) << 8 | vt+0x54 (0x00437910)
+  int32_t world() const;
   // The briefing's texts: "M U L T I P L A Y E R" (vt+0x04, 0x00437920), the
   // world's name (vt+0x08, 0x00436500: a shipped one's message, an add-on's
   // mpinfo.zrd db_name, else "Unknown"), the session's name (vt+0x0c,
   // 0x00437950), the players as START listed them (vt+0x10, 0x00437930).
   const char* game_text(int32_t slot) override;
   void set_roster(const std::vector<std::string>& lines);  // 0x00436470: each line and "\n"
+  void set_world(int32_t value);
+  std::string content_multiplayer_mission;
 
   // The lobby's records by player or team id (0x00495b10..0x00495d20 on
   // +0x48 and +0x54), and their lists emptied (0x00495a50, 0x00495c60,

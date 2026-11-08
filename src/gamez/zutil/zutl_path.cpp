@@ -1,4 +1,5 @@
 #include "gamez/zutil/zutl_path.h"
+#include "platform/host_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -25,20 +26,9 @@ std::string bank_path_key(const std::string &path) {
   return key;
 }
 
-std::FILE *open_host_file(const std::string &path, const char *mode) {
-#if defined(_WIN32)
-  std::wstring wide_mode;
-  for (const char *c = mode; *c; ++c)
-    wide_mode += static_cast<wchar_t>(*c);
-  return _wfopen(std::filesystem::u8path(path).c_str(), wide_mode.c_str());
-#else
-  return std::fopen(path.c_str(), mode);
-#endif
-}
-
 bool is_file(const std::string& p) {
   std::error_code ec;
-  return std::filesystem::is_regular_file(std::filesystem::u8path(p), ec);
+  return std::filesystem::is_regular_file(platform::host_path(std::filesystem::u8path(p)), ec);
 }
 
 std::string join(const std::string& dir, const std::string& rel) {
@@ -61,6 +51,18 @@ std::string in_mount(const std::string& dir, const std::string& rel) {
 std::string upper(std::string s) {
   for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   return s;
+}
+std::string managed(const std::string& path) {
+  std::string key = path;
+  for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (!mod_may_serve(key)) return {};
+  std::vector<std::string> candidates{key};
+  for (const auto& directory : g_mounts.managed_search) candidates.push_back(join(directory, key));
+  for (const auto& candidate : candidates) {
+    const auto found = g_mounts.managed_files.find(candidate);
+    if (found != g_mounts.managed_files.end()) return found->second;
+  }
+  return {};
 }
 
 // FindFirstFileA's wildcards, without case.
@@ -157,7 +159,8 @@ std::string any_case(const std::string& root, const std::string& rel) {
   std::string at = root;
   std::error_code ec;
   // The root by its letters too: the game's own mounts are named ("<install>/zbd/c1").
-  if (!at.empty() && !std::filesystem::exists(at, ec)) {
+  if (!at.empty() &&
+      !std::filesystem::exists(platform::host_path(std::filesystem::u8path(at)), ec)) {
     const size_t slash = at.rfind('/');
     if (slash == std::string::npos || slash == 0) return {};
     at = any_case(at.substr(0, slash), at.substr(slash + 1));
@@ -169,18 +172,23 @@ std::string any_case(const std::string& root, const std::string& rel) {
     i = end + 1;
     if (part.empty()) continue;
     std::string next = join(at, part);
-    if (!std::filesystem::exists(next, ec)) {
+    if (!std::filesystem::exists(platform::host_path(std::filesystem::u8path(next)), ec)) {
       next.clear();
-      for (std::filesystem::directory_iterator it(at.empty() ? "." : at, ec), last; !ec && it != last; it.increment(ec))
-        if (same_letters(it->path().filename().string(), part)) {
-          next = join(at, it->path().filename().string());
+      for (std::filesystem::directory_iterator
+               it(platform::host_path(std::filesystem::u8path(at.empty() ? "." : at)), ec),
+           last;
+           !ec && it != last; it.increment(ec))
+        if (same_letters(it->path().filename().u8string(), part)) {
+          next = join(at, it->path().filename().u8string());
           break;
         }
       if (next.empty()) return {};
     }
     at = next;
   }
-  return std::filesystem::exists(at, ec) ? at : std::string{};
+  return std::filesystem::exists(platform::host_path(std::filesystem::u8path(at)), ec)
+             ? at
+             : std::string{};
 }
 
 Mounts& mounts() { return g_mounts; }
@@ -191,6 +199,18 @@ void mount_mod(const std::string& dir) {
   g_mounts.read.push_back(dir);
   g_mounts.mods.push_back(dir);
 }
+void set_managed_search(const std::vector<std::string>& directories) {
+  g_mounts.managed_search.clear();
+  for (auto directory : directories) {
+    for (char& c : directory) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (directory.empty() || directory.front() == '/' || directory.find(':') != std::string::npos ||
+        directory.find('\\') != std::string::npos || directory.find("..") != std::string::npos || !mod_may_serve(directory + "/")) continue;
+    g_mounts.managed_search.push_back(std::move(directory));
+  }
+}
+void verify_managed_read(const std::string& host_path) {
+  if (g_mounts.managed_read_check) g_mounts.managed_read_check(host_path);
+}
 bool is_mod_dir(const std::string& dir) {
   for (const std::string& m : g_mounts.mods)
     if (dir == m || (dir.size() > m.size() && dir.compare(0, m.size(), m) == 0 && dir[m.size()] == '/')) return true;
@@ -200,7 +220,7 @@ bool mod_may_serve(const std::string& host_path) {
   std::string p;
   for (char c : host_path) p += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   while (p.rfind("./", 0) == 0) p.erase(0, 2);
-  for (const char* dir : {"pilots/", "configs/", "keys/", "saves/", "patch12/", "mods/"})
+  for (const char* dir : {"pilots/", "configs/", "keys/", "saves/", "patch12/", "mods/", "profiles/"})
     if (p.rfind(dir, 0) == 0) return false;
   for (const char* file : {"mw3.cfg", "settings.reg", "movie-shapes.txt"})
     if (p == file) return false;
@@ -208,7 +228,9 @@ bool mod_may_serve(const std::string& host_path) {
 }
 std::string find_in_mods(const std::string& host_path) {
   if (host_path.empty() || absolute(host_path) || outside(host_path) || !mod_may_serve(host_path)) return {};
+  if (const auto selected = managed(host_path); !selected.empty()) return selected;
   for (const std::string& m : g_mounts.mods) {
+    if (std::find(g_mounts.managed_roots.begin(), g_mounts.managed_roots.end(), m) != g_mounts.managed_roots.end()) continue;
     const std::string p = in_mount(m, host_path);
     if (!p.empty()) return p;
   }
@@ -272,8 +294,10 @@ std::string find(const char* path) {
     }
   }
 
-  if (absolute(h) || (g_mounts.read.empty() && g_mounts.write.empty())) return is_file(h) ? h : std::string{};
+  if (absolute(h)) return is_file(h) ? h : std::string{};
+  if (g_mounts.read.empty() && g_mounts.write.empty() && g_mounts.managed_files.empty()) return !g_mounts.strict_reads && is_file(h) ? h : std::string{};
   if (!g_mounts.write.empty() && is_file(join(g_mounts.write, h))) return join(g_mounts.write, h);  // what the game wrote
+  if (const auto selected = managed(h); !selected.empty()) return selected;
   for (const std::string& dir : g_mounts.read) {
     if (!g_mounts.mods.empty() && is_mod_dir(dir) && !mod_may_serve(h)) continue;
     // Native texture libraries ask for bare names through mission mounts.
@@ -291,7 +315,7 @@ std::string find(const char* path) {
     const std::string p = in_mount(dir, h);
     if (!p.empty()) return p;
   }
-  return is_file(h) ? h : std::string{};  // relative to the working directory, as before
+  return !g_mounts.strict_reads && is_file(h) ? h : std::string{};  // stock/tools keep the historical working directory fallback
 }
 
 std::vector<std::string> find_all(const char* path) {
@@ -303,6 +327,7 @@ std::vector<std::string> find_all(const char* path) {
     return out;
   }
   if (!g_mounts.write.empty() && is_file(join(g_mounts.write, h))) out.push_back(join(g_mounts.write, h));
+  if (const auto selected = managed(h); !selected.empty()) out.push_back(selected);
   for (const std::string& dir : g_mounts.read) {
     if (!g_mounts.mods.empty() && is_mod_dir(dir) && !mod_may_serve(h)) continue;
     const std::string p = in_mount(dir, h);
@@ -328,11 +353,12 @@ std::FILE* open(const char* path, const char* mode) {
     if (p.empty()) return nullptr;
     std::error_code ec;
     std::filesystem::create_directories(
-        std::filesystem::u8path(p).parent_path(), ec);
-    return open_host_file(p, m.c_str());
+        platform::host_path(std::filesystem::u8path(p).parent_path()), ec);
+    return platform::file_open(std::filesystem::u8path(p), m.c_str());
   }
   const std::string p = find(path);
-  return p.empty() ? nullptr : open_host_file(p, m.c_str());
+  if (!p.empty()) verify_managed_read(p);
+  return p.empty() ? nullptr : platform::file_open(std::filesystem::u8path(p), m.c_str());
 }
 
 std::vector<std::string> list(const char* pattern) {
@@ -344,16 +370,29 @@ std::vector<std::string> list(const char* pattern) {
   std::vector<std::string> roots;
   if (!g_mounts.write.empty()) roots.push_back(g_mounts.write);
   roots.insert(roots.end(), g_mounts.read.begin(), g_mounts.read.end());
-  if (roots.empty()) roots.push_back(".");
+  if (roots.empty() && !g_mounts.strict_reads) roots.push_back(".");
   std::vector<std::string> out;
+  for (const auto& selected : g_mounts.managed_files) {
+    const auto split = selected.first.rfind('/');
+    const auto parent = split == std::string::npos ? std::string() : selected.first.substr(0, split);
+    const auto name = split == std::string::npos ? selected.first : selected.first.substr(split + 1);
+    bool at = same_letters(parent, dir);
+    for (const auto& prefix : g_mounts.managed_search) if (same_letters(parent, dir.empty() ? prefix : join(prefix, dir))) at = true;
+    if (at && match(pat.c_str(), name.c_str()) && mod_may_serve(selected.first) && is_file(selected.second) &&
+        std::none_of(out.begin(), out.end(), [&](const std::string& item) { return same_letters(item, name); })) out.push_back(name);
+  }
   for (const std::string& r : roots) {
     if (!g_mounts.mods.empty() && is_mod_dir(r) && !mod_may_serve(dir + "/")) continue;
     std::error_code ec;
     const std::string at = any_case(r, dir);  // the folder's case too, as the names'
-    for (std::filesystem::directory_iterator it(at.empty() ? join(r, dir) : at, ec), end; !ec && it != end; it.increment(ec)) {
+    for (std::filesystem::directory_iterator
+             it(platform::host_path(std::filesystem::u8path(at.empty() ? join(r, dir) : at)), ec),
+         end;
+         !ec && it != end; it.increment(ec)) {
       if (!it->is_regular_file(ec)) continue;
       std::string name;
-      if (!to_game(it->path().filename().string(), &name)) continue;  // no name the game could open
+      if (!to_game(it->path().filename().u8string(), &name))
+        continue; // no name the game could open
       if (!match(pat.c_str(), name.c_str())) continue;
       const std::string u = upper(name);
       if (std::none_of(out.begin(), out.end(), [&](const std::string& o) { return upper(o) == u; }))

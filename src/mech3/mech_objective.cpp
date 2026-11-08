@@ -588,7 +588,7 @@ std::unique_ptr<Objective> parse_condition(Node* slot, ObjectiveHooks& h) {
     int32_t w = -1;
     Node* v = zrdr::find(args, "weapon");
     if (v && v->type == zrdr::List && count_of(v) > 1 && v->list[1].type == zrdr::String) w = weapon_index(v->list[1].s);
-    if (w <= -1 || w >= 0x25) return nullptr;  // (the exe's 37: the plain PPC is the rebuild's)
+    if (w <= -1 || w >= weapon_count()) return nullptr;
     obj = std::make_unique<WeaponObjective>(is(type, "weapon_fire") ? Objective::kWeaponFire : Objective::kWeaponSelect,
                                             sh.desc, w);
   } else if (is(type, "weapon_group_select")) {

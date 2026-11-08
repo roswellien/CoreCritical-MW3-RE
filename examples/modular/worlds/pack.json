@@ -1,0 +1,490 @@
+{
+  "schema_version": 3,
+  "id": "demo-worlds",
+  "name": "Authored Modular Proving Ground",
+  "version": "1.0.0",
+  "game_id": "mw3",
+  "description": "Project-authored terrain, reusable collision props, missions and native AI route; no original world archive.",
+  "dependencies": [
+    {
+      "id": "demo-vehicles",
+      "version": "1.0.0"
+    },
+    {
+      "id": "demo-assets",
+      "version": "1.0.0"
+    }
+  ],
+  "required_capabilities": {
+    "world.authored": 1,
+    "world_asset.static_mesh": 1,
+    "mission.native": 1,
+    "world.hierarchy": 1
+  },
+  "definitions": [
+    {
+      "kind": "world",
+      "id": "demo-worlds:proving_ground",
+      "behavior": "authored",
+      "data": {
+        "name": "Proving Ground",
+        "bounds": [
+          -128.0,
+          128.0,
+          256.0,
+          256.0
+        ],
+        "spawn": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "heightfield": {
+          "origin": [
+            -128.0,
+            0.0,
+            128.0
+          ],
+          "spacing": 64.0,
+          "height_scale": 1.0,
+          "heights": [
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "color": [
+            0.35,
+            0.45,
+            0.24
+          ],
+          "soil": 3
+        },
+        "instances": [
+          {
+            "id": "beacon",
+            "asset": "demo-assets:marker",
+            "translation": [
+              0.0,
+              0.0,
+              -24.0
+            ]
+          },
+          {
+            "id": "cover",
+            "asset": "demo-assets:marker",
+            "translation": [
+              32.0,
+              0.0,
+              -32.0
+            ],
+            "scale": [
+              4.0,
+              1.0,
+              1.0
+            ],
+            "color": [
+              0.5,
+              0.5,
+              0.55
+            ]
+          },
+          {
+            "id": "bridge",
+            "asset": "demo-assets:bridge",
+            "translation": [
+              0.0,
+              0.0,
+              -72.0
+            ]
+          },
+          {
+            "id": "gantry",
+            "asset": "demo-assets:gantry",
+            "translation": [
+              -24.0,
+              0.0,
+              -24.0
+            ],
+            "soil": 5
+          }
+        ]
+      }
+    },
+    {
+      "kind": "world",
+      "id": "demo-worlds:proving_ground_variant",
+      "behavior": "authored",
+      "data": {
+        "name": "Proving Ground Variant",
+        "base": "demo-worlds:proving_ground",
+        "instances": [
+          {
+            "id": "cover",
+            "translation": [
+              -32.0,
+              0.0,
+              -32.0
+            ],
+            "color": [
+              0.7,
+              0.4,
+              0.2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "kind": "mission",
+      "id": "demo-worlds:landing",
+      "behavior": "native",
+      "data": {
+        "name": "Landing and Data Recovery",
+        "world": "demo-worlds:proving_ground",
+        "number": 1,
+        "objective_ids": {
+          "landing": [
+            "primary",
+            0
+          ],
+          "intel": [
+            "secondary",
+            0
+          ]
+        },
+        "nav_points": [
+          {
+            "id": "Start",
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "links": [
+              "Able"
+            ]
+          },
+          {
+            "id": "Able",
+            "position": [
+              0.0,
+              0.0,
+              -48.0
+            ],
+            "links": [
+              "Start"
+            ]
+          }
+        ],
+        "actors": [
+          {
+            "id": "01",
+            "vehicle": "demo-vehicles:truck",
+            "position": [
+              32.0,
+              0.0,
+              24.0
+            ],
+            "yaw": 0.0,
+            "team": 1,
+            "net": 1
+          }
+        ],
+        "readers": {
+          "objectives.zrd": [
+            "m1",
+            [
+              "desc",
+              "Secure the landing zone and recover the active beacon data.",
+              "primary",
+              [
+                "reach_area",
+                [
+                  "point",
+                  [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "radius",
+                  12.0,
+                  "desc",
+                  "Establish the landing zone"
+                ]
+              ],
+              "secondary",
+              [
+                "node_change",
+                [
+                  "node",
+                  [
+                    "gantry",
+                    "Gantry",
+                    "Control",
+                    "Beacon"
+                  ],
+                  "state",
+                  "active",
+                  "desc",
+                  "Recover beacon telemetry"
+                ]
+              ]
+            ]
+          ],
+          "net_01.zrd": [
+            "version",
+            [
+              106
+            ],
+            "name",
+            [
+              "net_01"
+            ],
+            "node_00",
+            [
+              12,
+              [
+                32.0,
+                0.0,
+                24.0
+              ],
+              [
+                1
+              ],
+              "speed",
+              [
+                1,
+                4.0
+              ]
+            ],
+            "node_01",
+            [
+              12,
+              [
+                64.0,
+                0.0,
+                24.0
+              ],
+              [
+                0
+              ],
+              "speed",
+              [
+                1,
+                4.0
+              ]
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "mission",
+      "id": "demo-worlds:extraction",
+      "behavior": "native",
+      "data": {
+        "name": "Extraction Variant",
+        "world": "demo-worlds:proving_ground_variant",
+        "number": 1,
+        "objective_ids": {
+          "extract": [
+            "primary",
+            0
+          ]
+        },
+        "nav_points": [
+          {
+            "id": "Start",
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "links": []
+          }
+        ],
+        "readers": {
+          "objectives.zrd": [
+            "m1",
+            [
+              "desc",
+              "The recovered telemetry changes the next deployment.",
+              "primary",
+              [
+                "reach_area",
+                [
+                  "point",
+                  [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "radius",
+                  12.0,
+                  "desc",
+                  "Complete extraction at the safe landing point"
+                ]
+              ]
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "kind": "mission",
+      "id": "demo-worlds:arena",
+      "behavior": "native",
+      "data": {
+        "name": "Modular Proving Ground Arena",
+        "world": "demo-worlds:proving_ground",
+        "number": 3,
+        "multiplayer": true,
+        "spawn_points": [
+          [
+            -60.0,
+            0.0,
+            60.0
+          ],
+          [
+            -20.0,
+            0.0,
+            60.0
+          ],
+          [
+            20.0,
+            0.0,
+            60.0
+          ],
+          [
+            60.0,
+            0.0,
+            60.0
+          ],
+          [
+            -60.0,
+            0.0,
+            20.0
+          ],
+          [
+            -20.0,
+            0.0,
+            20.0
+          ],
+          [
+            20.0,
+            0.0,
+            20.0
+          ],
+          [
+            60.0,
+            0.0,
+            20.0
+          ],
+          [
+            -60.0,
+            0.0,
+            -20.0
+          ],
+          [
+            -20.0,
+            0.0,
+            -20.0
+          ],
+          [
+            20.0,
+            0.0,
+            -20.0
+          ],
+          [
+            60.0,
+            0.0,
+            -20.0
+          ],
+          [
+            -60.0,
+            0.0,
+            -60.0
+          ],
+          [
+            -20.0,
+            0.0,
+            -60.0
+          ],
+          [
+            20.0,
+            0.0,
+            -60.0
+          ],
+          [
+            60.0,
+            0.0,
+            -60.0
+          ]
+        ],
+        "readers": {
+          "objectives.zrd": [
+            "mp3",
+            [
+              "desc",
+              "Multiplayer proving ground",
+              "primary",
+              [
+                "valve_change",
+                [
+                  "valve",
+                  "arena_end",
+                  "value",
+                  1,
+                  "desc",
+                  "Match in progress"
+                ]
+              ]
+            ]
+          ],
+          "valves.zrd": [
+            "arena_end",
+            [
+              "value",
+              [
+                0
+              ]
+            ]
+          ]
+        }
+      }
+    }
+  ],
+  "files": {}
+}

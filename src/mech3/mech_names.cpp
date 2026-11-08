@@ -7,6 +7,7 @@
 #include "crt/msvc_string.h"
 #include "gamez/zutil/zfix.h"
 #include "mech3/weapon.h"
+#include "mech3/content_registry.h"
 
 namespace mech3 {
 
@@ -55,13 +56,21 @@ const char* const kWeapons[38] = {
 }  // namespace
 
 // Mech3.exe 1.2 @ 0x00484720
-int32_t mech_tech(int32_t mech) { return mech >= 0 && mech < 19 ? kMechs[mech].tech : kAnyTech; }
+int32_t mech_tech(int32_t mech) {
+  if (const auto* d = content_definition("chassis", mech)) return d->data.at("tech").get<int32_t>();
+  return mech >= 0 && mech < 19 ? kMechs[mech].tech : kAnyTech;
+}
 
 // Mech3.exe 1.2 @ 0x00484650
-const char* mech_name(int32_t mech) { return mech >= 0 && mech < 19 ? kMechs[mech].name : "notmech"; }
+const char* mech_name(int32_t mech) {
+  if (const auto* d = content_definition("chassis", mech)) return d->data.at("name").get_ref<const std::string&>().c_str();
+  return mech >= 0 && mech < 19 ? kMechs[mech].name : "notmech";
+}
 
 // Mech3.exe 1.2 @ 0x004845f0. The table's +0x24 is the entry's own index.
 int32_t mech_index(const char* name) {
+  if (!name) return -1;
+  if (active_content()) return content_index("chassis", name);
   for (int32_t i = 0; i < 19; ++i)
     if (crt::msvc_stricmp(name, kMechs[i].name) == 0) return i;
   return -1;
@@ -77,6 +86,8 @@ int32_t tech_id(const char* name) {
 
 // Mech3.exe 1.2 @ 0x004849a0. Case-sensitive; the exe crashes on null.
 int32_t equip_kind(const char* name) {
+  if (!name) return -1;
+  if (active_content()) return content_index("equipment", name);
   for (int32_t i = 0; i < 15; ++i)
     if (std::strcmp(name, kEquipment[i]) == 0) return i;
   return -1;
@@ -85,6 +96,10 @@ int32_t equip_kind(const char* name) {
 // Mech3.exe 1.2 @ 0x004848a0. Any case.
 int32_t weapon_index(const char* name) {
   if (!name || !*name) return -1;
+  if (active_content()) {
+    const int32_t index = content_index("weapon", name);
+    return index == 37 && !zfix::options().bugs ? -1 : index;
+  }
   for (int32_t i = 0; i < weapon_count(); ++i)
     if (crt::msvc_stricmp(kWeapons[i], name) == 0) return i;
   return -1;
@@ -133,6 +148,7 @@ const WeaponLab* weapon_lab(int32_t weapon) { return g_weapon_lab ? g_weapon_lab
 
 // Mech3.exe 1.2 @ 0x00484960: autocannons, Gauss, LB-X, missiles, MGUN and NARC.
 bool weapon_uses_ammo(int32_t weapon) {
+  if (const auto* d = content_definition("weapon", weapon)) return d->data.at("uses_ammo").get<bool>();
   static const uint8_t kUses[38] = {1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1,
                                     1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0};
   return weapon >= 0 && weapon < weapon_count() && kUses[weapon];
@@ -141,6 +157,10 @@ bool weapon_uses_ammo(int32_t weapon) {
 // Mech3.exe 1.2 @ 0x00484940: the techs a weapon comes in (1 Clan, 2 Inner
 // Sphere); the table's 37 rows (TAG none), the plain PPC's row 2 (see below).
 bool weapon_has_tech(int32_t weapon, int32_t tech) {
+  if (const auto* d = content_definition("weapon", weapon)) {
+    if (weapon == 37 && !zfix::options().bugs) return false;
+    return (d->data.at("tech").get<int32_t>() & tech) != 0;
+  }
   static const uint8_t kTech[38] = {2, 2, 2, 2, 1, 1, 3, 3, 3, 3, 2, 2, 2, 1, 1, 3, 1, 3, 3,
                                     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 0, 1, 3, 1, 1, 2};
   return weapon >= 0 && weapon < weapon_count() && (kTech[weapon] & tech) != 0;
@@ -149,6 +169,7 @@ bool weapon_has_tech(int32_t weapon, int32_t tech) {
 // Mech3.exe 1.2 @ 0x00484a00: the techs an equipment kind comes in (1 Clan,
 // 2 Inner Sphere); BAP, C3 and its slave Inner Sphere only.
 bool equip_has_tech(int32_t kind, int32_t tech) {
+  if (const auto* d = content_definition("equipment", kind)) return (d->data.at("tech").get<int32_t>() & tech) != 0;
   static const uint8_t kTech[15] = {3, 3, 3, 3, 2, 3, 2, 2, 3, 3, 3, 3, 3, 3, 3};
   return kind >= 0 && kind < 15 && (kTech[kind] & tech) != 0;
 }
@@ -163,30 +184,44 @@ int32_t weapon_name_message(int32_t weapon) {
                                    0x2e1, 0x2e2, 0x2e3, 0x2e4, 0x2e5, 0x0e6, 0x2e7, 0x2e8, 0x2e9, 0x2ea,
                                    0x2eb, 0x2ec, 0x2ed, 0x2ef, 0x2f0, 0x2f1, 0x2f2, 0x2f3, 0x2f4, 0x2f5,
                                    0x2f6, 0x2f7, 0x2f8, 0x2f9, 0x2fa, 0x2fb, 0x2fc, 0x2fd};
-  return weapon >= 0 && weapon < weapon_count() ? kIds[weapon] : -1;
+  return weapon >= 0 && weapon < 38 && (weapon != 37 || zfix::options().bugs) ? kIds[weapon] : -1;
 }
 
 // Mech3.exe 1.2 @ 0x00484980: 0x1c6.. by equipment kind.
 int32_t equip_name_message(int32_t kind) { return kind >= 0 && kind < 15 ? 0x1c6 + kind : -1; }
 
 // Mech3.exe 1.2 @ 0x00484900
-const char* weapon_name(int32_t weapon) { return weapon >= 0 && weapon < weapon_count() ? kWeapons[weapon] : "noweapon"; }
+const char* weapon_name(int32_t weapon) {
+  if (weapon == 37 && !zfix::options().bugs) return "noweapon";
+  if (const auto* d = content_definition("weapon", weapon)) return d->data.at("name").get_ref<const std::string&>().c_str();
+  return weapon >= 0 && weapon < weapon_count() ? kWeapons[weapon] : "noweapon";
+}
 
 // The exe's table has 37 weapons. FIX (bug): weapons.zrd defines a plain PPC and
 // Mech3Msg.dll names it (0x2fd, after the last weapon's 0x2fc), but its row was
 // never added, so the mech lab could not offer it. Its row would be message
 // 0x2fd, family 3 (as ERPPC), tech 2 (Inner Sphere, as the plain lasers), no ammo.
-int32_t weapon_count() { return zfix::options().bugs ? 38 : 37; }
+int32_t weapon_count() {
+  if (auto content = active_content()) {
+    const int32_t count = static_cast<int32_t>(content->of_kind("weapon").size());
+    return count == 38 && !zfix::options().bugs ? 37 : count;
+  }
+  return zfix::options().bugs ? 38 : 37;
+}
 
 // Mech3.exe 1.2 @ 0x00484700. Not the tonnage's class: the Annihilator is 2,
 // the Mad Cat, Owens and Puma 1 (discoveries.md).
 int32_t weight_class(int32_t mech) {
+  if (const auto* d = content_definition("chassis", mech)) return d->data.at("weight_class").get<int32_t>();
   static const int32_t kClass[19] = {2, 2, 1, 1, 2, 2, 3, 0, 0, 1, 2, 1, 1, 1, 1, 3, 3, 2, 2};  // 0x005e60a4
   return mech >= 0 && mech < 19 ? kClass[mech] : 0;
 }
 
 // Mech3.exe 1.2 @ 0x004846e0
-float max_mass(int32_t mech) { return mech >= 0 && mech < 19 ? kMaxMass[mech] : 10.0f; }
+float max_mass(int32_t mech) {
+  if (const auto* d = content_definition("chassis", mech)) return d->data.at("mass").get<float>();
+  return mech >= 0 && mech < 19 ? kMaxMass[mech] : 10.0f;
+}
 
 // Mech3.exe 1.2 @ 0x00485400 (and 0x00485430, 0x00485460, 0x00485490): the
 // BattleTech table, a row per 5 t from 10 t (tonnage, CT, side torso, arm, leg).
@@ -197,11 +232,12 @@ int32_t internal_points(int32_t mech, int32_t column) {
       {60, 20, 14, 10, 14}, {65, 21, 15, 10, 15}, {70, 22, 15, 11, 15}, {75, 23, 16, 12, 16}, {80, 25, 17, 13, 17},
       {85, 27, 18, 14, 18}, {90, 29, 19, 15, 19}, {95, 30, 20, 16, 20}, {100, 31, 21, 17, 21}};
   const int32_t row = static_cast<int32_t>(max_mass(mech)) / 5 - 2;  // every roster mass is in the table
-  return kTable[row][column];
+  return row >= 0 && row < 19 && column >= 0 && column < 5 ? kTable[row][column] : 0;
 }
 
 // Mech3.exe 1.2 @ 0x00484aa0. Kinds as in equip_kind; tech 1 is Clan.
 float equip_weight(int32_t kind, int32_t tech) {
+  if (const auto* d = content_definition("equipment", kind)) return d->data.at("weight")[tech == kClan ? 0 : 1].get<float>();
   const bool clan = tech == kClan;
   switch (kind) {
     case 0: case 1: case 2: case 11: return 0.5f;
@@ -217,6 +253,7 @@ float equip_weight(int32_t kind, int32_t tech) {
 
 // Mech3.exe 1.2 @ 0x00484a20
 int32_t equip_slots(int32_t kind, int32_t tech) {
+  if (const auto* d = content_definition("equipment", kind)) return d->data.at("slots")[tech == kClan ? 0 : 1].get<int32_t>();
   const int32_t other = tech != kClan;
   switch (kind) {
     case 0: case 3: case 9: case 11: case 13: case 14: return 1;
@@ -254,7 +291,9 @@ float weapon_weight(int32_t weapon, int32_t tech) {
     return w ? w->weight[tech != kClan] : 0.0f;
   }
   const WeaponType* t = weapon_type(weapon_name(weapon));
-  return t ? t->lab[tech != kClan].tons : 0.0f;
+  if (t) return t->lab[tech != kClan].tons;
+  const WeaponLab* lab = content_weapon_lab(weapon);
+  return lab ? lab->weight[tech != kClan] : 0.0f;
 }
 
 // Mech3.exe 1.2 @ 0x00484bc0
@@ -264,7 +303,9 @@ float ammo_weight(int32_t weapon) {
     return w ? w->ammo_weight : 0.0f;
   }
   const WeaponType* t = weapon_type(weapon_name(weapon));
-  return t ? t->tons_per_round : 0.0f;
+  if (t) return t->tons_per_round;
+  const WeaponLab* lab = content_weapon_lab(weapon);
+  return lab ? lab->ammo_weight : 0.0f;
 }
 
 // Mech3.exe 1.2 @ 0x00484c00
@@ -274,7 +315,10 @@ int32_t weapon_slots(int32_t weapon, int32_t tech, bool none) {
     return w && !none ? w->slots[tech != kClan] : 0;
   }
   const WeaponType* t = weapon_type(weapon_name(weapon));
-  return t && !none ? t->lab[tech != kClan].slots : 0;
+  if (t) return !none ? t->lab[tech != kClan].slots : 0;
+  if (none) return 0;
+  const WeaponLab* lab = content_weapon_lab(weapon);
+  return lab ? lab->slots[tech != kClan] : 0;
 }
 
 // Mech3.exe 1.2 @ 0x00484d70

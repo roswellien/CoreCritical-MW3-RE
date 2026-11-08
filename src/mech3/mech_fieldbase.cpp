@@ -1,5 +1,6 @@
 #include "mech3/mech_fieldbase.h"
 
+#include "mech3/content_registry.h"
 #include <cmath>
 
 #include "gamez/zclass/cls_node.h"
@@ -172,8 +173,11 @@ void field_bases_mission_start() {
 
 // Mech3.exe 1.2 @ 0x004589d0
 FieldBase* field_base_create(Handle ctl, const char* type, const char* name) {
+  if (active_content() && content_index("vehicle", type) >= 0 && !ctl)
+    cc::content::fail("vehicle-controller", "A managed field base requires an implemented native AI controller", {}, type);
   VehBasicHooks& vh = veh_basic_hooks();
-  const Handle model = vh.node_named(type);
+  Handle model = vh.node_named(type);
+  if (!model) model = vh.node_named(content_vehicle_model(type));
   if (!model) return nullptr;
   const Handle node = vh.node_clone(model);
   if (!node) return nullptr;

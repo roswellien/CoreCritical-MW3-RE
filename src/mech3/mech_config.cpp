@@ -1,10 +1,14 @@
 #include "mech3/mech_config.h"
+#include "mech3/content_registry.h"
+#include "mech3/content_state.h"
+#include "mech3/content_network.h"
 
 #include <algorithm>
 #include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 #include "crt/msvc_math.h"
 #include "gamez/zclass/cls_node.h"
@@ -122,11 +126,11 @@ bool Config::remove(ConfigItem* item, int32_t n) {
   if (found->count < 0) found->count = 0;
   if (found->kind() == 3) {
     const auto* q = static_cast<const EquipmentItem*>(found);
-    if (q->equipment == 1 || q->equipment == 2) {
+    if (equipment_family(q->equipment) == 1 || equipment_family(q->equipment) == 2) {
       armor_tons = static_cast<float>(q->count) * 0.5f;  // [0x005c36d4]
-      ferro = q->equipment == 2;
+      ferro = equipment_family(q->equipment) == 2;
       armor_tech = ferro ? q->tech : 3;
-    } else if (q->equipment == 9 || q->equipment == 10) {
+    } else if (equipment_family(q->equipment) == 9 || equipment_family(q->equipment) == 10) {
       sinks -= n;
     }
   }
@@ -236,8 +240,9 @@ int32_t WeaponItem::location(int32_t m) const {
 // Mech3.exe 1.2 @ 0x00471fb0. Armor (kinds 1, 2) is one item counting half
 // tons, merged with a matching one; each heat sink is its own item.
 EquipmentItem* Config::add_equipment(int32_t kind, int32_t tech, int32_t n) {
-  const bool is_ferro = kind == 2;
-  if (is_ferro || kind == 1) {
+  const int32_t family = equipment_family(kind);
+  const bool is_ferro = family == 2;
+  if (is_ferro || family == 1) {
     if (!is_ferro) tech = kAnyTech;
     EquipmentItem probe;
     probe.equipment = kind, probe.tech = tech;
@@ -262,12 +267,12 @@ EquipmentItem* Config::add_equipment(int32_t kind, int32_t tech, int32_t n) {
     modified = 1;
     return found;
   }
-  if (kind == 9 || kind == 10) {
+  if (family == 9 || family == 10) {
     EquipmentItem* last = nullptr;
     for (int32_t i = 0; i < n; ++i) items.push_back(last = new_equipment(1, kind, tech));
     sinks = sink_items() + 10;
     sink_tech = tech;
-    double_sinks = kind == 10;
+    double_sinks = family == 10;
     modified = 1;
     return last;
   }
@@ -282,7 +287,7 @@ int32_t Config::sink_items() const {
   int32_t n = 0;
   for (const ConfigItem* i : items)
     if (i->kind() == 3) {
-      const int32_t k = static_cast<const EquipmentItem*>(i)->equipment;
+      const int32_t k = equipment_family(static_cast<const EquipmentItem*>(i)->equipment);
       if (k == 9 || k == 10) ++n;
     }
   return n;
@@ -292,7 +297,7 @@ int32_t Config::sink_items() const {
 int32_t Config::weapon_count() const {
   int32_t n = 0;
   for (const ConfigItem* i : items)
-    if (i->kind() == 1 || (i->kind() == 3 && static_cast<const EquipmentItem*>(i)->equipment == 13)) ++n;
+    if (i->kind() == 1 || (i->kind() == 3 && equipment_family(static_cast<const EquipmentItem*>(i)->equipment) == 13)) ++n;
   return n;
 }
 
@@ -303,7 +308,7 @@ int32_t Config::equipment_count(int32_t kind, int32_t tech) const {
   for (const ConfigItem* i : items) {
     if (i->kind() != 3) continue;
     const auto* q = static_cast<const EquipmentItem*>(i);
-    if (q->equipment == kind && (tech == 3 || tech == q->tech)) ++n;
+    if (equipment_family(q->equipment) == kind && (tech == 3 || tech == q->tech)) ++n;
   }
   return n;
 }
@@ -474,7 +479,7 @@ double EngineItem::weight(int32_t n) const {
 int32_t WeaponItem::slots() const { return weapon_slots(weapon, tech, false); }
 
 // Mech3.exe 1.2 @ 0x004731c0. Ferro-fibrous keeps its slot count in the group field.
-int32_t EquipmentItem::slots() const { return equipment == 2 ? group : equip_slots(equipment, tech); }
+int32_t EquipmentItem::slots() const { return equipment_family(equipment) == 2 ? group : equip_slots(equipment, tech); }
 
 // Mech3.exe 1.2 @ 0x00471540. A kind above 4 makes no item and reads nothing
 // more, so the rest of the file is read out of step. FIX (bug): the exe goes
@@ -508,6 +513,7 @@ void Config::load_items(std::FILE* f) { load_item_list(items, f); }
 // (0x00432ff0) and sinks (0x004243c0) loads are inline here.
 bool Config::load(std::FILE* f) {
   if (!f) return false;
+  if (load_managed_config(f, *this)) return true;
   std::free(name);
   name = nullptr;
   zutl_zar::read_string(f, &name);
@@ -542,6 +548,7 @@ uint32_t Config::save_items(std::FILE* f) const { return save_item_list(items, b
 // the entry's length, harmless since loading reads on from the entry's start.
 uint32_t Config::save(std::FILE* f) {
   if (!f) return 0;
+  if (active_content()) return save_managed_config(f,*this);
   crc = checksum();
   zutl_zar::write_string(f, name);
   uint32_t n = save_items(f);
@@ -562,6 +569,7 @@ uint32_t Config::save(std::FILE* f) {
 // weapon, ammo or equipment item; the length (low 16 bits of word 0) counts
 // only those, the buffer every item.
 std::vector<uint32_t> Config::packed() const {
+  if (managed_gameplay_session()) return pack_managed_config(*this);
   std::vector<uint32_t> p((static_cast<size_t>(item_count()) * 0xc + 0x34) / 4 + 1, 0);
   p[0] = static_cast<uint32_t>(mech) << 16;
   uint32_t w = (player_made != 0) | (endo_steel != 0) << 1 | (static_cast<uint32_t>(engine) & 0x7f) << 2 |
@@ -594,6 +602,12 @@ std::vector<uint32_t> Config::packed() const {
 // sets them again as it is added. FIX (bug): no items are read past `words`
 // (the exe reads as many as the size word says).
 Config* Config::unpacked(const uint32_t* p, size_t words) {
+  if (!p||!words) return nullptr;
+  if ((p[0]&0xffff0000u)==content_loadout_marker) {
+    try {return unpack_managed_config(p,words);}
+    catch (const std::exception& error) {std::fprintf(stderr,"mw3 content network: %s\n",error.what());return nullptr;}
+  }
+  if (words<13) return nullptr;
   const uint32_t n = ((p[0] & 0xffff) - 0x34) / 0xc;
   auto* c = new Config(static_cast<int32_t>(p[0] >> 16), "remote config");
   c->player_made = 1;
@@ -684,13 +698,13 @@ namespace {
 bool in_category(const ConfigItem* i, int32_t what) {
   const int k = i->kind();
   switch (what) {
-    case 2: return k == 3 && i->id() == 11;  // jump jets
-    case 4: return k == 3 && (i->id() == 1 || i->id() == 2);  // armor (Weight(4) itself reads +0x2c)
+    case 2: return k == 3 && equipment_family(i->id()) == 11;  // jump jets
+    case 4: return k == 3 && (equipment_family(i->id()) == 1 || equipment_family(i->id()) == 2);  // armor (Weight(4) itself reads +0x2c)
     case 5: return k == 1;
     case 6: return k == 2;
     case 7: {
       if (k != 3) return false;
-      const int32_t e = i->id();
+      const int32_t e = equipment_family(i->id());
       return e != 11 && e != 9 && e != 10 && e != 1 && e != 2;
     }
     default: return false;
@@ -715,6 +729,20 @@ double Config::weight(int32_t what) const {
     }
     case 0: return engine_weight_x87(Engine{engine, xl});
     case 1: {
+      if (active_content()) {
+        double total = 0;
+        int32_t explicit_sinks = 0;
+        for (const ConfigItem* item : items) {
+          if (item->kind() != 3) continue;
+          const int32_t family = equipment_family(item->id());
+          if (family == 9 || family == 10) {
+            total += item->weight(-1);
+            explicit_sinks += item->count;
+          }
+        }
+        const int32_t built_in = std::max(0, sinks - 10 - explicit_sinks);
+        return total + static_cast<double>(equip_weight(double_sinks ? 10 : 9, sink_tech)) * built_in;
+      }
       const double w = static_cast<double>(equip_weight(double_sinks ? 10 : 9, sink_tech)) * (sinks - 10);
       return w < 0.0 ? 0.0 : w;
     }
@@ -744,7 +772,7 @@ bool Config::unplaced_item() const {
 int32_t Config::jump_jets() const {
   int32_t n = 0;
   for (const ConfigItem* i : items)
-    if (i->kind() == 3 && static_cast<const EquipmentItem*>(i)->equipment == 11) ++n;
+    if (i->kind() == 3 && equipment_family(static_cast<const EquipmentItem*>(i)->equipment) == 11) ++n;
   return n;
 }
 
@@ -771,12 +799,9 @@ bool Config::validate(bool check_crc) const {
 // Mech3.exe 1.2 @ 0x004242a0
 Config* Config::from_file(const char* n, std::FILE* f) {
   if (!n || !f) return nullptr;
-  auto* c = new Config(-1, n);
-  if (!c->load(f)) {
-    delete c;
-    return nullptr;
-  }
-  return c;
+  auto c = std::make_unique<Config>(-1, n);
+  if (!c->load(f)) return nullptr;
+  return c.release();
 }
 
 // Mech3.exe 1.2 @ 0x00424b70. Entry 0 is skipped by position whatever it is,

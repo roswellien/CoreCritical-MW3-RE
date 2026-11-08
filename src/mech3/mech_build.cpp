@@ -16,6 +16,7 @@
 #include "mech3/mech_data.h"
 #include "mech3/mech_move.h"
 #include "mech3/mech_names.h"
+#include "mech3/content_registry.h"
 #include "mech3/mech_reader.h"
 #include "mech3/mech_skin.h"
 #include "mech3/mech_skis.h"
@@ -51,6 +52,15 @@ T* made(uint32_t size, T* p) {
 void set_mech_build_hooks(MechBuildHooks* h) { g_hooks = h ? h : &g_default_hooks; }
 MechBuildHooks& mech_build_hooks() { return *g_hooks; }
 MechBuildState& mech_build_state() { return g_state; }
+void MechBuildHooks::node_content_chassis(Handle root, const char* id) {
+  if (!root) return;
+  std::vector<zcls::Node*> pending{zn(root)};
+  for (size_t i = 0; i < pending.size(); ++i) {
+    zcls::Node* node = pending[i];
+    node->content_chassis_id = id ? id : "";
+    for (int32_t j = 0; j < node->child_count(); ++j) pending.push_back(node->children[j]);
+  }
+}
 
 // --- the hooks' defaults: the ports, or zClass's nodes ------------------------
 const MechDfn* MechBuildHooks::dfn(int32_t roster) { return mech_dfn(roster); }
@@ -600,6 +610,7 @@ Handle mech_data_model(MechData& p, Handle* decals) {
   *decals = nullptr;
   const Handle node = h.node_clone(h.node_child(p.model, 0));
   if (!node) return nullptr;
+  if (const auto* content = content_definition("chassis", p.roster)) h.node_content_chassis(node, content->id.c_str());
   if (SkinSet* skins = h.dfn(p.roster)->skins) *decals = h.skins_decals(skins, node);
   return node;
 }
@@ -609,7 +620,9 @@ Handle mech_data_lod(MechData& p, int32_t i) {
   MechBuildHooks& h = *g_hooks;
   Handle n = p.models[i];
   n = n ? h.node_child(h.node_child(n, 0), 0) : nullptr;
-  return n ? h.node_clone(n) : nullptr;
+  Handle copy = n ? h.node_clone(n) : nullptr;
+  if (const auto* content = content_definition("chassis", p.roster)) h.node_content_chassis(copy, content->id.c_str());
+  return copy;
 }
 
 // Mech3.exe 1.2 @ 0x00432950

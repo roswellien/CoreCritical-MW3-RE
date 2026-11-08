@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "id": "demo-assets",
+      "version": "1.0.0",
+      "path": "assets"
+    },
+    {
+      "id": "demo-equipment",
+      "version": "1.0.0",
+      "path": "demo-equipment"
+    },
+    {
+      "id": "demo-weapons",
+      "version": "1.0.0",
+      "path": "demo-weapons"
+    },
+    {
+      "id": "demo-chassis",
+      "version": "1.0.0",
+      "path": "demo-chassis"
+    },
+    {
+      "id": "demo-paint",
+      "version": "1.0.0",
+      "path": "demo-paint"
+    },
+    {
+      "id": "demo-vehicles",
+      "version": "1.0.0",
+      "path": "demo-vehicles"
+    },
+    {
+      "id": "demo-worlds",
+      "version": "1.0.0",
+      "path": "worlds"
+    },
+    {
+      "id": "demo-campaigns",
+      "version": "1.0.0",
+      "path": "campaigns"
+    },
+    {
+      "id": "demo-hud",
+      "version": "1.0.0",
+      "path": "demo-hud"
+    }
+  ],
+  "selections": {
+    "campaign": "demo-campaigns:field_trial",
+    "hud": "demo-hud:compact"
+  }
+}

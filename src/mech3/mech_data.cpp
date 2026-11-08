@@ -15,6 +15,7 @@
 #include "mech3/mech_config.h"
 #include "mech3/mech_lib.h"
 #include "mech3/mech_names.h"
+#include "mech3/content_registry.h"
 #include "mech3/mech_reader.h"
 
 #pragma STDC FP_CONTRACT OFF
@@ -116,7 +117,9 @@ MechData* mech_data_new(int32_t roster) {
   g_hooks->on_new(0x234, p);
   mech_data_init(*p);
   p->roster = roster;
-  p->name = mech_name(roster);
+  // This name addresses the donor's motions, sounds and model components.
+  // Gameplay identity remains the independent registered roster handle.
+  p->name = chassis_model_name(roster);
   mech_data_load(*p);
   g_hooks->on_new(0xc, nullptr);  // the list's node
   g_cache.push_back(p);

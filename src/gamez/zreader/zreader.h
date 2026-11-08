@@ -108,4 +108,10 @@ void set_load_hook(LoadHook hook);
 using MissingHook = Node* (*)(const char* entry);
 void set_missing_hook(MissingHook hook);
 
+// Managed content composes every successful read and missing-reader result,
+// after the existing archive-only compatibility patch hook. Ownership passes
+// through this callback; replacing a tree requires freeing the old one.
+using ComposeHook = Node* (*)(const char* entry, Node* root);
+void set_compose_hook(ComposeHook hook);
+
 }  // namespace zrdr

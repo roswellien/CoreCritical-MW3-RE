@@ -40,7 +40,15 @@ struct Node {                      // 0xd4-byte pool slot
   // entry so optional visuals can bind without changing game-facing raw fields.
   std::shared_ptr<const SourceAsset> source_asset;
   bool source_asset_root = false;
+  // Per-instance identity; shared donor library assets never receive this tag.
+  std::string content_chassis_id;
   uint32_t source_model_vertices = 0;
+  // Host-only managed path semantics. Allocation resets these tags, and native
+  // tree copies preserve them without changing original serialized node bytes.
+  bool content_hierarchy_parent = false;
+  bool content_hierarchy_root = false;
+  // Host-only lifetime identity; recycled slots must not inherit saved bindings.
+  uint64_t allocation_id = 0;
 
   template <typename T> T get(int off) const {
     T v;

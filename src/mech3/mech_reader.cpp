@@ -9,9 +9,14 @@
 #include "gamez/zutil/zutl_msg.h"
 #include "mech3/mech_config.h"
 #include "mech3/mech_names.h"
+#include "mech3/content_registry.h"
+#include <map>
 #include "mech3/mech_skin.h"
 
 namespace mech3 {
+namespace {
+std::map<int32_t, MechDfn*> g_loading_dfns;
+}
 
 // Mech3.exe 1.2 @ 0x0046b890. The defaults every mech starts from.
 MechDfn::MechDfn(int32_t i, zrdr::Node* tree) : index(i), reader(tree) {
@@ -320,9 +325,13 @@ bool read_dfn(MechDfn& dfn) {
   HeadValues head;
   if (!read_head(dfn, &head)) return false;
   dfn.skins = read_skins(dfn.reader);
+  apply_content_skins(dfn);
   read_firepoints(dfn);
   read_part_slots(dfn);
-  if (read_configurations(dfn, head) && g_load_saved) g_load_saved(dfn.configs);
+  if (read_configurations(dfn, head)) {
+    apply_content_loadouts(dfn);
+    if (g_load_saved) g_load_saved(dfn.configs);
+  }
   dfn.loaded = 1;
   return true;
 }
@@ -331,10 +340,22 @@ bool read_dfn(MechDfn& dfn) {
 MechDfn* load_dfn(int32_t mech) {
   char name[64];
   std::snprintf(name, sizeof name, "dfn_%s.zrd", mech_name(mech));
-  zrdr::Node* tree = zrdr::load(name);  // the exe also passes ..\data\common\zrdr\mechs
+  zrdr::Node* tree = active_content() ? load_content_chassis_reader(mech) : zrdr::load(name);
   if (!tree) return nullptr;
   auto* dfn = new MechDfn(mech, tree);
-  if (!read_dfn(*dfn)) {
+  g_loading_dfns[mech] = dfn;
+  bool read = false;
+  try { read = read_dfn(*dfn); }
+  catch (...) {
+    g_loading_dfns.erase(mech);
+    // Failed package activation must not persist a partially constructed loadout.
+    delete dfn->configs;
+    dfn->configs = nullptr;
+    delete dfn;
+    throw;
+  }
+  g_loading_dfns.erase(mech);
+  if (!read) {
     delete dfn;
     return nullptr;
   }
@@ -344,11 +365,13 @@ MechDfn* load_dfn(int32_t mech) {
 // Mech3.exe 1.2 @ 0x004846a0. Cached in the mech table (0x005e60b0 + 0x3c * i);
 // a failed load is tried again next time.
 namespace {
-MechDfn* g_dfns[19] = {};  // the mech table's +0x38 (0x005e60b0, 0x3c apart)
+std::map<int32_t, MechDfn*> g_dfns;  // stock IDs retained; additions have owned cache entries
 }  // namespace
 
 MechDfn* mech_dfn(int32_t mech) {
-  if (mech < 0 || mech >= 19) return nullptr;
+  if (mech < 0 || mech >= chassis_count()) return nullptr;
+  const auto loading = g_loading_dfns.find(mech);
+  if (loading != g_loading_dfns.end()) return loading->second;
   if (!g_dfns[mech]) g_dfns[mech] = load_dfn(mech);
   return g_dfns[mech];
 }
@@ -357,10 +380,8 @@ MechDfn*& mech_dfn_slot(int32_t mech) { return g_dfns[mech]; }
 
 // The loop of 0x004844b0.
 void free_dfns() {
-  for (MechDfn*& d : g_dfns) {
-    delete d;
-    d = nullptr;
-  }
+  for (auto& entry : g_dfns) delete entry.second;
+  g_dfns.clear();
 }
 
 }  // namespace mech3

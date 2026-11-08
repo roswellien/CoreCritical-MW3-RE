@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "id": "demo-hud",
+  "packages": [{"id": "demo-hud", "version": "1.0.0", "path": "demo-hud"}],
+  "selections": {"hud": "demo-hud:compact"}
+}

@@ -34,7 +34,7 @@ Object2D::Object2D(int32_t px, int32_t py) : x(px), y(py) {
 // Mech3.exe 1.2 @ 0x0059fdf0
 Object2D::Object2D(const Object2D& o)
     : flags(o.flags), timer(o.timer), x(o.x), y(o.y), background(o.background),
-      bg_rect(o.bg_rect), mouse(o.mouse) {}
+      bg_rect(o.bg_rect), mouse(o.mouse), presentation_visible(o.presentation_visible) {}
 
 // Mech3.exe 1.2 @ 0x0059fe50
 Object2D& Object2D::operator=(const Object2D& o) {
@@ -42,6 +42,7 @@ Object2D& Object2D::operator=(const Object2D& o) {
   owner = nullptr;
   flags = o.flags;
   mouse = o.mouse;
+  presentation_visible = o.presentation_visible;
   timer = o.timer;
   x = o.x;
   y = o.y;
@@ -58,6 +59,7 @@ void Object2D::draw() { erase(); }
 
 // Mech3.exe 1.2 @ 0x00409a20
 void Object2D::erase() {
+  if (!can_present()) return;
   if (background) host().blit(background, x, y, 0, &bg_rect);
 }
 
@@ -96,6 +98,7 @@ void Object2D::dirty() { flags |= g_dirty_bits; }
 
 // Mech3.exe 1.2 @ 0x0059ffb0
 void Object2D::update(float dt) {
+  PresentationScope presentation(presentation_visible);
   if (!(flags & kHidden)) {
     if (!(flags & kManaged)) {
       draw();
@@ -124,6 +127,7 @@ void Object2D::update(float dt) {
 
 // Mech3.exe 1.2 @ 0x0059fd50
 int32_t Object2D::hit(int32_t px, int32_t py) {
+  if (!can_present()) return 0;
   if (flags & kHidden) return 0;
   const Rect* r = get_rect();
   if (r && r->left <= px && px <= r->right && r->top <= py && py <= r->bottom) return 1;
@@ -172,7 +176,10 @@ Layer::~Layer() = default;
 // Mech3.exe 1.2 @ 0x0059fd20
 void Layer::update(float dt) {
   if (!active) return;
-  for (Object2D* o = head; o; o = o->next) o->update(dt);
+  for (Object2D* o = head; o; o = o->next) {
+    PresentationScope presentation(o->presentation_visible);
+    o->update(dt);
+  }
 }
 
 // Mech3.exe 1.2 @ 0x0040e820
@@ -348,13 +355,13 @@ void Image::draw() {
   if (queued) {
     for (QueuedDraw& q : queue) {
       if (!q.count) continue;
-      host().blit(image, q.x, q.y, 0, &q.src);
+      if (can_present()) host().blit(image, q.x, q.y, 0, &q.src);
       if (--q.count == 0) --queued;
     }
     return;
   }
   erase();
-  host().blit(image, x, y, 0, src);
+  if (can_present()) host().blit(image, x, y, 0, src);
 }
 
 // Mech3.exe 1.2 @ 0x0059bab0
@@ -494,11 +501,13 @@ void Cursor::grab_at(int32_t px, int32_t py) {
 
 // Mech3.exe 1.2 @ 0x005a7a20
 void Cursor::draw() {
+  if (!can_present()) return;
   host().blit(image, x < 0 ? 0 : x, y < 0 ? 0 : y, 0, &bg_rect);
 }
 
 // Mech3.exe 1.2 @ 0x005a7a50
 void Cursor::erase() {
+  if (!can_present()) return;
   if (background) host().blit(background, x < 0 ? 0 : x, y < 0 ? 0 : y, 0, &bg_rect);
 }
 

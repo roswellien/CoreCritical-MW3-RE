@@ -1,12 +1,14 @@
 #pragma once
 #include <SDL3/SDL.h>
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
 
 #include "frontend/sdl/sdl_fit.h"
 #include "platform/render3d.h"
+#include "platform/prepared_hud.h"
 
 // platform::Render3D on SDL3's GPU API (docs/render.md section 4): the
 // original's D3DTLVERTEX draws collected over a scene, fans and strips turned
@@ -30,16 +32,23 @@ struct CoreCriticalQuality {
 
 struct PreparedModelBinding {
   std::string chassis, lod, mesh, textures;
+  std::string content_id;
+  std::function<void(const std::string&)> validate_resource;
 };
 struct PreparedNormalBinding {
   std::string chassis, lod, path;
+  std::string content_id;
 };
 struct PreparedMaterialBinding {
   std::string chassis, lod, path;
+  std::string content_id;
 };
 struct CoreCriticalAssets {
   std::vector<std::string> environment_packs;
   std::shared_ptr<const platform::prepared::EnvironmentSelection> environment;
+  // Shared native HUD compositor resources also work on the SDL renderer;
+  // they do not make these otherwise Core Critical-only options nonempty.
+  platform::HudArtworkSources hud_artwork;
   bool render_thread = false;
   std::string geometry = "legacy";
   bool geometry_debug_normals = false;

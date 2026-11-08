@@ -66,6 +66,8 @@ Node* node_alloc() {
   const uint32_t link = n->link;
   *n = Node{};
   n->link = link;
+  static uint64_t g_next_alloc_id = 0;
+  n->allocation_id = ++g_next_alloc_id;
   ++p.live;
   push_front(kAllNodes, n);
   n->set_flags(0x0108001c);

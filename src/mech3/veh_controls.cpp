@@ -1,5 +1,7 @@
 #include "mech3/veh_controls.h"
 
+#include "mech3/content_registry.h"
+#include "mech3/content_world_hierarchy.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -56,7 +58,10 @@ void VehControlsHooks::node_rotation(Handle node, float* x, float* y, float* z) 
   zcls::object3d_get_rotation(zn(node), x, y, z);
 }
 VehControlsHooks::Handle VehControlsHooks::node_find(Handle root, const char* name) {
-  return zcls::node_find_in_tree(zn(root), name);
+    zcls::Node *point = nullptr;
+    if (content_vehicle_marker(zn(root), name, &point))
+        return point;
+    return zcls::node_find_in_tree(zn(root), name);
 }
 VehControlsHooks::Handle VehControlsHooks::node_child(Handle node, const char* name) {
   return zcls::node_find_in_tree(zn(node), name);
@@ -387,7 +392,7 @@ void vehicle_motion_read(VehicleControls& c, void* node, zrdr::Node* mode, const
   }
   pair(mode, "collision_d", &m.collision_d[0], &m.collision_d[1], 0.5f, 0.15f);
   m.destroy_anim = h.anim_find(name);
-  if (!m.destroy_anim) m.destroy_anim = h.anim_find(type);
+  if (!m.destroy_anim) m.destroy_anim = h.anim_find(content_vehicle_model(type));
   if (!m.destroy_anim) {
     char msg[256];
     std::snprintf(msg, sizeof msg, "No destroy animation for (%s) or (%s)", name, type);
@@ -433,7 +438,7 @@ void vehicle_weapon_slots(VehicleControls& c, void* owner, zrdr::Node* def) {
       // without nodes or a beam.
       if (!s.def) continue;
       if (c.gun) {
-        const char* wname = h.weapon_def_name(s.def);
+        const char* wname = content_weapon_model_name(h.weapon_def_name(s.def));
         if (s.flags & 2) {
           char buf[80];
           std::snprintf(buf, sizeof buf, "%s_L", wname);

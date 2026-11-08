@@ -73,6 +73,9 @@ struct Normals {
 
 Mesh read_mesh(std::istream &input);
 Textures read_textures(std::istream &input);
+// Validate the same directory and byte spans without decoding pixel payloads.
+// Returned images retain identity/dimensions and have empty pixels vectors.
+Textures read_texture_index(std::istream &input);
 Normals read_normals(std::istream &input, const Textures &textures);
 void validate_bindings(const Mesh &mesh, const Textures &textures);
 mw34::materials::SurfaceMaterialPack

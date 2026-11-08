@@ -1,0 +1,34 @@
+{
+  "schema_version": 3,
+  "id": "demo-vehicles",
+  "name": "Independent Truck Variant",
+  "version": "1.0.0",
+  "game_id": "mw3",
+  "description": "Project-authored modular content demonstration; original game assets are supplied by the player.",
+  "dependencies": [
+    {
+      "id": "demo-assets",
+      "version": "1.0.0"
+    }
+  ],
+  "required_capabilities": {
+    "vehicle-definitions": 1,
+    "vehicle-assets": 1
+  },
+  "definitions": [
+    {
+      "kind": "vehicle",
+      "id": "demo-vehicles:truck",
+      "behavior": "mw3:ai-vehicle@1",
+      "data": {
+        "name": "demotruck",
+        "label": "Demo Truck",
+        "base": "stock:ttruck",
+        "model_name": "ttruck",
+        "reader": {},
+        "asset": "demo-assets:truck_body"
+      }
+    }
+  ],
+  "files": {}
+}

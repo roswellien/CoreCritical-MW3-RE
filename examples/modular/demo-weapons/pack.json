@@ -1,0 +1,34 @@
+{
+  "schema_version": 3,
+  "id": "demo-weapons",
+  "name": "Twelve Damage Medium Laser",
+  "version": "1.0.0",
+  "game_id": "mw3",
+  "description": "Project-authored modular content demonstration; original game assets are supplied by the player.",
+  "dependencies": [],
+  "required_capabilities": {
+    "weapon-definitions": 1
+  },
+  "definitions": [
+    {
+      "kind": "weapon",
+      "id": "demo-weapons:laser",
+      "behavior": "mw3:weapon@1",
+      "data": {
+        "name": "demo_laser",
+        "label": "Demo Medium Laser",
+        "base": "stock:laser_medium",
+        "tech": 2,
+        "uses_ammo": false,
+        "missile": false,
+        "lrm": false,
+        "reader": {
+          "DAMAGE": [
+            12.0
+          ]
+        }
+      }
+    }
+  ],
+  "files": {}
+}

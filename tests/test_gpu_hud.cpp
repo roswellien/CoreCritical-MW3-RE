@@ -228,6 +228,50 @@ void drawing_checks() {
   }
   zrndr::target2d() = {};
 }
+void package_artwork_checks(const std::filesystem::path& directory) {
+  const auto path = directory / "explicit-owned-name.rgba";
+  std::array<uint8_t, 36> bytes{};
+  std::memcpy(bytes.data(), "MW3H", 4);
+  bytes[4] = 2;
+  bytes[8] = 1;
+  const float uv[] = {0, 0, 1, 1};
+  std::memcpy(bytes.data() + 12, uv, sizeof uv);
+  const uint8_t authored[] = {200, 100, 50, 128, 255, 200, 100, 0};
+  std::memcpy(bytes.data() + 28, authored, sizeof authored);
+  std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  uint16_t pixels[] = {0xf800, 0};
+  zimg::Texture source{};
+  source.width = source.width_again = 2;
+  source.height = 1;
+  source.pixels = pixels;
+  source.flags = zimg::kAlpha | zimg::kTwoBytes;
+  sdlfe::HudOptions options;
+  options.mode = "core-critical";
+  options.text = false;
+  int reads = 0;
+  options.package_artwork[platform::hud_identity(2, 1, pixels, 2)] = [&] { ++reads; return path; };
+  options.package_artwork[1] = []() -> std::filesystem::path {
+    throw std::runtime_error("Unmatched package sprite was loaded eagerly");
+  };
+  Recorder recorder;
+  const auto previous_target = zrndr::target2d();
+  std::array<uint16_t, 4> target{};
+  zrndr::target2d() = {reinterpret_cast<uint8_t*>(target.data()), 2, 2, 4, 6};
+  {
+    sdlfe::GpuHud hud(recorder, options);
+    require(reads == 0, "Package HUD artwork pixels loaded before native use");
+    hud.begin(target.data(), 2, 2, 4, 2);
+    hud.image(&source, 0, 0, 0, nullptr);
+    require(hud.finish(), "Package HUD artwork did not reach native GPU composition");
+    require(reads == 1 && recorder.images.size() == 1 &&
+            recorder.images[0] == std::vector<uint32_t>{0x80193264, 0},
+            "Package HUD artwork was not decoded and uploaded through the existing consumer");
+    hud.begin(target.data(), 2, 2, 4, 2);
+    hud.image(&source, 0, 0, 0, nullptr);
+    require(hud.finish() && reads == 1, "Package HUD artwork did not retain owned cached pixels");
+  }
+  zrndr::target2d() = previous_target;
+}
 void text_checks(const char* fonts) {
   const auto saved = zutl::mounts();
   zutl::mounts() = {};
@@ -288,6 +332,7 @@ int main(int argc, char** argv) {
       std::filesystem::path("mw3-hud-check-" + std::to_string(SDL_GetPerformanceCounter()));
   try {
     artwork_checks(directory);
+    package_artwork_checks(directory);
     drawing_checks();
     if (argc == 3 && std::string(argv[1]) == "--fonts")
       text_checks(argv[2]);
