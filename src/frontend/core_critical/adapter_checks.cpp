@@ -5,6 +5,7 @@
 #include "gamez/zclass/cls_util.h"
 #include "gamez/zclass/object3d.h"
 #include "gamez/zimage/zimg_texture.h"
+#include "gamez/zmath/zmth_matrix.h"
 #include "gamez/zmodel/gmod_const.h"
 #include "gamez/zmodel/gmod_fog.h"
 #include "gamez/zvideo/zvid_ddd3d.h"
@@ -1000,6 +1001,7 @@ void check_terrain_surface_normals(SDL_Window *window,
                 checked_renderer->asset_statistics().binding_rejected_mismatch >
                     before_old_epoch.binding_rejected_mismatch,
             "Deferred admission survived scene resource reset");
+#include "native_material_only_checks.inc"
   }
 }
 
