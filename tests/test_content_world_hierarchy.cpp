@@ -1,3 +1,6 @@
+#include "gamez/zgeometry/zgeo_model.h"
+#include <memory>
+#include <vector>
 #include "gamez/zclass/cls_data.h"
 #include "check.h"
 #include "content/world.h"
@@ -808,4 +811,252 @@ TEST(content_world_crater_reset_uses_world_ancestor_and_validates_partition) {
         node->put<int32_t>(0x4c, -1);
         node->put<int32_t>(0x50, -1);
     }
+}
+
+
+namespace {
+float calculate_model_xz_area(const zmod::Model* m) {
+  if (!m || !m->polygons || !m->vertices) return 0.0f;
+  const uint32_t poly_count = m->count(0x10);
+  float total_area = 0.0f;
+  for (uint32_t p = 0; p < poly_count; ++p) {
+    const zmod::Polygon& poly = m->polygons[p];
+    const uint32_t vcount = poly.flags & 0xff;
+    if (vcount < 3 || !poly.vertex_indices) continue;
+    const uint32_t idx0 = poly.vertex_indices[0];
+    const float x0 = m->vertices[idx0 * 3 + 0];
+    const float z0 = m->vertices[idx0 * 3 + 2];
+    for (uint32_t i = 1; i + 1 < vcount; ++i) {
+      const uint32_t idx1 = poly.vertex_indices[i];
+      const uint32_t idx2 = poly.vertex_indices[i + 1];
+      const float x1 = m->vertices[idx1 * 3 + 0];
+      const float z1 = m->vertices[idx1 * 3 + 2];
+      const float x2 = m->vertices[idx2 * 3 + 0];
+      const float z2 = m->vertices[idx2 * 3 + 2];
+      const float cross = (x1 - x0) * (z2 - z0) - (z1 - z0) * (x2 - x0);
+      total_area += 0.5f * std::abs(cross);
+    }
+  }
+  return total_area;
+}
+
+struct ClipSetOwner {
+  zgeo::ClipSet* set = nullptr;
+  ClipSetOwner() : set(zgeo::clip_set_new()) {}
+  ~ClipSetOwner() {
+    if (set) {
+      for (auto& cc : set->cells) {
+        for (auto& nm : cc.nodes) {
+          if (nm.model) {
+            zgeo::hooks().model_release(nm.model);
+            nm.model = nullptr;
+          }
+        }
+      }
+      zgeo::clip_set_free(set);
+      set = nullptr;
+    }
+  }
+};
+
+struct ClipHookTestContext {
+  zcls::Node* expected_world = nullptr;
+  zcls::Partition* expected_cell = nullptr;
+  zcls::Node* candidate = nullptr;
+  int call_count = 0;
+  bool matched_args = true;
+};
+
+ClipHookTestContext* g_clip_hook_ctx = nullptr;
+
+struct ScopedClipHookContext {
+  ClipHookTestContext* prev;
+  explicit ScopedClipHookContext(ClipHookTestContext* ctx) : prev(g_clip_hook_ctx) {
+    g_clip_hook_ctx = ctx;
+  }
+  ~ScopedClipHookContext() { g_clip_hook_ctx = prev; }
+};
+}  // namespace
+
+TEST(content_world_clip_selection_hook_preserves_native_membership_and_clips_once) {
+  Fixture fixture;
+  for (auto& def : fixture.content->definitions) {
+    if (def.kind == "world" && def.id == "hierarchy:world") {
+      if (def.data.contains("instances") && !def.data["instances"].empty()) {
+        def.data["instances"][0].erase("translation");
+        def.data["instances"][0]["translation"] = {0.0, 0.0, 0.0};
+        def.data["instances"][0]["rotation"] = {0.0, 0.0, 0.0, 1.0};
+        def.data["instances"][0]["scale"] = {1.0, 1.0, 1.0};
+      }
+    }
+  }
+  for (auto& node : fixture.document["nodes"]) {
+    if (node.value("name", "") == "Root") {
+      node["translation"] = {0.0, 0.0, 0.0};
+      node["rotation"] = {0.0, 0.0, 0.0, 1.0};
+    } else if (node.value("name", "") == "Deck") {
+      node["translation"] = {0.0, 0.0, 0.0};
+    }
+  }
+  fixture.write();
+
+  NativeScene scene(fixture);
+
+  const zgeo::Hooks orig_hooks = zgeo::hooks();
+  struct ScopedHookRestore {
+    zgeo::Hooks orig;
+    ~ScopedHookRestore() { zgeo::hooks() = orig; }
+  } hook_guard{orig_hooks};
+
+  auto world_getter = +[]() -> zcls::Node* {
+    return zcls::list_find_by_name(zcls::kWorlds, "world1");
+  };
+  zgeo::hooks() = zgeo::Hooks{};
+  zgeo::hooks().world_node = world_getter;
+  zgeo::hooks().collect_clip_nodes = nullptr;
+
+  zcls::Node* world = zcls::list_find_by_name(zcls::kWorlds, "world1");
+  EXPECT(world != nullptr);
+  if (!world) return;
+  EXPECT(static_cast<zcls::World*>(world->data) != nullptr);
+
+  zcls::GroundHits ground{};
+  zcls::ground_point(world, 0.0f, 100.0f, 0.0f, &ground);
+  EXPECT(ground.count > 0);
+  if (ground.count <= 0) return;
+  zcls::Node* candidate = ground.hit[0].node;
+  EXPECT(candidate != nullptr);
+  if (!candidate) return;
+
+  zmod::Model* original_model = zgeo::hooks().node_model(candidate);
+  EXPECT(original_model != nullptr);
+  if (!original_model) return;
+  const float orig_area = calculate_model_xz_area(original_model);
+  EXPECT(std::abs(orig_area - 8.0f) < 0.05f);
+  const std::vector<float> orig_verts(
+      original_model->vertices,
+      original_model->vertices + original_model->count(0x14) * 3);
+
+  const uint32_t original_flags = candidate->flags();
+  const int32_t original_parent_count = candidate->parent_count();
+  struct ScopedFlagRestore {
+    zcls::Node* n;
+    uint32_t f;
+    ~ScopedFlagRestore() {
+      if (n) n->set_flags(f);
+    }
+  } flag_guard{candidate, original_flags};
+  candidate->set_flags(original_flags | 0x10004u);
+
+  zcls::Partition cell{};
+  const float outline[9] = {
+      -0.25f, 0.0f, 0.25f,
+      0.25f,  0.0f, 0.25f,
+      0.0f,   0.0f, -0.25f,
+  };
+
+  {
+    ClipSetOwner owner;
+    zgeo::hooks().collect_clip_nodes = nullptr;
+    const int res = zgeo::clip_cell(outline, 3, &cell, *owner.set);
+    EXPECT(res == 0);
+    EXPECT(owner.set->cells.empty());
+  }
+
+  ClipHookTestContext ctx{world, &cell, candidate, 0, true};
+  ScopedClipHookContext ctx_guard(&ctx);
+  zgeo::hooks().collect_clip_nodes = +[](zcls::Node* w, zcls::Partition* c,
+                                         std::vector<zcls::Node*>& out) {
+    if (!g_clip_hook_ctx) return;
+    ++g_clip_hook_ctx->call_count;
+    if (w != g_clip_hook_ctx->expected_world || c != g_clip_hook_ctx->expected_cell) {
+      g_clip_hook_ctx->matched_args = false;
+    }
+    out.push_back(g_clip_hook_ctx->candidate);
+    out.push_back(nullptr);
+    out.push_back(g_clip_hook_ctx->candidate);
+  };
+
+  {
+    ClipSetOwner owner;
+    ctx.call_count = 0;
+    ctx.matched_args = true;
+    const int res = zgeo::clip_cell(outline, 3, &cell, *owner.set);
+    EXPECT(res == 1);
+    EXPECT(ctx.call_count == 1);
+    EXPECT(ctx.matched_args);
+    EXPECT(owner.set->cells.size() == 1);
+    if (owner.set->cells.size() == 1) {
+      const auto& cc = owner.set->cells[0];
+      EXPECT(cc.cell == &cell);
+      EXPECT(cc.nodes.size() == 1);
+      if (cc.nodes.size() == 1) {
+        EXPECT(cc.nodes[0].node == candidate);
+        EXPECT(cc.nodes[0].model != nullptr);
+        EXPECT(cc.nodes[0].model != original_model);
+        const float clipped_area = calculate_model_xz_area(cc.nodes[0].model);
+        EXPECT(clipped_area > 0.0f);
+        EXPECT(clipped_area < orig_area);
+        EXPECT(std::abs(clipped_area - 7.875f) < 0.05f);
+      }
+    }
+    EXPECT(zgeo::hooks().node_model(candidate) == original_model);
+    EXPECT(candidate->parent_count() == original_parent_count);
+  }
+
+  {
+    zcls::Node* cell_node_arr[1] = {candidate};
+    cell.nodes = cell_node_arr;
+    cell.put<int16_t>(0x3a, 1);
+    struct ScopedCellReset {
+      zcls::Partition& p;
+      ~ScopedCellReset() {
+        p.nodes = nullptr;
+        p.put<int16_t>(0x3a, 0);
+      }
+    } cell_reset{cell};
+
+    ClipSetOwner owner;
+    ctx.call_count = 0;
+    ctx.matched_args = true;
+    const int res = zgeo::clip_cell(outline, 3, &cell, *owner.set);
+    EXPECT(res == 1);
+    EXPECT(ctx.call_count == 1);
+    EXPECT(ctx.matched_args);
+    EXPECT(owner.set->cells.size() == 1);
+    if (owner.set->cells.size() == 1) {
+      EXPECT(owner.set->cells[0].nodes.size() == 1);
+    }
+  }
+
+  {
+    candidate->set_flags(original_flags & ~4u);
+    ClipSetOwner owner;
+    ctx.call_count = 0;
+    ctx.matched_args = true;
+    const int res = zgeo::clip_cell(outline, 3, &cell, *owner.set);
+    EXPECT(res == 0);
+    EXPECT(ctx.call_count == 1);
+    EXPECT(ctx.matched_args);
+    EXPECT(owner.set->cells.empty());
+    candidate->set_flags(original_flags | 0x10004u);
+  }
+
+  {
+    zgeo::hooks().world_node = nullptr;
+    ClipSetOwner owner;
+    ctx.call_count = 0;
+    const int res = zgeo::clip_cell(outline, 3, &cell, *owner.set);
+    EXPECT(res == 0);
+    EXPECT(ctx.call_count == 0);
+    EXPECT(owner.set->cells.empty());
+    zgeo::hooks().world_node = world_getter;
+  }
+
+  EXPECT(zgeo::hooks().node_model(candidate) == original_model);
+  EXPECT(candidate->parent_count() == original_parent_count);
+  const std::vector<float> after_verts(
+      original_model->vertices,
+      original_model->vertices + original_model->count(0x14) * 3);
+  EXPECT(after_verts == orig_verts);
 }
