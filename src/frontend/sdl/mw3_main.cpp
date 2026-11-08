@@ -1217,7 +1217,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
       }
       bool net_core = false, net_over = false;
       uint64_t net_line_at = 0;
-      engine.on_present = [&, shots](int) mutable {
+      // The callback runs after this launch-configuration scope has ended.
+      engine.on_present = [&, shots, l_type3, net_core, net_over, net_line_at](int) mutable {
         // The soak test's (ours): the clock and the drive from the first Core
         // frame, the lines each half second, the scores at the end, the quit
         // at the menu after it.

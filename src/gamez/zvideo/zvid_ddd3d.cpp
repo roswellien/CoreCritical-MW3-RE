@@ -1,4 +1,5 @@
 #include "gamez/zvideo/zvid_ddd3d.h"
+#include "frontend/core_critical/renderer/native_texture_identity.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -992,6 +993,12 @@ D3DTexture* create_texture(const char* name, const zimg::Texture& image, int32_t
   const int32_t type = alpha == 0 ? 1 : image.alpha ? 4 : 5;
   std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
   texture_rgba(image, alpha, rgba.data());
+  // The bank pixels can still be RGB565 with a separate alpha plane. Key the
+  // packed format actually decoded for upload, not a hybrid of source pixels
+  // and destination format. This also authenticates alpha-plane changes.
+  const auto format = alpha == 0 ? 1u : image.alpha && d.alpha_4444 ? 3u : 2u;
+  mw34::materials::ScopedUploadKey upload_key(
+      mw34::materials::canonical_upload_key(w, h, rgba.data(), format));
   auto* t = new D3DTexture;
   t->handle = g_render ? g_render->create_named_texture(name, w, h, rgba.data(), static_cast<uint8_t>(type)) : -1;
   t->type = type;
@@ -1007,6 +1014,9 @@ void reload_texture(D3DTexture* record, const zimg::Texture* image) {
   const int32_t w = image->width, h = image->height;
   std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
   texture_rgba(*image, image->flags & 2, rgba.data());
+  const auto format = (image->flags & 2) == 0 ? 1u : image->alpha && g_display.alpha_4444 ? 3u : 2u;
+  mw34::materials::ScopedUploadKey upload_key(
+      mw34::materials::canonical_upload_key(w, h, rgba.data(), format));
   if (g_render) g_render->update_texture(record->handle, w, h, rgba.data());
 }
 

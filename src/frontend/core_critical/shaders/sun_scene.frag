@@ -23,6 +23,9 @@ layout(set=1,binding=0,std140) uniform SunLighting {
  vec4 detail; vec4 detailMotion;
  vec4 weather; vec4 weatherFog;
  vec4 emissionParams; vec4 emissionRegions[32];
+ vec4 geometryFog0;
+ vec4 geometryFog1;
+ uvec4 tiledLights;
 } sun;
 #ifdef MW34_EFFECT_LIGHTING
 struct EffectLight {vec4 start;vec4 end;vec4 color;};
@@ -32,6 +35,8 @@ layout(set=1,binding=2,std140) uniform EffectLighting {
  vec4 shadowMeta[64];
  vec4 cones[64];
 } effects;
+layout(set = 1, binding = 4, std430) readonly buffer TileLists { uint words[]; }
+tiles;
 layout(set=1,binding=3) uniform sampler2D fixtureShadowAtlas;
 float fixtureVisibility(int index,vec3 p,vec3 n){
  vec4 meta=effects.shadowMeta[index];if(meta.x<0.5)return 1.0;
@@ -63,30 +68,43 @@ float fixtureVisibility(int index,vec3 p,vec3 n){
 
 vec3 effectIllumination(vec3 p,vec3 n){
  vec3 illumination=vec3(0);
- for(int i=0;i<min(int(effects.params.x),64);++i){
-  EffectLight l=effects.lights[i];
-  vec3 delta;
-  float spotFactor=1.0;
-  if(l.end.w>1.5){ // 2 = spotlight; 1 remains a laser capsule endpoint.
-   delta=l.start.xyz-p;
-   vec3 dirToSurface=-delta*inversesqrt(max(dot(delta,delta),1e-8));
-   float cosAngle=dot(dirToSurface,l.end.xyz);
-   if(effects.cones[i].z>0.5){
-    // Tiny authored angles may have equal binary32 cosines: use their hard edge.
-    float inner=effects.cones[i].x,outer=effects.cones[i].y;
-    spotFactor=inner>outer?smoothstep(outer,inner,cosAngle):step(outer,cosAngle);
-   }else spotFactor=clamp((cosAngle-0.2)*2.0,0.0,1.0);
-  }else{
-   vec3 segment=l.end.xyz-l.start.xyz;
-   float den=dot(segment,segment);
-   float t=den>1e-8?clamp(dot(p-l.start.xyz,segment)/den,0.0,1.0):0.0;
-   delta=l.start.xyz+t*segment-p;
-  }
-  float d2=dot(delta,delta),r2=l.start.w*l.start.w;
-  if(d2>=r2||spotFactor<=0.0)continue;
-  float attenuation=1.0-d2/r2;
-  float diffuse=max(dot(n,delta*inversesqrt(max(d2,1e-8))),0.0);
-  illumination+=l.color.rgb*l.color.w*attenuation*attenuation*diffuse*spotFactor*fixtureVisibility(i,p,n);
+ if (sun.tiledLights.w == 0u)
+   return illumination;
+ uvec2 tile = uvec2(gl_FragCoord.xy) / 16u;
+ if (any(greaterThanEqual(tile, sun.tiledLights.xy)))
+   return illumination;
+ uint base = sun.tiledLights.z + (tile.y * sun.tiledLights.x + tile.x) * 65u;
+ uint count = min(tiles.words[base], 64u);
+ for (uint at = 0u; at < count; ++at) {
+   int i = int(tiles.words[base + 1u + at]);
+   if (i < 0 || i >= min(int(effects.params.x), 64))
+     continue;
+   EffectLight l = effects.lights[i];
+   vec3 delta;
+   float spotFactor = 1.0;
+   if (l.end.w > 1.5) { // 2 = spotlight; 1 remains a laser capsule endpoint.
+     delta = l.start.xyz - p;
+     vec3 dirToSurface = -delta * inversesqrt(max(dot(delta, delta), 1e-8));
+     float cosAngle = dot(dirToSurface, l.end.xyz);
+     if (effects.cones[i].z > 0.5) {
+       // Tiny authored angles may have equal binary32 cosines: use their hard edge.
+       float inner = effects.cones[i].x, outer = effects.cones[i].y;
+       spotFactor = inner > outer ? smoothstep(outer, inner, cosAngle) : step(outer, cosAngle);
+     } else
+       spotFactor = clamp((cosAngle - 0.2) * 2.0, 0.0, 1.0);
+   } else {
+     vec3 segment = l.end.xyz - l.start.xyz;
+     float den = dot(segment, segment);
+     float t = den > 1e-8 ? clamp(dot(p - l.start.xyz, segment) / den, 0.0, 1.0) : 0.0;
+     delta = l.start.xyz + t * segment - p;
+   }
+   float d2 = dot(delta, delta), r2 = l.start.w * l.start.w;
+   if (d2 >= r2 || spotFactor <= 0.0)
+     continue;
+   float attenuation = 1.0 - d2 / r2;
+   float diffuse = max(dot(n, delta * inversesqrt(max(d2, 1e-8))), 0.0);
+   illumination += l.color.rgb * l.color.w * attenuation * attenuation * diffuse * spotFactor *
+                   fixtureVisibility(i, p, n);
  }
  return illumination;
 }

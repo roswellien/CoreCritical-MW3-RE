@@ -1,0 +1,71 @@
+#version 450
+// One group owns a 16x16 raster tile. Lane order is the stable light order.
+layout(local_size_x = 64) in;
+struct Light {
+  vec4 start;
+  vec4 end;
+  vec4 color;
+};
+layout(set = 0, binding = 0, std140) uniform EffectLighting {
+  vec4 params;
+  Light lights[64];
+  vec4 shadowMeta[64];
+  vec4 cones[64];
+}
+effects;
+layout(set = 0, binding = 1, std140) uniform CullView {
+  vec4 camera0;
+  vec4 camera1;
+  vec4 camera2;
+  vec4 projection;
+  vec4 depth;
+  uvec4 extent;
+}
+view;
+layout(set = 0, binding = 2, std430) buffer TileLists { uint words[]; }
+tiles;
+shared uint flags[64];
+bool intersects(vec3 n, vec3 center, float radius) { return dot(n, center) >= -radius * length(n); }
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uvec2 tile = gl_WorkGroupID.xy;
+  vec2 lo = vec2(tile * 16u);
+  vec2 hi = vec2(min((tile + 1u) * 16u, view.extent.xy));
+  bool visible = false;
+  if (lane < uint(effects.params.x)) {
+    Light light = effects.lights[lane];
+    vec3 world = light.start.xyz;
+    float radius = light.start.w;
+    if (light.end.w == 1.0) {
+      world = (light.start.xyz + light.end.xyz) * 0.5;
+      radius += length(light.end.xyz - light.start.xyz) * 0.5;
+    }
+    vec4 p = vec4(world, 1.0);
+    vec3 center = vec3(dot(view.camera0, p), dot(view.camera1, p), dot(view.camera2, p));
+    // The admitted camera can differ slightly from an exact orthogonal basis.
+    // The Gram matrix infinity norm bounds its largest squared singular value.
+    vec3 a = view.camera0.xyz, b = view.camera1.xyz, c = view.camera2.xyz;
+    float ab = abs(dot(a, b)), ac = abs(dot(a, c)), bc = abs(dot(b, c));
+    radius *= sqrt(max(dot(a, a) + ab + ac, max(dot(b, b) + ab + bc, dot(c, c) + ac + bc)));
+    // Include both operands of world-to-camera cancellation, not just the result.
+    vec3 translation = vec3(view.camera0.w, view.camera1.w, view.camera2.w);
+    radius += 1e-5 * (1.0 + length(world) + length(translation) + length(center) + radius);
+    vec4 v = view.projection;
+    visible = center.z + radius >= view.depth.x && center.z - radius <= view.depth.y &&
+              intersects(vec3(v.x, 0, v.z - lo.x), center, radius) &&
+              intersects(vec3(-v.x, 0, hi.x - v.z), center, radius) &&
+              intersects(vec3(0, v.y, v.w - lo.y), center, radius) &&
+              intersects(vec3(0, -v.y, hi.y - v.w), center, radius);
+  }
+  flags[lane] = visible ? 1u : 0u;
+  barrier();
+  if (lane == 0u) {
+    uint base = (tile.y * view.extent.z + tile.x) * 65u;
+    uint count = 0u;
+    for (uint i = 0u; i < 64u; ++i)
+      if (flags[i] != 0u)
+        tiles.words[base + 1u + count++] = i;
+    // Safe negative control replaces only this count with zero.
+    tiles.words[base] = count;
+  }
+}

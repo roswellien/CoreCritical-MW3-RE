@@ -34,6 +34,7 @@
 #include "fxaa_vert.h"
 #include "geometry/resource.hpp"
 #include "launcher_display.hpp"
+#include "light_cull_tiled_comp.h"
 #include "model_scene_vert.h"
 #include "native_geometry_vert.h"
 #include "platform/vk_loader.hpp"
@@ -48,6 +49,7 @@
 #include "sun_world_vert.h"
 #include "surface_detail.hpp"
 #include "texture_staging.hpp"
+#include "tiled_light_stage.inc"
 #include "world_binding.hpp"
 #include "world_coverage_frag.h"
 #include "world_fast_binding.hpp"
@@ -1372,6 +1374,8 @@ private:
     // Upload memory can be write-combined: never read it for CPU comparisons.
     mw34::submission::ExactUniformRuns<mw34::sun::Uniform> uniformRuns;
     std::vector<unsigned> sunUniformIds(s.draws.size());
+    std::vector<mw34::tiled::View> tiledFrameViews;
+    std::vector<unsigned> tiledDrawViews(s.draws.size(), ~0u);
     bool sunScene = false;
     if (lighting_settings.enabled) {
       if (s.draws.size() > 0xffffffffULL / sunStride)
@@ -1385,6 +1389,31 @@ private:
       const mw34::effects::Uniform noEffects{};
       const auto &fx = s.hud || s.frontend_canvas ? noEffects : *fixtureLights;
       std::memcpy(effectBuffer.mapped, &fx, sizeof(fx));
+      mw34::tiled::validate_lights(fx);
+      if (effects_settings.enabled && fx.params[0] > 0) {
+        for (size_t at = 0; at < s.draws.size(); ++at) {
+          const auto &d = s.draws[at];
+          if (s.hud || s.frontend_canvas || d.sky || !sun_lit(d))
+            continue;
+          const auto camera =
+              d.model ? mw34::tiled::compose_affine(d.model->camera,
+                                                    mw34::tiled::inverse_affine(d.model->sun_world))
+                      : mw34::tiled::inverse_affine(d.sun_tl->camera_world);
+          const auto &projection = d.model ? d.model->projection : d.sun_tl->projection;
+          const auto v = mw34::tiled::draw_view(camera, projection, width, height, rw, rh);
+          auto found =
+              std::find_if(tiledFrameViews.begin(), tiledFrameViews.end(), [&](const auto &prior) {
+                return std::memcmp(&prior, &v, sizeof(v)) == 0;
+              });
+          tiledDrawViews[at] = unsigned(found - tiledFrameViews.begin());
+          if (found == tiledFrameViews.end()) {
+            if (tiledFrameViews.size() == 64)
+              throw std::runtime_error("Too many tiled camera views");
+            tiledFrameViews.push_back(v);
+          }
+        }
+      }
+      prepare_tiled(tiledFrameViews);
       effect_light_peak =
           std::max(effect_light_peak, std::uint64_t(fx.params[0]));
       fixture_light_peak =
@@ -1470,6 +1499,11 @@ private:
           u.detail_motion[3] =
               draw.key.blend ? -1.f : environment.night_world_gain;
           s.emissions.apply(draw.emission_index, u);
+          if (tiledDrawViews[at] != ~0u) {
+            const auto id = tiledDrawViews[at];
+            u.tiled_lights = {tiledFrameViews[id].extent[2], tiledFrameViews[id].extent[3],
+                              tiledOffsets[id], 1};
+          }
           sunUniformIds[at] = uniformRuns.identify(u);
           std::memcpy(static_cast<unsigned char *>(sunBuffer.mapped) +
                           at * sunStride,
@@ -1576,7 +1610,7 @@ private:
           shadowSampler, shadowView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
       VkDescriptorBufferInfo effectInfo{effectBuffer.buffer, 0,
                                         sizeof(mw34::effects::Uniform)};
-      std::array<VkWriteDescriptorSet, 4> w{};
+      std::array<VkWriteDescriptorSet, 5> w{};
       for (auto &x : w) {
         x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.dstSet = sunSet;
@@ -1596,13 +1630,18 @@ private:
       w[3].dstBinding = 3;
       w[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
       w[3].pImageInfo = &fixtureInfo;
-      f.vkUpdateDescriptorSets(device, 4, w.data(), 0, nullptr);
+      VkDescriptorBufferInfo tileInfo{tiledLists.buffer, 0, tiledLists.size};
+      w[4].dstBinding = 4;
+      w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      w[4].pBufferInfo = &tileInfo;
+      f.vkUpdateDescriptorSets(device, 5, w.data(), 0, nullptr);
     }
     check(f.vkResetCommandPool(device, commandPool, 0), "reset command pool");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(f.vkBeginCommandBuffer(cmd, &bi), "begin");
+    record_tiled(tiledFrameViews);
     if (profile_queries) {
       f.vkCmdResetQueryPool(cmd, profile_queries, 0, 2);
       f.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
@@ -1955,6 +1994,39 @@ private:
 
 public:
   // The frontend drains its render worker before updating this CPU snapshot.
+  // Diagnostic readback uses the same producer and synchronization as rendering.
+  std::vector<std::vector<uint32_t>> probe_tiled_lists(const std::vector<mw34::tiled::View> &views,
+                                                       const mw34::effects::Uniform &lights) {
+    settle();
+    if (!device)
+      init();
+    mw34::tiled::validate_lights(lights);
+    ensure(effectBuffer, sizeof(lights), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+    std::memcpy(effectBuffer.mapped, &lights, sizeof(lights));
+    prepare_tiled(views);
+    check(f.vkResetCommandPool(device, commandPool, 0), "reset tiled probe pool");
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(f.vkBeginCommandBuffer(cmd, &bi), "begin tiled probe");
+    record_tiled(views);
+    check(f.vkEndCommandBuffer(cmd), "end tiled probe");
+    check(f.vkResetFences(device, 1, &fence), "reset tiled probe fence");
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    check(f.vkQueueSubmit(queue, 1, &submit, fence), "submit tiled probe");
+    scene_pending = true;
+    settle();
+    std::vector<std::vector<uint32_t>> result;
+    for (size_t i = 0; i < views.size(); ++i) {
+      result.emplace_back(size_t(tiledLengths[i] / 4));
+      std::memcpy(result.back().data(),
+                  static_cast<char *>(tiledLists.mapped) + VkDeviceSize(tiledOffsets[i]) * 4,
+                  size_t(tiledLengths[i]));
+    }
+    return result;
+  }
+  // The frontend drains its render worker before updating this CPU snapshot.
   // Pipeline topology is fixed at construction; only mission uniforms change.
   void update_lighting_settings(const mw34::sun::Settings &next) {
     if (next.enabled != lighting_settings.enabled ||
@@ -2134,7 +2206,7 @@ private:
     X(vkCreateImage) X(vkDestroyImage) X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateSampler) X(vkDestroySampler) X(vkCreateDescriptorSetLayout) \
     X(vkDestroyDescriptorSetLayout) X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) X(vkResetDescriptorPool) X(vkAllocateDescriptorSets) \
     X(vkUpdateDescriptorSets) X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) \
-    X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) X(vkCreateCommandPool) \
+    X(vkDestroyShaderModule) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCmdDispatch) X(vkDestroyPipeline) X(vkCreateCommandPool) \
     X(vkDestroyCommandPool) X(vkResetCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) \
     X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
     X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdPushConstants) X(vkCmdDraw) X(vkCmdClearAttachments) X(vkCmdBindVertexBuffers) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCreateFence) \
@@ -2154,6 +2226,7 @@ private:
     VkDeviceSize size{};
     void *mapped{};
   };
+#include "tiled_light_gpu.inc"
   struct Image {
     VkImage image{};
     VkDeviceMemory memory{};
@@ -2885,7 +2958,8 @@ private:
       VkPhysicalDeviceProperties p{};
       f.vkGetPhysicalDeviceProperties(g, &p);
       for (unsigned i = 0; i < n; ++i)
-        if (q[i].queueCount && (q[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+        if (q[i].queueCount && (q[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+            (!effects_settings.enabled || (q[i].queueFlags & VK_QUEUE_COMPUTE_BIT))) {
           if (forPresent && !bridge_requested) {
             VkBool32 ok = VK_FALSE;
             VkSurfaceCapabilitiesKHR c{};
@@ -3248,19 +3322,18 @@ private:
             std::max(sizeof(mw34::sun::Uniform),
                      sizeof(mw34::effects::Uniform)))
           throw std::runtime_error("Sun uniform range unavailable");
-        const std::array<VkDescriptorSetLayoutBinding, 4> sb{
+        const std::array<VkDescriptorSetLayoutBinding, 5> sb{
             {{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
-              VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+              VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
               nullptr},
-             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-              VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-             {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-              VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-             {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-              VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}}};
+             {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+             {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+              nullptr},
+             {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}}};
         VkDescriptorSetLayoutCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        si.bindingCount = 4;
+        si.bindingCount = 5;
         si.pBindings = sb.data();
         check(
             f.vkCreateDescriptorSetLayout(device, &si, nullptr, &sunSetLayout),
@@ -3808,14 +3881,15 @@ private:
   void pool(unsigned n) {
     if (descriptorPool)
       f.vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-    const std::array<VkDescriptorPoolSize, 3> ps{
+    const std::array<VkDescriptorPoolSize, 4> ps{
         {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n * 3 + 2},
          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
-         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}}};
+         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = n * 2 + 1;
-    pi.poolSizeCount = lighting_settings.enabled ? 3 : 1;
+    pi.poolSizeCount = lighting_settings.enabled ? 4 : 1;
     pi.pPoolSizes = ps.data();
     check(f.vkCreateDescriptorPool(device, &pi, nullptr, &descriptorPool),
           "descriptor pool");
@@ -4417,6 +4491,7 @@ private:
                    "Draw size %zu bytes\n",
                    (unsigned long long)emission_draw_records,
                    (unsigned long long)emission_payloads, sizeof(Draw));
+    destroy_tiled();
     for (auto &[k, t] : textures)
       destroy(t);
     destroy(white);
