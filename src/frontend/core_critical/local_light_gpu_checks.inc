@@ -95,8 +95,15 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
   zmod::light_list().list[0].data = &data;
   zmod::light_list().list[0].node = &node;
   auto render = [&](bool enabled, bool mutate, bool weapon_source = false,
-                    bool sharp_source = false) {
+                    bool sharp_source = false,
+                    bool overlay_before_emitter = false,
+                    bool ambient_only = false) {
     data = original;
+    if (ambient_only) {
+      data.put<float>(0x9c, 0);
+      data.put<float>(0xa0, 2);
+    }
+    const auto expected_source = data;
     local_light_test_env("MW34_EFFECT_LIGHTS", enabled ? "1" : "0");
     local_light_test_env("MW34_FIXTURE_LIGHTS",
                          enabled && !weapon_source ? "1" : "0");
@@ -118,6 +125,12 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
       data.put<float>(0x14, 1000);
     }
     quad(*renderer, 4, 28, .5f, 0xffffffff, state);
+    if (overlay_before_emitter) {
+      platform::DrawState overlay = state;
+      overlay.depth_always = true;
+      overlay.depth_write = false;
+      quad(*renderer, 28, 30, .5f, 0xffffffff, overlay);
+    }
     if (weapon_source) {
       const uint8_t white[4] = {255, 255, 255, 255};
       mw34::materials::set_active_surface_key({1, 1, 1, 123});
@@ -136,7 +149,7 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
     require(renderer->read_back(&pixels, &w, &h) && w == 32 && h == 32,
             "Local-light receiver readback failed");
     if (!mutate)
-      require(!std::memcmp(data.raw, original.raw, sizeof data.raw),
+      require(!std::memcmp(data.raw, expected_source.raw, sizeof data.raw),
               "Local-light renderer mutated native source");
     return pixels.at(16 * 32 + 16);
   };
@@ -146,8 +159,42 @@ void check_local_light_gpu(SDL_Window *window, sdlfe::RendererBackend backend) {
   require(
       copied == on,
       "Native light source changed after BeginScene altered the owned packet");
-  require(render(true, false, true) != off,
+  const auto weapon = render(true, false, true);
+  require(weapon != off,
           "Authenticated emitter did not illuminate the receiver");
+  require(render(true, false, true, false, true) == weapon,
+          "Overlay submission omitted a later emitter from earlier receivers");
+  require(render(true, false, false, false, false, true) == on,
+          "Ambient-only native source was discarded or changed intensity");
   require(render(true, false, true, true) == off,
           "HUD sprite incorrectly admitted as an emitter");
+  // Budget rejection must retain the scene. Retrying the same unchanged
+  // submission must reject again, rather than silently succeeding after loss.
+  {
+    sdlfe::CoreCriticalAssets assets{};
+    assets.lighting = "flat";
+    auto renderer = make_check_renderer(window, backend, {}, assets);
+    renderer->mission_changed({5, 1});
+    renderer->set_viewport(0, 0, 32, 32);
+    const std::vector<uint8_t> pixels(std::size_t(4096) * 4096 * 4, 128);
+    platform::DrawState first{}, second{};
+    first.texture = renderer->create_texture(4096, 4096, pixels.data(), 1);
+    second.texture = renderer->create_texture(4096, 4096, pixels.data(), 1);
+    renderer->clear(true, 0, 0, 0);
+    renderer->begin_scene();
+    quad(*renderer, 4, 28, .5f, 0xffffffff, first);
+    quad(*renderer, 4, 28, .5f, 0xffffffff, second);
+    auto rejects_budget = [&] {
+      try {
+        renderer->end_scene();
+      } catch (const std::runtime_error &e) {
+        return std::string(e.what()).find("staging exceeds budget") !=
+               std::string::npos;
+      }
+      return false;
+    };
+    require(rejects_budget(), "Oversized local-light view was not rejected");
+    require(rejects_budget(),
+            "Rejected local-light view lost its retained payloads");
+  }
 }

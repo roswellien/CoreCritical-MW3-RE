@@ -119,6 +119,37 @@ void check_local_light_core() {
     require(threw, "NaN time throws");
   }
 
+  // Native creation permits diffuse=0, ambient=1. Both contribute to
+  // projected-light intensity; validate them before combining in double.
+  {
+    zcls::Node node{};
+    zcls::Light data{};
+    node.put<int32_t>(0x34, 9);
+    node.data = &data;
+    data.put<uint32_t>(0xb0, 0x202);
+    data.put<float>(0xb8, 10);
+    data.put<float>(0xa0, 1);
+    data.put<float>(0xa4, 1);
+    zmod::LightList list{};
+    list.count = 1;
+    list.list[0].node = &node;
+    list.list[0].data = &data;
+    const auto before = data;
+    const auto lights = collect_native_lights(list);
+    require(lights.size() == 1 && lights[0].light.color[3] == 1,
+            "Ambient-only native light discarded");
+    require(!std::memcmp(before.raw, data.raw, sizeof data.raw),
+            "Ambient light collection mutated native data");
+    data.put<float>(0x9c, std::numeric_limits<float>::max());
+    data.put<float>(0xa0, std::numeric_limits<float>::max());
+    bool rejected = false;
+    try {
+      collect_native_lights(list);
+    } catch (const std::exception &) {
+      rejected = true;
+    }
+    require(rejected, "Overflowing diffuse+ambient accepted");
+  }
   // Full parent hierarchy and mutation/depth controls.
   {
 

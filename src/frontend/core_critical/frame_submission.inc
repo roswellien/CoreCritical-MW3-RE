@@ -3,7 +3,8 @@ void flush() override {
     if (scene_.order.empty()) {
         return;
     }
-    local_lights_attach();
+    if (!local_active_)
+      local_lights_attach(scene_);
     CpuInterval interval(cpu_profile_ ? &render_ticks_ : nullptr);
     if (cpu_profile_)
         ++render_calls_;
@@ -13,12 +14,41 @@ void flush() override {
         scene_.color.assign(size, 0);
         scene_.depth.assign(size, 0);
     }
+    // Validate before moving the scene or advancing upload/extent receipts.
+    // A rejected submission retains all payloads for a consistent retry.
+    std::size_t local_bytes = 0;
+    if (local_active_) {
+      local_bytes = packet_bytes(scene_);
+      constexpr std::size_t kLocalBudget = 128u * 1024u * 1024u;
+      if (local_bytes > kLocalBudget - pending_local_bytes_)
+        throw std::runtime_error("Local light packet staging exceeds budget");
+      if (worker_)
+        for (const auto &draw : scene_.draws)
+          if (draw.shadow_valid)
+            throw std::runtime_error(
+                "Render packet contains a live shadow callback");
+    }
     resident_width_ = scene_.width;
     resident_height_ = scene_.height;
     // Track the last ordered upload, not the worker's mutable Vulkan cache.
     // Every omitted payload refers to an earlier packet on this same queue.
     for (const auto &texture : scene_.textures)
         submitted_textures_[texture.key] = {texture.hash, texture.width, texture.height};
+    if (local_active_) {
+      auto packet = std::make_shared<vk::Scene>(std::move(scene_));
+      pending_local_packets_.push_back(
+          PendingLocalPacket{std::move(packet), initialize, local_bytes});
+      pending_local_bytes_ += local_bytes;
+      scene_ = {};
+      std::lock_guard<std::mutex> lock(recycle_mutex_);
+      if (!recycled_scenes_.empty()) {
+        scene_ = std::move(recycled_scenes_.back());
+        recycled_scenes_.pop_back();
+      }
+      for (auto &entry : textures_)
+        entry.scene_index = entry.sharp_index = no_binding;
+      return;
+    }
     if (worker_) {
         for (const auto &draw : scene_.draws)
             if (draw.shadow_valid)
@@ -51,6 +81,53 @@ void flush() override {
 }
 
 private:
+  struct PendingLocalPacket {
+    std::shared_ptr<vk::Scene> packet;
+    bool initialize;
+    std::size_t bytes;
+  };
+  std::vector<PendingLocalPacket> pending_local_packets_;
+  std::size_t pending_local_bytes_{};
+  void complete_local_light_packets() {
+    // Detach the batch before posting: an exception must not cause a later
+    // drain/destructor to replay packets already submitted to the worker.
+    auto packets = std::move(pending_local_packets_);
+    pending_local_packets_.clear();
+    pending_local_bytes_ = 0;
+    for (const auto &pending : packets) {
+      auto packet = pending.packet;
+      const bool initialize = pending.initialize;
+      local_lights_attach(*packet);
+      if (worker_) {
+        worker_->post(
+            [this, packet, initialize] {
+              {
+                CpuInterval interval(cpu_profile_ ? &worker_render_ticks_
+                                                  : nullptr);
+                renderer_->render(*packet, initialize, false);
+              }
+              recycle_scene(*packet);
+              std::lock_guard<std::mutex> lock(recycle_mutex_);
+              recycled_scenes_.push_back(std::move(*packet));
+            },
+            pending.bytes);
+      } else {
+        renderer_->render(*packet, initialize, false);
+        recycle_scene(*packet);
+        std::lock_guard<std::mutex> lock(recycle_mutex_);
+        recycled_scenes_.push_back(std::move(*packet));
+      }
+    }
+    packets.clear();
+    pending_local_packets_.swap(packets);
+    if (scene_.order.empty()) {
+      std::lock_guard<std::mutex> lock(recycle_mutex_);
+      if (!recycled_scenes_.empty()) {
+        scene_ = std::move(recycled_scenes_.back());
+        recycled_scenes_.pop_back();
+      }
+    }
+  }
 static std::size_t packet_bytes(const vk::Scene &scene) {
   // sizeof(scene) includes the owned fixed local-light Uniform.
   std::size_t bytes =

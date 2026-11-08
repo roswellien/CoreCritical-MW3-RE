@@ -309,6 +309,7 @@ public:
   }
   void drain() override {
     flush();
+    complete_local_light_packets();
     if (worker_)
       worker_->drain();
   }
@@ -764,11 +765,13 @@ public:
   void begin_scene() override {
     if (!scene_.draws.empty())
       flush();
+    complete_local_light_packets();
     ensure_extent();
     local_lights_begin();
   }
   void end_scene() override {
     flush();
+    complete_local_light_packets();
     local_active_ = false;
   }
 
@@ -1040,6 +1043,7 @@ private:
     std::vector<uint8_t> bgra;
     unsigned w = 0, h = 0;
     flush();
+    complete_local_light_packets();
     const auto capture = [&] { renderer_->capture_fullres_bgra(bgra, w, h); };
     if (worker_)
       worker_->call(capture);

@@ -92,10 +92,10 @@ void local_lights_observe(const TLVertex *vertices, int count,
   ++local_observations_;
 }
 
-void local_lights_attach() {
-  scene_.effect_lights = {};
-  if (!bridge_config_.effect_lights || !local_active_ || scene_.hud ||
-      scene_.frontend_canvas) {
+void local_lights_attach(vk::Scene &target) {
+  target.effect_lights = {};
+  if (!bridge_config_.effect_lights || !local_active_ || target.hud ||
+      target.frontend_canvas) {
     return;
   }
   VisualFloatScope guard;
@@ -104,10 +104,10 @@ void local_lights_attach() {
   sources.insert(sources.end(), candidates.begin(), candidates.end());
   mw34::effects::Point eye = {local_camera_[3], local_camera_[7],
                               local_camera_[11]};
-  scene_.effect_lights = mw34::effects::rank_frame_lights(sources, eye, 64, 16);
+  target.effect_lights = mw34::effects::rank_frame_lights(sources, eye, 64, 16);
   local_packet_peak_ =
       std::max(local_packet_peak_,
-               static_cast<std::uint64_t>(scene_.effect_lights.params[0]));
+               static_cast<std::uint64_t>(target.effect_lights.params[0]));
 }
 
 void local_lights_report() {

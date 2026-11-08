@@ -5,6 +5,7 @@
 // donor::Mat with an implicit last row {0,0,0,1}.
 #pragma once
 
+#include <cfloat>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -170,8 +171,13 @@ collect_native_lights(const zmod::LightList &list) {
                 // stage.
     const float radius =
         native_light_detail::read_field<float>(entry.data, 0xb8);
-    const float power =
+    // native light_create stores diffuse at +0x9c and ambient at +0xa0;
+    // a projected light's projected power is their sum (ambient-only lights
+    // must still be collected).
+    const float diffuse =
         native_light_detail::read_field<float>(entry.data, 0x9c);
+    const float ambient =
+        native_light_detail::read_field<float>(entry.data, 0xa0);
     std::array<float, 3> color{};
     for (unsigned c = 0; c < 3; ++c) {
       color[c] =
@@ -179,9 +185,16 @@ collect_native_lights(const zmod::LightList &list) {
       if (!std::isfinite(color[c]) || color[c] < 0)
         throw std::runtime_error("Local lights: invalid native color");
     }
-    if (!std::isfinite(radius) || radius <= 0 || radius > 1e6f ||
-        !std::isfinite(power) || power < 0)
+    if (!std::isfinite(radius) || radius <= 0 || radius > 1e6f)
       throw std::runtime_error("Local lights: invalid native radius/intensity");
+    if (!std::isfinite(diffuse) || diffuse < 0 || !std::isfinite(ambient) ||
+        ambient < 0)
+      throw std::runtime_error("Local lights: invalid native intensity");
+    const double power_sum =
+        static_cast<double>(diffuse) + static_cast<double>(ambient);
+    if (power_sum > static_cast<double>(FLT_MAX))
+      throw std::runtime_error("Local lights: native intensity out of range");
+    const float power = static_cast<float>(power_sum);
     if (power == 0 || color == std::array<float, 3>{})
       continue;
     const auto world = light_world_transform(*entry.node);
