@@ -275,7 +275,7 @@ def main() -> None:
     )
 
     try:
-        with opener.open(mistral_req, timeout=60) as resp:
+        with opener.open(mistral_req, timeout=180) as resp:
             if resp.status != 200:
                 fail(f"Mistral API returned HTTP status {resp.status}")
             resp_bytes = resp.read(MAX_DIFF_BYTES + 1)
