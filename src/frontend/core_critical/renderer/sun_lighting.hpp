@@ -33,6 +33,7 @@ struct Settings {
   // saturation, anti-sun haze brightness, horizon blend height.
   bool sky_shading{};
   bool suppress_sky{};
+  float sky_source{1.f};
   float sky_brightness{1}, glow_strength{0}, glow_focus{2.5f},
       anti_brightness{1}, anti_saturation{1}, anti_haze{1}, horizon_low{.03f},
       horizon{.28f};
@@ -196,7 +197,7 @@ inline Uniform uniform(const std::array<float, 12> &normal, const Settings &s) {
   u.ambient = {s.ambient * s.ambient_color[0], s.ambient * s.ambient_color[1],
                s.ambient * s.ambient_color[2], 0.f};
   u.extra = {0, s.normal_strength, s.shadow_debug ? 1.f : 0.f, 0};
-  u.sky_tint = {s.sky_tint[0], s.sky_tint[1], s.sky_tint[2], 1.0f};
+  u.sky_tint = {s.sky_tint[0], s.sky_tint[1], s.sky_tint[2], s.sky_source};
   u.sky_glow = {s.glow_color[0], s.glow_color[1], s.glow_color[2],
                 s.glow_strength};
   u.sky_grade = {s.sky_brightness, s.anti_brightness, s.anti_saturation,

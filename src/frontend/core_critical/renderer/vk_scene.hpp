@@ -155,6 +155,7 @@ struct Draw {
   std::shared_ptr<const mw34::sun::Tl> sky_view{};
   std::shared_ptr<const mw34::temporal::Snapshot> camera_view{};
   unsigned detail_role{};
+  bool native_sky{};
   std::uint64_t shadow_source{};
   std::function<bool()> shadow_valid;
   bool condition_schematic{};
@@ -2642,7 +2643,7 @@ private:
       const bool routable = (sun.sky_shading || effects_settings.enabled) &&
                             view[at] && !d.model && !d.sun_tl && d.count &&
                             (d.push.mode[0] & 16);
-      if (sun.haze_active && (d.push.mode[0] & 16)) {
+      if (sun.haze_active && (d.native_sky || (d.push.mode[0] & 16))) {
         for (unsigned i = 0; i < 3; ++i)
           d.push.fog[i] =
               sun.haze_manual
@@ -2650,19 +2651,19 @@ private:
                   : std::fmin(1.f, d.push.fog[i] * sun.haze_scale[i]);
         ++haze_draws;
       }
-      if (routable && d.key.blend) {
+      if (routable && d.key.blend && !d.native_sky) {
         d.sky = 3;
         d.sun_tl = view[at];
         ++haze_routed;
         continue;
       }
-      if (d.model || d.sun_tl || d.key.blend || !d.count ||
+      if (d.model || (!d.native_sky && (d.sun_tl || d.key.blend)) || !d.count ||
           (d.texture >= 0 && !sun.sky_active && !sun.sky_shading &&
            !sun.suppress_sky) ||
           (d.texture < 0 && !sun.haze_active && !sun.sky_shading &&
            !sun.suppress_sky))
         continue;
-      const bool distant = mw34::sky::backdrop(
+      const bool distant = d.native_sky || mw34::sky::backdrop(
           s.vertices.data() + size_t(d.first) * 32, size_t(d.count) * 32,
           d.detail_role, d.texture >= 0, d.key.zwrite != 0);
       if (!distant) {

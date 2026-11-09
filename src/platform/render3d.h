@@ -28,6 +28,7 @@ enum class Primitive : uint8_t { kPoints = 1, kStrip = 5, kFan = 6 };  // D3DPRI
 
 // The render and texture-stage states the draw functions set (section 4).
 struct DrawState {
+  bool native_sky{};
   int32_t texture = -1;            // SetTexture(0, ...): a handle from create_texture, -1 none
   uint8_t address_u = 1;           // ADDRESSU: 1 WRAP, 3 CLAMP
   uint8_t address_v = 1;           // ADDRESSV

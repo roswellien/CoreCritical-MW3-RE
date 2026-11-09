@@ -213,18 +213,34 @@ void env_lighting(const efs::path &path, const std::string &region,
     const bool has_strength = entry.contains("ambient_strength");
     if (has_rgb != has_strength)
       env_fail("incomplete mission ambient override");
-    if (!has_rgb)
-      continue;
-    const auto &rgb_json = entry["ambient_color"];
-    if (!rgb_json.is_array() || rgb_json.size() != 3)
-      env_fail("invalid mission ambient_color");
-    std::array<float, 3> rgb{};
-    for (std::size_t i = 0; i < 3; ++i)
-      rgb[i] = env_float(rgb_json[i], 0.0, 4.0);
-    const float strength = env_float(entry["ambient_strength"], 0.0, 2.0);
-    if (selected)
-      selected->mission_ambient.emplace(item.key(),
-                                        MissionAmbientOverride{rgb, strength});
+    if (has_rgb) {
+      const auto &rgb_json = entry["ambient_color"];
+      if (!rgb_json.is_array() || rgb_json.size() != 3)
+        env_fail("invalid mission ambient_color");
+      std::array<float, 3> rgb{};
+      for (std::size_t i = 0; i < 3; ++i)
+        rgb[i] = env_float(rgb_json[i], 0.0, 4.0);
+      const float strength = env_float(entry["ambient_strength"], 0.0, 2.0);
+      if (selected)
+        selected->mission_ambient.emplace(item.key(),
+                                          MissionAmbientOverride{rgb, strength});
+    }
+    const bool has_tint = entry.contains("sky_tint");
+    const bool has_brightness = entry.contains("sky_brightness");
+    if (has_tint != has_brightness)
+      env_fail("incomplete mission sky override");
+    if (has_tint) {
+      const auto &tint_json = entry["sky_tint"];
+      if (!tint_json.is_array() || tint_json.size() != 3)
+        env_fail("invalid mission sky_tint");
+      std::array<float, 3> tint{};
+      for (std::size_t i = 0; i < 3; ++i)
+        tint[i] = env_float(tint_json[i], 0.0, 4.0);
+      const float brightness = env_float(entry["sky_brightness"], 0.0, 4.0);
+      if (selected)
+        selected->mission_sky.emplace(item.key(),
+                                      MissionSkyOverride{tint, brightness});
+    }
   }
 }
 void env_header(const EnvPin &pin) {
