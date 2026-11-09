@@ -465,8 +465,9 @@ public:
     lighting_ = mw34::campaign::mission_sun_settings(
         base_lighting_, resolved, campaign_enabled_, sun_explicit_,
         environment_.get(), id);
+    display_hdr_ = window_hdr_enabled();
     if (renderer_)
-      renderer_->update_lighting_settings(lighting_);
+      renderer_->update_lighting_settings(display_lighting());
     const bool identity_changed =
         identity.world_index != current_mission_identity_.world_index ||
         identity.number != current_mission_identity_.number;
@@ -769,6 +770,12 @@ public:
       flush();
     complete_local_light_packets();
     ensure_extent();
+    const bool hdr_enabled = window_hdr_enabled();
+    if (hdr_enabled != display_hdr_) {
+      drain();
+      display_hdr_ = hdr_enabled;
+      renderer_->update_lighting_settings(display_lighting());
+    }
     local_lights_begin();
   }
   void end_scene() override {
@@ -1191,14 +1198,24 @@ private:
       ++prepared_batches_;
     }
   }
+  bool window_hdr_enabled() const {
+    return SDL_GetBooleanProperty(SDL_GetWindowProperties(window_),
+                                  SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false);
+  }
+
+  mw34::sun::Settings display_lighting() const {
+    return mw34::sun::display_ambient(lighting_, campaign_enabled_, display_hdr_);
+  }
+
   void initialize_renderer() {
+    display_hdr_ = window_hdr_enabled();
     auto source = native_wsi_ ? sdl_surface(window_, window_state_tracker_)
                               : vk::Renderer::WindowSurface{};
     renderer_ = std::make_unique<vk::Renderer>(
         vk::Renderer::ColorTarget::rgba8, std::move(source), quality_,
         !prepared_.empty() || geometry_mode_ != cc::geometry::Mode::legacy ||
             lighting_.enabled,
-        lighting_, geometry_mode_ != cc::geometry::Mode::legacy,
+        display_lighting(), geometry_mode_ != cc::geometry::Mode::legacy,
         bridge_config_);
     texture_limit_ = renderer_->max_texture_dimension(native_window_);
     if (!native_wsi_ && !renderer_->dxgi_presenting()) {
@@ -1326,6 +1343,7 @@ private:
   const bool native_wsi_;
   const vk::Renderer::Quality quality_;
   mw34::sun::Settings lighting_;
+  bool display_hdr_ = false;
   const mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
   std::shared_ptr<const ::platform::prepared::EnvironmentSelection>

@@ -33,6 +33,7 @@ mission_sun_settings(const sun::Settings &base,
   result.ambient_color = profile.ambient_color;
   result.ambient = profile.ambient_strength;
   result.night_world_gain = profile.night_world_gain;
+  result.sdr_extra_shadow_lift = mission_id == "c1m2" ? .9f : 0.f;
   result.suppress_sky = mission.policy.suppress_sky;
   result.sky_source = static_cast<float>(mission.policy.sky_source);
   result.sky_tint = profile.sky_tint;
