@@ -278,17 +278,26 @@ void check_environment_packs() {
       "MW34-lighting-v1");
   training.registry["lighting"] = "environment/lighting.json";
   training.save();
+  operation.put(
+      "environment/lighting.json",
+      R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[0.0,1.25,4.0],"ambient_strength":0.0},"c4m4":{},"c4m6":{"ambient_color":[0.5,0.75,1.5],"ambient_strength":2.0}}})",
+      "MW34-lighting-v1");
+  operation.registry["lighting"] = "environment/lighting.json";
+  operation.save();
   std::fenv_t original;
   require(std::fegetenv(&original) == 0, "Cannot save test FP environment");
   std::feclearexcept(FE_ALL_EXCEPT);
   std::feraiseexcept(FE_DIVBYZERO);
   const auto rounding = std::fegetround();
-  load_environment_packs({training.path()});
+  const auto training_only = load_environment_packs({training.path()});
   const auto flags = std::fetestexcept(FE_ALL_EXCEPT);
   const auto after_rounding = std::fegetround();
   std::fesetenv(&original);
   require(flags == FE_DIVBYZERO && after_rounding == rounding,
           "Environment admission changed native FP state");
+  require(training_only.mission_ambient.empty() &&
+              training_only.resources.at("training").count(EnvironmentRole::lighting) == 1,
+          "Training lighting admitted mission ambient overrides");
   const auto combined = load_environment_packs(
       {training.path(), shared.path(), operation.path()});
   require(combined.regions == std::vector<std::string>(
@@ -297,6 +306,68 @@ void check_environment_packs() {
               combined.world_manifests.size() == 2 &&
               combined.authored_manifests.size() == 3,
           "Environment region selection mismatch");
+  require(combined.resources.at("operation4").count(EnvironmentRole::lighting) == 1 &&
+              combined.mission_ambient.size() == 2 &&
+              combined.mission_ambient.count("c4m4") == 0 &&
+              combined.mission_ambient.at("c4m1").color ==
+                  std::array<float, 3>{0.0f, 1.25f, 4.0f} &&
+              combined.mission_ambient.at("c4m1").strength == 0.0f &&
+              combined.mission_ambient.at("c4m6").color ==
+                  std::array<float, 3>{0.5f, 0.75f, 1.5f} &&
+              combined.mission_ambient.at("c4m6").strength == 2.0f,
+          "Mission ambient override selection mismatch");
+  {
+    const char *bad_op_lighting[] = {
+        R"({"schema_version":1,"missions":{"c3m1":{"ambient_color":[1,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4bm6":{"ambient_color":[1,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m7":{"ambient_color":[1,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"t1m1":{"ambient_color":[1,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":[]}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1]}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[-0.01,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,4.01,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[true,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":["1",1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1e309,1,1],"ambient_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":-0.01}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":2.01}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":false}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":"1"}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":1e309}}})",
+    };
+    for (std::size_t i = 0; i < std::size(bad_op_lighting); ++i) {
+      EnvironmentFixture bad_lighting(
+          folder / ("bad-lighting-" + std::to_string(i)), "operation4");
+      bad_lighting.put("environment/lighting.json", bad_op_lighting[i],
+                       "MW34-lighting-v1");
+      bad_lighting.registry["lighting"] = "environment/lighting.json";
+      bad_lighting.save();
+      env_test_reject([&] { load_environment_packs({bad_lighting.path()}); },
+                      "Malformed or out-of-region lighting ambient accepted");
+    }
+    EnvironmentFixture bad_training_lighting(folder / "bad-training-lighting");
+    bad_training_lighting.put(
+        "environment/lighting.json",
+        R"({"schema_version":1,"missions":{"t1m1":{}}})", "MW34-lighting-v1");
+    bad_training_lighting.registry["lighting"] = "environment/lighting.json";
+    bad_training_lighting.save();
+    env_test_reject(
+        [&] { load_environment_packs({bad_training_lighting.path()}); },
+        "Training mission lighting override accepted");
+    EnvironmentFixture bad_op1_lighting(folder / "bad-op1-lighting",
+                                        "operation1");
+    bad_op1_lighting.put(
+        "environment/lighting.json",
+        R"({"schema_version":1,"missions":{"c1m5":{"ambient_color":[1,1,1],"ambient_strength":1}}})",
+        "MW34-lighting-v1");
+    bad_op1_lighting.registry["lighting"] = "environment/lighting.json";
+    bad_op1_lighting.save();
+    env_test_reject([&] { load_environment_packs({bad_op1_lighting.path()}); },
+                    "Out-of-range operation1 mission key accepted");
+  }
   const auto stock = zutl::find("zbd/t1/texture.zbd");
   struct BankRestore {
     std::shared_ptr<const zutl::BankOverrides> prior;
@@ -382,7 +453,7 @@ void check_environment_packs() {
   const auto &empty = cache.resolve({});
   require(empty.banks.empty() && empty.world_manifests.empty() &&
               empty.authored_manifests.empty() && empty.regions.empty() &&
-              empty.resources.empty(),
+              empty.resources.empty() && empty.mission_ambient.empty(),
           "Pack removal retained resources");
   env_test_write(training.root / "environment/bank.bin",
                  std::string(changed.size(), 'x'));
