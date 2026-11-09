@@ -48,6 +48,13 @@ struct Settings {
   float valley_fog_altitude{0.0f};
   float night_world_gain{1.0f};
 };
+inline Settings display_ambient(Settings settings, bool lighting_mode_enabled,
+                                bool hdr_enabled) {
+  if (settings.enabled && lighting_mode_enabled && !hdr_enabled)
+    settings.ambient *= 1.2f;
+  return settings;
+}
+
 inline void atmosphere(Settings &s) {
   const bool automatic = true;
   // Low-sun weight: 0 at 30 degrees and above, 1 at 5 degrees and below.

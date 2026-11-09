@@ -1518,7 +1518,13 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       0.0, ((nx - nz) * std::cos(35 * radians) * std::cos(45 * radians) +
             ny * std::sin(35 * radians)) /
                len);
-  const int expected = int(std::lround(std::min(1.0, .3 + .85 * direct) * 255));
+  const double ambient =
+      SDL_GetBooleanProperty(SDL_GetWindowProperties(window),
+                             SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false)
+          ? .30
+          : .36;
+  const int expected =
+      int(std::lround(std::min(1.0, ambient + .85 * direct) * 255));
   require(
       std::abs(int((scaled[centre] >> 16) & 255) - expected) <= 1,
       "Nonuniform source scale did not use inverse-transpose material normals");
@@ -1529,7 +1535,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   const double ratio = .8 / 1.7;
   const double mapped_z = 1.0 / std::sqrt(1 + ratio * ratio);
   const int mapped_expected =
-      int(std::lround((.3 + .85 * std::cos(35 * radians) * mapped_z) * 255));
+      int(std::lround((ambient + .85 * std::cos(35 * radians) * mapped_z) * 255));
   require(
       std::abs(int((scaled_map[centre] >> 16) & 255) - mapped_expected) <= 1,
       "Tangent basis used normal coordinates instead of true world positions");
@@ -1545,7 +1551,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   const auto clipped_normal =
       render_material("normal", 0xffd980d9, false, false, false, {1, 0, 1});
   const int clipped_expected = int(std::lround(
-      (.3 + .85 * std::cos(35 * radians) * std::sin(45 * radians)) * 255));
+      (ambient + .85 * std::cos(35 * radians) * std::sin(45 * radians)) * 255));
   require(
       std::abs(int((clipped_flat[centre] >> 16) & 255) - clipped_expected) <= 1,
       "Clipped geometry lost its authored smooth normals");
@@ -1606,6 +1612,13 @@ void check_campaign_lighting_and_policy() {
   using namespace mw34::campaign;
   mw34::sun::Settings base{};
   base.enabled = true;
+  const auto sdr = mw34::sun::display_ambient(base, true, false);
+  require(sdr.ambient == base.ambient * 1.2f && sdr.color == base.color &&
+              sdr.strength == base.strength,
+          "SDR should boost only ambient light");
+  require(mw34::sun::display_ambient(base, true, true).ambient == base.ambient &&
+              mw34::sun::display_ambient(base, false, false).ambient == base.ambient,
+          "HDR and lighting-off should retain authored ambient");
   const auto training = resolve_mission_lighting("t1m1");
   const auto lit = mission_sun_settings(base, training, true, false);
   require(lit.azimuth == 95.f && lit.elevation == 6.f && lit.strength == 1.05f,
