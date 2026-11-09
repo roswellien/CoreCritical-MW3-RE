@@ -237,6 +237,22 @@ def main() -> None:
     request_data = {
         "model": mistral_model,
         "reasoning_effort": "medium",
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "pr_review",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
+                        "findings": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["verdict", "findings"],
+                },
+            },
+        },
         "max_tokens": MAX_OUTPUT_TOKENS,
         "messages": [
             {"role": "system", "content": system_instruction},
@@ -313,16 +329,25 @@ def main() -> None:
 
     choice = choices[0]
     finish_reason = choice.get("finish_reason")
+    if finish_reason != "stop":
+        fail("Mistral did not complete the review verdict")
     message = choice.get("message") or {}
-    content_raw = verdict_text(message.get("content"))
+    content_raw = verdict_text(message.get("content")).strip()
+    fenced = re.fullmatch(
+        r"\x60\x60\x60json[^\S\r\n]*\r?\n(.*?)\r?\n\x60\x60\x60",
+        content_raw,
+        re.DOTALL,
+    )
+    if fenced:
+        content_raw = fenced.group(1)
 
     try:
         parsed_content = json.loads(content_raw)
     except Exception:
         fail("Mistral message content is not valid JSON")
 
-    if not isinstance(parsed_content, dict):
-        fail("Mistral verdict must be a JSON object")
+    if not isinstance(parsed_content, dict) or parsed_content.keys() != {"verdict", "findings"}:
+        fail("Mistral verdict must contain exactly verdict and findings")
     verdict = parsed_content.get("verdict")
     findings = parsed_content.get("findings")
 
@@ -334,8 +359,6 @@ def main() -> None:
     if verdict == "PASS":
         if len(findings) != 0:
             fail("Verdict PASS requires empty findings")
-        if finish_reason != "stop":
-            fail(f"Verdict PASS requires 'stop' finish_reason, got '{finish_reason}'")
 
     # 8. Re-read head before accepting verdict
     pr_meta_after = get_pr_metadata(pr_num, github_token)
