@@ -280,7 +280,7 @@ void check_environment_packs() {
   training.save();
   operation.put(
       "environment/lighting.json",
-      R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[0.0,1.25,4.0],"ambient_strength":0.0},"c4m2":{"horizon_low":0.02,"horizon_high":0.25},"c4m3":{"sky_glow_color":[1.0,0.5,0.2],"sky_glow_strength":0.9,"sky_glow_focus":2.5},"c4m4":{"sky_tint":[0.25,0.5,2.0],"sky_brightness":1.5},"c4m5":{"horizon_low":0.0,"horizon_high":0.0,"is_interior":true},"c4m6":{"ambient_color":[0.5,0.75,1.5],"ambient_strength":2.0,"sky_tint":[0.0,1.0,4.0],"sky_brightness":4.0,"sky_glow_color":[0.0,2.0,4.0],"sky_glow_strength":4.0,"sky_glow_focus":20.0,"horizon_low":0.9,"horizon_high":1.0}}})",
+      R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[0.0,1.25,4.0],"ambient_strength":0.0},"c4m2":{"horizon_low":0.02,"horizon_high":0.25},"c4m3":{"sky_glow_color":[1.0,0.5,0.2],"sky_glow_strength":0.9,"sky_glow_focus":2.5,"sky_grade":[0.55,0.45,0.65]},"c4m4":{"sky_tint":[0.25,0.5,2.0],"sky_brightness":1.5},"c4m5":{"horizon_low":0.0,"horizon_high":0.0,"is_interior":true},"c4m6":{"ambient_color":[0.5,0.75,1.5],"ambient_strength":2.0,"sky_tint":[0.0,1.0,4.0],"sky_brightness":4.0,"sky_glow_color":[0.0,2.0,4.0],"sky_glow_strength":4.0,"sky_glow_focus":20.0,"horizon_low":0.9,"horizon_high":1.0}}})",
       "MW34-lighting-v1");
   operation.registry["lighting"] = "environment/lighting.json";
   operation.save();
@@ -299,6 +299,7 @@ void check_environment_packs() {
               training_only.mission_sky.empty() &&
               training_only.mission_sky_glow.empty() &&
               training_only.mission_horizon.empty() &&
+              training_only.mission_sky_grade.empty() &&
               training_only.resources.at("training").count(EnvironmentRole::lighting) == 1,
           "Training lighting admitted mission ambient overrides");
   const auto combined = load_environment_packs(
@@ -349,8 +350,15 @@ void check_environment_packs() {
               combined.mission_horizon.at("c4m6").low == 0.9f &&
               combined.mission_horizon.at("c4m6").high == 1.0f,
           "Mission ambient override selection mismatch");
+  require(combined.mission_sky_grade.size() == 1 &&
+              combined.mission_sky_grade.at("c4m3") ==
+                  std::array<float, 3>{0.55f, 0.45f, 0.65f},
+          "Mission sky grade selection mismatch");
   {
     const char *bad_op_lighting[] = {
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_grade":[0,1]}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_grade":[0,true,1]}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_grade":[0,1,1.01]}}})",
         R"({"schema_version":1,"missions":{"c3m1":{"ambient_color":[1,1,1],"ambient_strength":1}}})",
         R"({"schema_version":1,"missions":{"c4bm6":{"ambient_color":[1,1,1],"ambient_strength":1}}})",
         R"({"schema_version":1,"missions":{"c4m7":{"ambient_color":[1,1,1],"ambient_strength":1}}})",

@@ -114,6 +114,7 @@ struct EnvironmentSelection {
   std::map<std::string, MissionSkyOverride> mission_sky;
   std::map<std::string, MissionSkyGlowOverride> mission_sky_glow;
   std::map<std::string, MissionHorizonOverride> mission_horizon;
+  std::map<std::string, std::array<float, 3>> mission_sky_grade;
   std::vector<std::string> authored_manifests, world_manifests, regions;
   std::string identity;
 };

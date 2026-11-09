@@ -282,6 +282,16 @@ void env_lighting(const efs::path &path, const std::string &region,
               item.key(), MissionHorizonOverride{horizon_low, horizon_high});
       }
     }
+    if (entry.contains("sky_grade")) {
+      const auto &grade_json = entry["sky_grade"];
+      if (!grade_json.is_array() || grade_json.size() != 3)
+        env_fail("invalid mission sky_grade");
+      std::array<float, 3> grade{};
+      for (std::size_t i = 0; i < grade.size(); ++i)
+        grade[i] = env_float(grade_json[i], 0.0, 1.0);
+      if (selected)
+        selected->mission_sky_grade.emplace(item.key(), grade);
+    }
   }
 }
 void env_header(const EnvPin &pin) {

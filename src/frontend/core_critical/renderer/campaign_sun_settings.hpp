@@ -71,6 +71,13 @@ mission_sun_settings(const sun::Settings &base,
       result.horizon_low = found_horizon->second.low;
       result.horizon = found_horizon->second.high;
     }
+    const auto found_grade = environment->mission_sky_grade.find(mission_id);
+    if (found_grade != environment->mission_sky_grade.end() &&
+        !result.suppress_sky) {
+      result.anti_brightness = found_grade->second[0];
+      result.anti_saturation = found_grade->second[1];
+      result.anti_haze = found_grade->second[2];
+    }
   }
   return result;
 }
