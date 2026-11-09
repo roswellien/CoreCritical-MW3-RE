@@ -262,6 +262,26 @@ void env_lighting(const efs::path &path, const std::string &region,
             item.key(),
             MissionSkyGlowOverride{glow_color, glow_strength, glow_focus});
     }
+    const bool has_horizon_low = entry.contains("horizon_low");
+    const bool has_horizon_high = entry.contains("horizon_high");
+    if (has_horizon_low != has_horizon_high)
+      env_fail("incomplete mission horizon override");
+    if (has_horizon_low) {
+      const float horizon_low = env_float(entry["horizon_low"], 0.0, 0.9);
+      const float horizon_high = env_float(entry["horizon_high"], 0.0, 1.0);
+      const bool interior_sentinel =
+          entry.contains("is_interior") &&
+          entry["is_interior"].is_boolean() &&
+          entry["is_interior"].get<bool>() && horizon_low == 0.0f &&
+          horizon_high == 0.0f;
+      if (!interior_sentinel) {
+        if (!(horizon_low < horizon_high))
+          env_fail("invalid mission horizon range");
+        if (selected)
+          selected->mission_horizon.emplace(
+              item.key(), MissionHorizonOverride{horizon_low, horizon_high});
+      }
+    }
   }
 }
 void env_header(const EnvPin &pin) {

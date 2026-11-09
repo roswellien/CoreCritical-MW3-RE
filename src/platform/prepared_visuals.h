@@ -103,12 +103,17 @@ struct MissionSkyGlowOverride {
   float strength{};
   float focus{};
 };
+struct MissionHorizonOverride {
+  float low{};
+  float high{};
+};
 struct EnvironmentSelection {
   std::map<std::string, std::string> banks;
   std::map<std::string, std::map<EnvironmentRole, std::string>> resources;
   std::map<std::string, MissionAmbientOverride> mission_ambient;
   std::map<std::string, MissionSkyOverride> mission_sky;
   std::map<std::string, MissionSkyGlowOverride> mission_sky_glow;
+  std::map<std::string, MissionHorizonOverride> mission_horizon;
   std::vector<std::string> authored_manifests, world_manifests, regions;
   std::string identity;
 };

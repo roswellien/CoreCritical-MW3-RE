@@ -65,6 +65,12 @@ mission_sun_settings(const sun::Settings &base,
       result.glow_strength = found_glow->second.strength;
       result.glow_focus = found_glow->second.focus;
     }
+    const auto found_horizon = environment->mission_horizon.find(mission_id);
+    if (found_horizon != environment->mission_horizon.end() &&
+        !result.suppress_sky) {
+      result.horizon_low = found_horizon->second.low;
+      result.horizon = found_horizon->second.high;
+    }
   }
   return result;
 }
