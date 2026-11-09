@@ -1,5 +1,6 @@
 #pragma once
 #include "campaign_lighting.hpp"
+#include "platform/prepared_visuals.h"
 #include "sun_lighting.hpp"
 #include <string>
 namespace mw34::campaign {
@@ -16,7 +17,9 @@ inline std::string canonical_mission_id(int world, int number) {
 inline sun::Settings
 mission_sun_settings(const sun::Settings &base,
                      const ResolvedMissionLighting &mission, bool enabled,
-                     bool explicit_angles) {
+                     bool explicit_angles,
+                     const platform::prepared::EnvironmentSelection *environment = nullptr,
+                     const std::string &mission_id = {}) {
   auto result = base;
   if (!enabled || !base.enabled || !mission.has_profile || !mission.environment)
     return result;
@@ -31,6 +34,13 @@ mission_sun_settings(const sun::Settings &base,
   result.ambient = profile.ambient_strength;
   result.night_world_gain = profile.night_world_gain;
   result.suppress_sky = mission.policy.suppress_sky;
+  if (environment && !mission_id.empty()) {
+    const auto found = environment->mission_ambient.find(mission_id);
+    if (found != environment->mission_ambient.end()) {
+      result.ambient_color = found->second.color;
+      result.ambient = found->second.strength;
+    }
+  }
   return result;
 }
 } // namespace mw34::campaign
