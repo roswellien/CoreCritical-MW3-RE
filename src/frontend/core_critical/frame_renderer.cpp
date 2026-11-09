@@ -268,6 +268,7 @@ public:
         quality_(parse_quality(quality)), lighting_(parse_lighting(assets)),
         base_lighting_(lighting_), campaign_enabled_(assets.lighting != "off"),
         sun_explicit_(assets.sun_explicit),
+        environment_(assets.environment),
         prepared_(sanitize_prepared_assets(assets), assets.materials),
         geometry_mode_(parse_geometry(assets.geometry)),
         geometry_debug_(assets.geometry_debug_normals),
@@ -462,7 +463,8 @@ public:
     if (!id.empty())
       resolved = mw34::campaign::resolve_mission_lighting(id);
     lighting_ = mw34::campaign::mission_sun_settings(
-        base_lighting_, resolved, campaign_enabled_, sun_explicit_);
+        base_lighting_, resolved, campaign_enabled_, sun_explicit_,
+        environment_.get(), id);
     if (renderer_)
       renderer_->update_lighting_settings(lighting_);
     const bool identity_changed =
@@ -1324,6 +1326,8 @@ private:
   mw34::sun::Settings lighting_;
   const mw34::sun::Settings base_lighting_;
   const bool campaign_enabled_, sun_explicit_;
+  std::shared_ptr<const ::platform::prepared::EnvironmentSelection>
+      environment_;
   // Owned current-mission state: canonical mission ID plus resolved campaign
   // lighting/policy. The profile pointer refers only to the static campaign
   // profile database (no borrowed native pointers).

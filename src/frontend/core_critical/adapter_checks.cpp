@@ -1658,6 +1658,104 @@ void check_campaign_lighting_and_policy() {
               "Non-campaign or failed load must restore configured lighting");
     }
   }
+  {
+    platform::prepared::EnvironmentSelection selection{};
+    selection.mission_ambient.emplace(
+        "c1m1", platform::prepared::MissionAmbientOverride{
+                    {0.18f, 0.22f, 0.32f}, 0.14f});
+    auto resolve_sequence = [&](const platform::MissionIdentity &identity,
+                                bool enabled, bool explicit_angles = false) {
+      const auto id =
+          canonical_mission_id(identity.world_index, identity.number);
+      ResolvedMissionLighting resolved{};
+      if (!id.empty())
+        resolved = resolve_mission_lighting(id);
+      return mission_sun_settings(base, resolved, enabled, explicit_angles,
+                                  &selection, id);
+    };
+    const auto c1m1_overridden =
+        resolve_sequence(platform::make_mission_identity(1, 0, 1, true), true);
+    require(c1m1_overridden.ambient_color ==
+                    std::array<float, 3>{0.18f, 0.22f, 0.32f} &&
+                c1m1_overridden.ambient == 0.14f &&
+                c1m1_overridden.azimuth == 245.0f &&
+                c1m1_overridden.elevation == 7.0f &&
+                c1m1_overridden.color ==
+                    std::array<float, 3>{1.0f, 0.45f, 0.2f} &&
+                c1m1_overridden.strength == 1.4f &&
+                c1m1_overridden.night_world_gain == 1.0f &&
+                !c1m1_overridden.suppress_sky,
+            "c1m1 pack ambient override or untouched directional/policy fields "
+            "mismatched");
+    const auto c1m1_manual = resolve_sequence(
+        platform::make_mission_identity(1, 0, 1, true), true, true);
+    require(c1m1_manual.azimuth == base.azimuth &&
+                c1m1_manual.elevation == base.elevation &&
+                c1m1_manual.ambient_color ==
+                    std::array<float, 3>{0.18f, 0.22f, 0.32f} &&
+                c1m1_manual.ambient == 0.14f && c1m1_manual.strength == 1.4f,
+            "Explicit sun angles with pack ambient override failed");
+    const auto c1m2_builtin =
+        resolve_sequence(platform::make_mission_identity(1, 0, 2, true), true);
+    require(c1m2_builtin.ambient_color ==
+                    std::array<float, 3>{0.18f, 0.22f, 0.32f} &&
+                c1m2_builtin.ambient == 0.14f &&
+                c1m2_builtin.azimuth == 210.0f &&
+                c1m2_builtin.elevation == 25.0f &&
+                c1m2_builtin.color ==
+                    std::array<float, 3>{0.35f, 0.45f, 0.65f} &&
+                c1m2_builtin.strength == 0.28f &&
+                c1m2_builtin.night_world_gain == 0.24f &&
+                !c1m2_builtin.suppress_sky,
+            "Absent c1m2 pack entry did not restore c1m2 built-in ambient and "
+            "directional fields");
+    selection.mission_ambient["c1m1"] = {{0.85f, 0.65f, 0.35f}, 0.45f};
+    const auto c1m1_distinct =
+        resolve_sequence(platform::make_mission_identity(1, 0, 1, true), true);
+    require(c1m1_distinct.ambient_color ==
+                    std::array<float, 3>{0.85f, 0.65f, 0.35f} &&
+                c1m1_distinct.ambient == 0.45f &&
+                c1m1_distinct.strength == 1.4f,
+            "Adjusted c1m1 pack ambient override was not applied");
+    const auto c1m2_after_distinct =
+        resolve_sequence(platform::make_mission_identity(1, 0, 2, true), true);
+    require(c1m2_after_distinct.ambient_color ==
+                    std::array<float, 3>{0.18f, 0.22f, 0.32f} &&
+                c1m2_after_distinct.ambient == 0.14f &&
+                c1m2_after_distinct.strength == 0.28f,
+            "Transition to absent c1m2 leaked previous c1m1 pack ambient");
+    for (const auto invalid_identity :
+         {platform::MissionIdentity{},
+          platform::make_mission_identity(1, 0, 1, false),
+          platform::make_mission_identity(2, 0, 1, true)}) {
+      const auto reset_settings = resolve_sequence(invalid_identity, true);
+      require(reset_settings.ambient_color == base.ambient_color &&
+                  reset_settings.ambient == base.ambient &&
+                  reset_settings.color == base.color &&
+                  reset_settings.strength == base.strength &&
+                  reset_settings.azimuth == base.azimuth &&
+                  reset_settings.elevation == base.elevation,
+              "Invalid or reset mission identity did not return base settings");
+    }
+    const auto off_settings =
+        resolve_sequence(platform::make_mission_identity(1, 0, 1, true), false);
+    require(off_settings.ambient_color == base.ambient_color &&
+                off_settings.ambient == base.ambient &&
+                off_settings.color == base.color &&
+                off_settings.strength == base.strength &&
+                off_settings.azimuth == base.azimuth &&
+                off_settings.elevation == base.elevation,
+            "Lighting off did not ignore pack ambient override and return base");
+    auto disabled_base = base;
+    disabled_base.enabled = false;
+    const auto base_off_settings = mission_sun_settings(
+        disabled_base, resolve_mission_lighting("c1m1"), true, false,
+        &selection, "c1m1");
+    require(base_off_settings.ambient_color == disabled_base.ambient_color &&
+                base_off_settings.ambient == disabled_base.ambient &&
+                base_off_settings.strength == disabled_base.strength,
+            "Disabled base lighting did not ignore pack ambient override");
+  }
   unsigned identities = 0;
   for (int world = 0; world < 6; ++world)
     for (int number = 0; number <= 7; ++number) {

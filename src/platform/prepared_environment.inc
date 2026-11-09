@@ -4,6 +4,7 @@
 #include "platform/sha256.hpp"
 #include <algorithm>
 #include <cfenv>
+#include <cmath>
 #include <fstream>
 #include <nlohmann-json/json.hpp>
 #include <regex>
@@ -177,6 +178,55 @@ struct EnvPack {
   EJson registry;
   std::map<std::string, EnvPin> pins;
 };
+float env_float(const EJson &j, double min_val, double max_val) {
+  if (j.is_boolean() || !j.is_number())
+    env_fail("expected finite number");
+  const double value = j.get<double>();
+  if (!std::isfinite(value) || value < min_val || value > max_val)
+    env_fail("number out of range");
+  return static_cast<float>(value);
+}
+bool env_region_mission(const std::string &region, const std::string &mission) {
+  if (region.size() != 10 || region.substr(0, 9) != "operation")
+    return false;
+  const char op = region[9];
+  return mission.size() == 4 && mission[0] == 'c' && mission[1] == op &&
+         mission[2] == 'm' && mission[3] >= '1' &&
+         mission[3] <= (op < '3' ? '4' : '6');
+}
+void env_lighting(const efs::path &path, const std::string &region,
+                  EnvironmentSelection *selected = nullptr) {
+  const auto lighting = env_json(path);
+  if (!lighting.is_object() || env_uint(lighting.at("schema_version")) != 1 ||
+      (lighting.contains("missions") && !lighting["missions"].is_object()) ||
+      (lighting.contains("maps") && !lighting["maps"].is_object()))
+    env_fail("invalid lighting object");
+  if (!lighting.contains("missions"))
+    return;
+  for (const auto &item : lighting["missions"].items()) {
+    if (!region.empty() && !env_region_mission(region, item.key()))
+      env_fail("invalid lighting mission key: " + item.key());
+    if (!item.value().is_object())
+      env_fail("invalid lighting mission entry");
+    const auto &entry = item.value();
+    const bool has_rgb = entry.contains("ambient_color");
+    const bool has_strength = entry.contains("ambient_strength");
+    if (has_rgb != has_strength)
+      env_fail("incomplete mission ambient override");
+    if (!has_rgb)
+      continue;
+    const auto &rgb_json = entry["ambient_color"];
+    if (!rgb_json.is_array() || rgb_json.size() != 3)
+      env_fail("invalid mission ambient_color");
+    std::array<float, 3> rgb{};
+    for (std::size_t i = 0; i < 3; ++i)
+      rgb[i] = env_float(rgb_json[i], 0.0, 4.0);
+    const float strength = env_float(entry["ambient_strength"], 0.0, 2.0);
+    if (selected)
+      selected->mission_ambient.emplace(item.key(),
+                                        MissionAmbientOverride{rgb, strength});
+  }
+}
 void env_header(const EnvPin &pin) {
   std::ifstream input(efs::u8path(pin.path), std::ios::binary);
   char head[24]{};
@@ -192,11 +242,7 @@ void env_header(const EnvPin &pin) {
   if (pin.format == "ZBD-texture-v1") {
     detail::validate_environment_bank(efs::u8path(pin.path), pin.bytes);
   } else if (pin.format == "MW34-lighting-v1") {
-    const auto lighting = env_json(efs::u8path(pin.path));
-    if (!lighting.is_object() || env_uint(lighting.at("schema_version")) != 1 ||
-        (lighting.contains("missions") && !lighting["missions"].is_object()) ||
-        (lighting.contains("maps") && !lighting["maps"].is_object()))
-      env_fail("invalid lighting object");
+    env_lighting(efs::u8path(pin.path), {});
   } else {
     const auto it = magic.find(pin.format);
     if (it == magic.end() || count < 8 ||
@@ -468,6 +514,9 @@ load_environment_packs(const std::vector<std::string> &roots) {
                                                 : "BWSFM1"))
             env_fail("invalid optional resource role");
           refs.insert(name);
+          if (std::string(role) == "lighting")
+            env_lighting(efs::u8path(pack.pins.at(name).path), pack.region,
+                         &selected);
           selected.resources[pack.region]
                             [std::string(role) == "lighting"
                                  ? EnvironmentRole::lighting

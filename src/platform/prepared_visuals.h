@@ -90,9 +90,14 @@ enum class EnvironmentRole {
   ground_materials,
   surface_materials
 };
+struct MissionAmbientOverride {
+  std::array<float, 3> color{};
+  float strength{};
+};
 struct EnvironmentSelection {
   std::map<std::string, std::string> banks;
   std::map<std::string, std::map<EnvironmentRole, std::string>> resources;
+  std::map<std::string, MissionAmbientOverride> mission_ambient;
   std::vector<std::string> authored_manifests, world_manifests, regions;
   std::string identity;
 };
