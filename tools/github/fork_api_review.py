@@ -13,7 +13,7 @@ import urllib.request
 REPO = "roswellien/CoreCritical-MW3-RE"
 MISTRAL_ENDPOINT = "https://api.mistral.ai/v1/chat/completions"
 MAX_DIFF_BYTES = 65536  # 64 KiB cap
-MAX_OUTPUT_TOKENS = 4096
+MAX_OUTPUT_TOKENS = 8192
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -236,7 +236,7 @@ def main() -> None:
     )
     request_data = {
         "model": mistral_model,
-        "reasoning_effort": "medium",
+        "reasoning_effort": "low",
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -329,6 +329,9 @@ def main() -> None:
 
     choice = choices[0]
     finish_reason = choice.get("finish_reason")
+    if finish_reason not in ('stop', 'length', 'model_length', 'error', 'tool_calls', 'content_filter'):
+        finish_reason = 'unknown'
+    print(finish_reason, usage['prompt_tokens'], usage['completion_tokens'], usage['total_tokens'])
     if finish_reason != "stop":
         fail("Mistral did not complete the review verdict")
     message = choice.get("message") or {}
