@@ -29,6 +29,8 @@ static_assert(sizeof(zmod::TLVertex) == sizeof(TLVertex), "both are D3DTLVERTEX"
 namespace {
 TransparentQueue g_queue;
 OverlayList g_overlay;
+bool g_transparent_sky[TransparentQueue::kMaxPolys];
+bool g_overlay_sky[OverlayList::kMax];
 platform::Render3D *g_render = nullptr;
 // Host-only admission sidecars preserve original queue records and draw order.
 std::shared_ptr<const platform::DeferredMaterialBinding>
@@ -52,6 +54,11 @@ struct DeferredMaterialScope {
 TLVertex g_flat[64];
 DeviceState g_state;
 platform::DrawState g_draw;
+struct NativeSkyScope {
+  explicit NativeSkyScope(bool enabled) : previous(set_native_sky(enabled)) {}
+  ~NativeSkyScope() { set_native_sky(previous); }
+  bool previous;
+};
 DrawBuffers g_buffers{reinterpret_cast<TLVertex*>(zmod::clip2d().tl),
                       reinterpret_cast<const WorkRecord*>(zmod::clip2d().work), &zmod::clip2d().shadow};
 // 0x008008e0: up to 64 vertices of 6 + 2 * 8 dwords (the shadowed draws' FVF).
@@ -270,6 +277,7 @@ OverlayPoly* overlay_slot(int32_t type, int32_t count, const D3DTexture* texture
     zerr::report(0x400, kFile, line, msg);
     return nullptr;
   }
+  g_overlay_sky[o.count] = g_draw.native_sky;
   g_overlay_materials[o.count] =
       g_render && texture
           ? g_render->capture_deferred_material_binding(texture->handle)
@@ -357,6 +365,12 @@ TLVertex* flat_buffer() { return g_flat; }
 DeviceState& device_state() { return g_state; }
 void set_render3d(platform::Render3D* render) { g_render = render; }
 platform::Render3D* render3d() { return g_render; }
+
+bool set_native_sky(bool enabled) noexcept {
+  const bool previous = g_draw.native_sky;
+  g_draw.native_sky = enabled;
+  return previous;
+}
 platform::DrawState& draw_state() { return g_draw; }
 DrawBuffers& draw_buffers() { return g_buffers; }
 PointLight& point_light() { return g_light; }
@@ -383,6 +397,7 @@ TLVertex* queue_transparent(int32_t primitive, int32_t count, const D3DTexture* 
     zerr::report(0x400, kFile, 0x599, msg);
     return nullptr;
   }
+  g_transparent_sky[q.count] = g_draw.native_sky;
   g_transparent_materials[q.count] =
       g_render && texture
           ? g_render->capture_deferred_material_binding(texture->handle)
@@ -716,6 +731,7 @@ void flush_transparent() {
   for (uint32_t n = 0; n < q.count; ++n) {
     DeferredMaterialScope material_scope(
         std::move(g_transparent_materials[q.order[n]]));
+    const NativeSkyScope sky_scope(g_transparent_sky[q.order[n]]);
     const TransparentPoly& p = q.polys[q.order[n]];
     if (p.texture) {
       // Compares a texture type with the cached ALPHAOP: anything but 2
@@ -746,6 +762,7 @@ void flush_overlay() {
   set_render_state(23, 8);  // ZFUNC ALWAYS
   for (int32_t n = 0; n < o.count; ++n) {
     DeferredMaterialScope material_scope(std::move(g_overlay_materials[n]));
+    const NativeSkyScope sky_scope(g_overlay_sky[n]);
     const OverlayPoly& p = o.polys[n];
     const D3DTexture* t = p.texture;
     switch (p.type) {

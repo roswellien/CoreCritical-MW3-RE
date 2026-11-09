@@ -85,6 +85,7 @@ DeviceState& device_state();
 // original's SetRenderState / SetTextureStageState / SetTexture calls left).
 void set_render3d(platform::Render3D* render);
 platform::Render3D* render3d();
+bool set_native_sky(bool enabled) noexcept;
 platform::DrawState& draw_state();
 
 // The per-polygon buffers the model draw fills and the draw functions read

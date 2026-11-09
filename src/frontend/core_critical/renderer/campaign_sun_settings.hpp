@@ -34,11 +34,30 @@ mission_sun_settings(const sun::Settings &base,
   result.ambient = profile.ambient_strength;
   result.night_world_gain = profile.night_world_gain;
   result.suppress_sky = mission.policy.suppress_sky;
+  result.sky_source = static_cast<float>(mission.policy.sky_source);
+  result.sky_tint = profile.sky_tint;
+  result.sky_brightness = profile.sky_brightness;
+  result.glow_color = profile.sky_glow_color;
+  result.glow_strength = profile.sky_glow_strength;
+  result.glow_focus = profile.sky_glow_focus;
+  result.anti_brightness = profile.sky_grade[0];
+  result.anti_saturation = profile.sky_grade[1];
+  result.anti_haze = profile.sky_grade[2];
+  result.horizon_low = profile.horizon_low;
+  result.horizon = profile.horizon_high;
+  result.haze_color = profile.haze_color;
+  result.haze_manual = true;
+  result.sky_active = result.haze_active = result.sky_shading = true;
   if (environment && !mission_id.empty()) {
     const auto found = environment->mission_ambient.find(mission_id);
     if (found != environment->mission_ambient.end()) {
       result.ambient_color = found->second.color;
       result.ambient = found->second.strength;
+    }
+    const auto found_sky = environment->mission_sky.find(mission_id);
+    if (found_sky != environment->mission_sky.end()) {
+      result.sky_tint = found_sky->second.tint;
+      result.sky_brightness = found_sky->second.brightness;
     }
   }
   return result;

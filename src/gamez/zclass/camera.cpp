@@ -24,6 +24,7 @@
 #include "gamez/zmodel/gmod_light.h"
 #include "gamez/zrender/zrndr_flare.h"
 #include "gamez/zutil/ztimer.h"
+#include "gamez/zvideo/zvid_ddd3d.h"
 
 namespace zcls {
 
@@ -881,6 +882,8 @@ int camera_matrices(Node* node, Camera* d, const float* offset) {
 void render_node(Node* node, int32_t siblings) {
   if (!zmod::zone_visible(node->raw[0x30])) return;
   if ((nu(node, 0x2c) & 0x20) && g_walk.pre) g_walk.pre(node);
+  const bool horizon = g_walk.camera && node == g_walk.camera->nodes[2];
+  const bool previous_sky = horizon && zvid::set_native_sky(true);
   switch (node->cls()) {
     case 1: render_camera(node, siblings); break;
     case 5: render_object3d(node, siblings); break;
@@ -892,6 +895,7 @@ void render_node(Node* node, int32_t siblings) {
     case 11: render_switch(node, siblings); break;
     default: std::fprintf(stderr, "Unrecognized node rendering type: %s\n", node->name()); break;
   }
+  if (horizon) zvid::set_native_sky(previous_sky);
   if ((nu(node, 0x2c) & 0x40) && g_walk.post) g_walk.post(node);
 }
 

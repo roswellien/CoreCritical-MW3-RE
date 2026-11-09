@@ -891,6 +891,7 @@ private:
     }
 
     vk::Draw draw{};
+    draw.native_sky = state.native_sky;
     draw.depth_only = depth_only;
     draw.first = first;
     draw.count = drawn;
@@ -1007,6 +1008,7 @@ private:
     if (!scene_.order.empty() && !scene_.order.back().clear) {
       auto &previous = scene_.draws.back();
       if (!previous.model && previous.depth_only == draw.depth_only &&
+          previous.native_sky == draw.native_sky &&
           previous.texture == draw.texture &&
           previous.normal_texture == draw.normal_texture &&
           bool(previous.sun_tl) == bool(draw.sun_tl) &&

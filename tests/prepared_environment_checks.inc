@@ -280,7 +280,7 @@ void check_environment_packs() {
   training.save();
   operation.put(
       "environment/lighting.json",
-      R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[0.0,1.25,4.0],"ambient_strength":0.0},"c4m4":{},"c4m6":{"ambient_color":[0.5,0.75,1.5],"ambient_strength":2.0}}})",
+      R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[0.0,1.25,4.0],"ambient_strength":0.0},"c4m4":{"sky_tint":[0.25,0.5,2.0],"sky_brightness":1.5},"c4m6":{"ambient_color":[0.5,0.75,1.5],"ambient_strength":2.0,"sky_tint":[0.0,1.0,4.0],"sky_brightness":4.0}}})",
       "MW34-lighting-v1");
   operation.registry["lighting"] = "environment/lighting.json";
   operation.save();
@@ -296,6 +296,7 @@ void check_environment_packs() {
   require(flags == FE_DIVBYZERO && after_rounding == rounding,
           "Environment admission changed native FP state");
   require(training_only.mission_ambient.empty() &&
+              training_only.mission_sky.empty() &&
               training_only.resources.at("training").count(EnvironmentRole::lighting) == 1,
           "Training lighting admitted mission ambient overrides");
   const auto combined = load_environment_packs(
@@ -314,7 +315,15 @@ void check_environment_packs() {
               combined.mission_ambient.at("c4m1").strength == 0.0f &&
               combined.mission_ambient.at("c4m6").color ==
                   std::array<float, 3>{0.5f, 0.75f, 1.5f} &&
-              combined.mission_ambient.at("c4m6").strength == 2.0f,
+              combined.mission_ambient.at("c4m6").strength == 2.0f &&
+              combined.mission_sky.size() == 2 &&
+              combined.mission_sky.count("c4m1") == 0 &&
+              combined.mission_sky.at("c4m4").tint ==
+                  std::array<float, 3>{0.25f, 0.5f, 2.0f} &&
+              combined.mission_sky.at("c4m4").brightness == 1.5f &&
+              combined.mission_sky.at("c4m6").tint ==
+                  std::array<float, 3>{0.0f, 1.0f, 4.0f} &&
+              combined.mission_sky.at("c4m6").brightness == 4.0f,
           "Mission ambient override selection mismatch");
   {
     const char *bad_op_lighting[] = {
@@ -337,6 +346,15 @@ void check_environment_packs() {
         R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":false}}})",
         R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":"1"}}})",
         R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[1,1,1],"ambient_strength":1e309}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1,1]}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_brightness":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1],"sky_brightness":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[-0.01,1,1],"sky_brightness":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,4.01,1],"sky_brightness":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[true,1,1],"sky_brightness":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1,1],"sky_brightness":-0.01}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1,1],"sky_brightness":4.01}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1,1],"sky_brightness":false}}})",
     };
     for (std::size_t i = 0; i < std::size(bad_op_lighting); ++i) {
       EnvironmentFixture bad_lighting(
