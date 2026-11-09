@@ -13,7 +13,7 @@ import urllib.request
 REPO = "roswellien/CoreCritical-MW3-RE"
 MISTRAL_ENDPOINT = "https://api.mistral.ai/v1/chat/completions"
 MAX_DIFF_BYTES = 65536  # 64 KiB cap
-MAX_OUTPUT_TOKENS = 1200
+MAX_OUTPUT_TOKENS = 4096
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -133,6 +133,50 @@ def get_pr_diff(pr_num: int, token: str) -> bytes:
         fail(f"Failed to fetch PR diff: {type(e).__name__}")
 
 
+def mistral_error_category(error: urllib.error.HTTPError) -> str:
+    try:
+        raw = error.read(4097)
+        detail = json.loads(raw) if len(raw) <= 4096 else None
+    except (OSError, ValueError):
+        detail = None
+    if not isinstance(detail, dict):
+        return "unclassified rejection"
+    provider_error = detail.get("error", detail)
+    if not isinstance(provider_error, dict):
+        return "unclassified rejection"
+    description = " ".join(
+        value.lower()
+        for key in ("code", "type", "message", "param")
+        if isinstance(value := provider_error.get(key), str)
+    )
+    for field, category in (
+        ("reasoning_effort", "reasoning setting rejected"),
+        ("response_format", "response format rejected"),
+        ("max_tokens", "output token limit rejected"),
+        ("model", "model setting rejected"),
+    ):
+        if field in description:
+            return category
+    return "unclassified rejection"
+
+
+def verdict_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        fail("Mistral response has no verdict text")
+    parts = []
+    for chunk in content:
+        if not isinstance(chunk, dict):
+            fail("Malformed Mistral response chunk")
+        if chunk.get("type") == "thinking":
+            continue
+        if chunk.get("type") != "text" or not isinstance(chunk.get("text"), str):
+            fail("Malformed Mistral response chunk")
+        parts.append(chunk["text"])
+    return "".join(parts)
+
+
 def main() -> None:
     pr_raw = os.environ.get("REVIEW_PR")
     pr_num = parse_positive_int(pr_raw, "REVIEW_PR")
@@ -192,9 +236,8 @@ def main() -> None:
     )
     request_data = {
         "model": mistral_model,
-        "temperature": 0,
+        "reasoning_effort": "medium",
         "max_tokens": MAX_OUTPUT_TOKENS,
-        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": user_prompt},
@@ -239,7 +282,7 @@ def main() -> None:
             if len(resp_bytes) > MAX_DIFF_BYTES:
                 fail("Mistral response exceeds byte limit")
     except urllib.error.HTTPError as e:
-        fail(f"Mistral API request failed with HTTP {e.code}")
+        fail(f"Mistral API request failed with HTTP {e.code}: {mistral_error_category(e)}")
     except urllib.error.URLError as e:
         fail(f"Mistral API request failed: {e.reason}")
     except Exception as e:
@@ -271,13 +314,15 @@ def main() -> None:
     choice = choices[0]
     finish_reason = choice.get("finish_reason")
     message = choice.get("message") or {}
-    content_raw = message.get("content") or ""
+    content_raw = verdict_text(message.get("content"))
 
     try:
         parsed_content = json.loads(content_raw)
     except Exception:
         fail("Mistral message content is not valid JSON")
 
+    if not isinstance(parsed_content, dict):
+        fail("Mistral verdict must be a JSON object")
     verdict = parsed_content.get("verdict")
     findings = parsed_content.get("findings")
 
