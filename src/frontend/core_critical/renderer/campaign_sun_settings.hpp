@@ -59,6 +59,12 @@ mission_sun_settings(const sun::Settings &base,
       result.sky_tint = found_sky->second.tint;
       result.sky_brightness = found_sky->second.brightness;
     }
+    const auto found_glow = environment->mission_sky_glow.find(mission_id);
+    if (found_glow != environment->mission_sky_glow.end()) {
+      result.glow_color = found_glow->second.color;
+      result.glow_strength = found_glow->second.strength;
+      result.glow_focus = found_glow->second.focus;
+    }
   }
   return result;
 }
