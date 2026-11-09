@@ -241,6 +241,27 @@ void env_lighting(const efs::path &path, const std::string &region,
         selected->mission_sky.emplace(item.key(),
                                       MissionSkyOverride{tint, brightness});
     }
+    const bool has_glow_color = entry.contains("sky_glow_color");
+    const bool has_glow_strength = entry.contains("sky_glow_strength");
+    const bool has_glow_focus = entry.contains("sky_glow_focus");
+    if (has_glow_color != has_glow_strength ||
+        has_glow_color != has_glow_focus)
+      env_fail("incomplete mission sky glow override");
+    if (has_glow_color) {
+      const auto &glow_json = entry["sky_glow_color"];
+      if (!glow_json.is_array() || glow_json.size() != 3)
+        env_fail("invalid mission sky_glow_color");
+      std::array<float, 3> glow_color{};
+      for (std::size_t i = 0; i < 3; ++i)
+        glow_color[i] = env_float(glow_json[i], 0.0, 4.0);
+      const float glow_strength =
+          env_float(entry["sky_glow_strength"], 0.0, 4.0);
+      const float glow_focus = env_float(entry["sky_glow_focus"], 0.0, 20.0);
+      if (selected)
+        selected->mission_sky_glow.emplace(
+            item.key(),
+            MissionSkyGlowOverride{glow_color, glow_strength, glow_focus});
+    }
   }
 }
 void env_header(const EnvPin &pin) {

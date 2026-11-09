@@ -280,7 +280,7 @@ void check_environment_packs() {
   training.save();
   operation.put(
       "environment/lighting.json",
-      R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[0.0,1.25,4.0],"ambient_strength":0.0},"c4m4":{"sky_tint":[0.25,0.5,2.0],"sky_brightness":1.5},"c4m6":{"ambient_color":[0.5,0.75,1.5],"ambient_strength":2.0,"sky_tint":[0.0,1.0,4.0],"sky_brightness":4.0}}})",
+      R"({"schema_version":1,"missions":{"c4m1":{"ambient_color":[0.0,1.25,4.0],"ambient_strength":0.0},"c4m3":{"sky_glow_color":[1.0,0.5,0.2],"sky_glow_strength":0.9,"sky_glow_focus":2.5},"c4m4":{"sky_tint":[0.25,0.5,2.0],"sky_brightness":1.5},"c4m6":{"ambient_color":[0.5,0.75,1.5],"ambient_strength":2.0,"sky_tint":[0.0,1.0,4.0],"sky_brightness":4.0,"sky_glow_color":[0.0,2.0,4.0],"sky_glow_strength":4.0,"sky_glow_focus":20.0}}})",
       "MW34-lighting-v1");
   operation.registry["lighting"] = "environment/lighting.json";
   operation.save();
@@ -297,6 +297,7 @@ void check_environment_packs() {
           "Environment admission changed native FP state");
   require(training_only.mission_ambient.empty() &&
               training_only.mission_sky.empty() &&
+              training_only.mission_sky_glow.empty() &&
               training_only.resources.at("training").count(EnvironmentRole::lighting) == 1,
           "Training lighting admitted mission ambient overrides");
   const auto combined = load_environment_packs(
@@ -309,6 +310,7 @@ void check_environment_packs() {
           "Environment region selection mismatch");
   require(combined.resources.at("operation4").count(EnvironmentRole::lighting) == 1 &&
               combined.mission_ambient.size() == 2 &&
+              combined.mission_ambient.count("c4m3") == 0 &&
               combined.mission_ambient.count("c4m4") == 0 &&
               combined.mission_ambient.at("c4m1").color ==
                   std::array<float, 3>{0.0f, 1.25f, 4.0f} &&
@@ -318,12 +320,24 @@ void check_environment_packs() {
               combined.mission_ambient.at("c4m6").strength == 2.0f &&
               combined.mission_sky.size() == 2 &&
               combined.mission_sky.count("c4m1") == 0 &&
+              combined.mission_sky.count("c4m3") == 0 &&
               combined.mission_sky.at("c4m4").tint ==
                   std::array<float, 3>{0.25f, 0.5f, 2.0f} &&
               combined.mission_sky.at("c4m4").brightness == 1.5f &&
               combined.mission_sky.at("c4m6").tint ==
                   std::array<float, 3>{0.0f, 1.0f, 4.0f} &&
-              combined.mission_sky.at("c4m6").brightness == 4.0f,
+              combined.mission_sky.at("c4m6").brightness == 4.0f &&
+              combined.mission_sky_glow.size() == 2 &&
+              combined.mission_sky_glow.count("c4m1") == 0 &&
+              combined.mission_sky_glow.count("c4m4") == 0 &&
+              combined.mission_sky_glow.at("c4m3").color ==
+                  std::array<float, 3>{1.0f, 0.5f, 0.2f} &&
+              combined.mission_sky_glow.at("c4m3").strength == 0.9f &&
+              combined.mission_sky_glow.at("c4m3").focus == 2.5f &&
+              combined.mission_sky_glow.at("c4m6").color ==
+                  std::array<float, 3>{0.0f, 2.0f, 4.0f} &&
+              combined.mission_sky_glow.at("c4m6").strength == 4.0f &&
+              combined.mission_sky_glow.at("c4m6").focus == 20.0f,
           "Mission ambient override selection mismatch");
   {
     const char *bad_op_lighting[] = {
@@ -355,6 +369,22 @@ void check_environment_packs() {
         R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1,1],"sky_brightness":-0.01}}})",
         R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1,1],"sky_brightness":4.01}}})",
         R"({"schema_version":1,"missions":{"c4m1":{"sky_tint":[1,1,1],"sky_brightness":false}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1]}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_strength":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_strength":1,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1],"sky_glow_strength":1,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[-0.01,1,1],"sky_glow_strength":1,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,4.01,1],"sky_glow_strength":1,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[true,1,1],"sky_glow_strength":1,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_strength":-0.01,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_strength":4.01,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_strength":false,"sky_glow_focus":1}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_strength":1,"sky_glow_focus":-0.01}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_strength":1,"sky_glow_focus":20.01}}})",
+        R"({"schema_version":1,"missions":{"c4m1":{"sky_glow_color":[1,1,1],"sky_glow_strength":1,"sky_glow_focus":false}}})",
     };
     for (std::size_t i = 0; i < std::size(bad_op_lighting); ++i) {
       EnvironmentFixture bad_lighting(
