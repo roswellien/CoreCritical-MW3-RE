@@ -444,6 +444,15 @@ void main() {
     if(sun.ambient.w>0.5)rgb=n*0.5+0.5;
     float alpha = operation(draw.mode.z).a;
     if ((flags & 8u) != 0u) rgb = min(rgb + specular.rgb, 1.0);
+    // Lift SDR shadows without moving black or the highlight endpoint.
+    if (sun.weatherFog.z > 0.0 && sun.extra.w <= 1.5 &&
+        sun.ambient.w <= 0.5 && sun.skyBlend.w <= 0.5 &&
+        sun.detailMotion.w >= 0.0) {
+        float peak = max(rgb.r, max(rgb.g, rgb.b));
+        rgb *= 1.0 + sun.weatherFog.z * (1.0 - clamp(peak, 0.0, 1.0));
+        peak = max(rgb.r, max(rgb.g, rgb.b));
+        rgb *= 1.0 + sun.weatherFog.w * (1.0 - clamp(peak, 0.0, 1.0));
+    }
     if ((flags & 16u) != 0u) rgb = sun.skyEye.w>0.5?skyDither(mix(hazeColor(skyView()), rgb, specular.a)):mix(draw.fogColor.rgb, rgb, specular.a);
     if ((flags & 32u) != 0u) {
         uint f = draw.mode.w & 255u;

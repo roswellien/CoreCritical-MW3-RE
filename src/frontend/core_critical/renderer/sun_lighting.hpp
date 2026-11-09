@@ -47,11 +47,15 @@ struct Settings {
   float valley_fog_density{0.0f};
   float valley_fog_altitude{0.0f};
   float night_world_gain{1.0f};
+  float sdr_shadow_lift{0.f};
+  float sdr_extra_shadow_lift{0.f};
 };
 inline Settings display_ambient(Settings settings, bool lighting_mode_enabled,
                                 bool hdr_enabled) {
-  if (settings.enabled && lighting_mode_enabled && !hdr_enabled)
+  if (settings.enabled && lighting_mode_enabled && !hdr_enabled) {
     settings.ambient *= 1.2f;
+    settings.sdr_shadow_lift = .78f;
+  }
   return settings;
 }
 
@@ -178,7 +182,7 @@ struct alignas(16) Uniform {
   // motion.
   std::array<float, 4> weather{},
       weather_fog{}; // wetness, heat haze, dust, lava; density, altitude,
-                     // reserved
+                     // SDR shadow lift, extra SDR shadow lift
   std::array<float, 4> emission_params{};
   std::array<std::array<float, 4>, 32> emission_regions{};
   std::array<float, 4> geometry_fog0{}, geometry_fog1{};
@@ -211,7 +215,8 @@ inline Uniform uniform(const std::array<float, 12> &normal, const Settings &s) {
                  s.glow_focus};
   u.sky_blend = {s.horizon_low, s.horizon, s.anti_haze, 0};
   u.weather = {s.rain_wetness, s.heat_shimmer, s.dust_intensity, s.lava_glow};
-  u.weather_fog = {s.valley_fog_density, s.valley_fog_altitude, 0, 0};
+  u.weather_fog = {s.valley_fog_density, s.valley_fog_altitude,
+                   s.sdr_shadow_lift, s.sdr_extra_shadow_lift};
   return u;
 }
 // Orthographic sun view: x/y span [-range,range] around a centre snapped to

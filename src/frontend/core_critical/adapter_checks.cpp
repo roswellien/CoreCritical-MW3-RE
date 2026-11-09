@@ -1411,6 +1411,12 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
                      options.geometry == "cpu-reference");
   };
   {
+    // Measure the authored BRDF profile without the SDR display curve.
+    const auto properties = SDL_GetWindowProperties(window);
+    const auto hdr_property = SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN;
+    const bool hdr_enabled = SDL_GetBooleanProperty(properties, hdr_property, false);
+    require(SDL_SetBooleanProperty(properties, hdr_property, true),
+            "Cannot isolate the BWSFM fixture from the SDR curve");
     const auto azimuth = options.sun_azimuth;
     const auto elevation = options.sun_elevation;
     const auto focal_x = context.fx_near, focal_y = context.fy_near;
@@ -1476,6 +1482,8 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
     options.sun_elevation = elevation;
     context.fx_near = focal_x;
     context.fy_near = focal_y;
+    require(SDL_SetBooleanProperty(properties, hdr_property, hdr_enabled),
+            "Cannot restore display mode after BWSFM check");
   }
   const auto flat = render_material("flat", 0xffd980d9);
   require(render_material("normal", 0xffff8080) == flat,
@@ -1518,13 +1526,16 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       0.0, ((nx - nz) * std::cos(35 * radians) * std::cos(45 * radians) +
             ny * std::sin(35 * radians)) /
                len);
-  const double ambient =
-      SDL_GetBooleanProperty(SDL_GetWindowProperties(window),
-                             SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN, false)
-          ? .30
-          : .36;
-  const int expected =
-      int(std::lround(std::min(1.0, ambient + .85 * direct) * 255));
+  const bool hdr_enabled = SDL_GetBooleanProperty(
+      SDL_GetWindowProperties(window), SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN,
+      false);
+  const double ambient = hdr_enabled ? .30 : .36;
+  const auto display_red = [hdr_enabled](double red) {
+    red = std::clamp(red, 0.0, 1.0);
+    return int(std::lround(
+        red * (hdr_enabled ? 1.0 : 1.0 + .78 * (1.0 - red)) * 255));
+  };
+  const int expected = display_red(ambient + .85 * direct);
   require(
       std::abs(int((scaled[centre] >> 16) & 255) - expected) <= 1,
       "Nonuniform source scale did not use inverse-transpose material normals");
@@ -1535,7 +1546,7 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
   const double ratio = .8 / 1.7;
   const double mapped_z = 1.0 / std::sqrt(1 + ratio * ratio);
   const int mapped_expected =
-      int(std::lround((ambient + .85 * std::cos(35 * radians) * mapped_z) * 255));
+      display_red(ambient + .85 * std::cos(35 * radians) * mapped_z);
   require(
       std::abs(int((scaled_map[centre] >> 16) & 255) - mapped_expected) <= 1,
       "Tangent basis used normal coordinates instead of true world positions");
@@ -1550,8 +1561,8 @@ void check_prepared(SDL_Window *window, sdlfe::RendererBackend backend,
       render_material("flat", 0xffff8080, false, false, false, {1, 0, 1});
   const auto clipped_normal =
       render_material("normal", 0xffd980d9, false, false, false, {1, 0, 1});
-  const int clipped_expected = int(std::lround(
-      (ambient + .85 * std::cos(35 * radians) * std::sin(45 * radians)) * 255));
+  const int clipped_expected = display_red(
+      ambient + .85 * std::cos(35 * radians) * std::sin(45 * radians));
   require(
       std::abs(int((clipped_flat[centre] >> 16) & 255) - clipped_expected) <= 1,
       "Clipped geometry lost its authored smooth normals");
@@ -1614,11 +1625,21 @@ void check_campaign_lighting_and_policy() {
   base.enabled = true;
   const auto sdr = mw34::sun::display_ambient(base, true, false);
   require(sdr.ambient == base.ambient * 1.2f && sdr.color == base.color &&
-              sdr.strength == base.strength,
+              sdr.strength == base.strength && sdr.sdr_shadow_lift == .78f,
           "SDR should boost only ambient light");
   require(mw34::sun::display_ambient(base, true, true).ambient == base.ambient &&
               mw34::sun::display_ambient(base, false, false).ambient == base.ambient,
           "HDR and lighting-off should retain authored ambient");
+  const auto c1m2_lift =
+      mission_sun_settings(base, resolve_mission_lighting("c1m2"), true, false,
+                           nullptr, "c1m2");
+  const auto c1m1_lift =
+      mission_sun_settings(base, resolve_mission_lighting("c1m1"), true, false,
+                           nullptr, "c1m1");
+  require(c1m2_lift.sdr_extra_shadow_lift > 0.f &&
+              c1m1_lift.sdr_extra_shadow_lift == 0.f &&
+              base.sdr_extra_shadow_lift == 0.f,
+          "C1M2 SDR tuning leaked into other missions");
   const auto training = resolve_mission_lighting("t1m1");
   const auto lit = mission_sun_settings(base, training, true, false);
   require(lit.azimuth == 95.f && lit.elevation == 6.f && lit.strength == 1.05f,
