@@ -1,0 +1,49 @@
+name: Mistral API PR Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number'
+        required: true
+        type: string
+      head:
+        description: 'Expected head commit SHA (40 hex)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review:
+    name: Review PR
+    if: github.repository == 'roswellien/CoreCritical-MW3-RE' && github.actor == 'roswellien' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Run manual PR review
+        env:
+          REVIEW_PR: ${{ inputs.pr }}
+          REVIEW_HEAD: ${{ inputs.head }}
+          GITHUB_TOKEN: ${{ github.token }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MISTRAL_REVIEW_MODEL: ${{ vars.MISTRAL_REVIEW_MODEL }}
+          MISTRAL_INPUT_MICRO_USD_PER_MILLION: ${{ vars.MISTRAL_INPUT_MICRO_USD_PER_MILLION }}
+          MISTRAL_OUTPUT_MICRO_USD_PER_MILLION: ${{ vars.MISTRAL_OUTPUT_MICRO_USD_PER_MILLION }}
+          MISTRAL_MAX_REVIEW_MICRO_USD: ${{ vars.MISTRAL_MAX_REVIEW_MICRO_USD }}
+        run: python3 tools/github/fork_api_review.py
+
+      - name: Upload review receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: review-receipt
+          path: review-receipt.json
+          if-no-files-found: ignore
