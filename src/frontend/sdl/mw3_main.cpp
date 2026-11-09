@@ -184,6 +184,7 @@ struct Args {
   std::string patch;          // --patch PATH (ours, patch_import.h): the official 1.2 patch into the write dir's overlay
   std::string install_from, install_to;  // --install-from PATH, --install-to DIR (ours, disc_install.h)
   bool windowed = false;      // --windowed (or windowed=1 in mw3.cfg): not fullscreen
+  bool borderless = false;    // --borderless: use the desktop fullscreen mode
   bool window_given = false;  // --window: kept, the frame pillarboxed in it (else the frame's shape)
   std::string chain;          // --campaign-chain new:N / resume:N (ours, campaign_chain.h)
   std::string modes;          // --action-chain all / c2 / c2:4 (ours, modes_chain.h)
@@ -258,7 +259,7 @@ void usage() {
       "    [--cc-geometry legacy|partial|gpu|cpu-reference] "
       "[--cc-geometry-debug normals]\n"
       "    [--cc-render-thread 0|1]\n"
-      "    [--windowed] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] "
+      "    [--windowed | --borderless] [--cc-vulkan | --cc-vulkan-wsi] [--cc-aa MODE] "
       "[--cc-af LEVEL] "
       "[--original] [--import | --no-import] [--no-launcher] [--debug-camera] "
       "[--wide-menus | "
@@ -386,6 +387,7 @@ bool parse(int argc, char** argv, Args& a) {
     }
     else if (s == "--hidden") a.hidden = true;
     else if (s == "--windowed") a.windowed = true;
+    else if (s == "--borderless") a.borderless = true;
     else if (s == "--no-import") a.no_import = true;
     else if (s == "--cc-vulkan") a.backend = sdlfe::RendererBackend::core_critical_dxgi, a.no_launcher = true;
     else if (s == "--cc-hud" && next(1)) a.hud.mode = argv[++i], a.hud_mode_given = true;
@@ -948,8 +950,11 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   if (a.backend == sdlfe::RendererBackend::sdl &&
       (a.quality.antialiasing != "off" || a.quality.anisotropy != "1" || !a.cc_assets.empty()))
     return std::fprintf(stderr, "mw3: Core Critical options require a Core Critical Vulkan backend\n"), 1;
-  if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given)
-    return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed or --window WxH\n"), 1;
+  if (a.borderless && (a.window_given || a.hidden ||
+                       a.backend != sdlfe::RendererBackend::core_critical_wsi))
+    return std::fprintf(stderr, "mw3: --borderless requires Vulkan WSI and a visible desktop window\n"), 1;
+  if (a.backend != sdlfe::RendererBackend::sdl && !a.windowed && !a.window_given && !a.borderless)
+    return std::fprintf(stderr, "mw3: Core Critical Vulkan requires --windowed, --window WxH or --borderless\n"), 1;
   auto selected_assets = a.cc_assets;
   if (!selected_assets.environment_packs.empty())
     std::fprintf(stderr, "Environment packs requested: %zu\n",
@@ -989,7 +994,8 @@ int run(const Args& a, platform::VideoForWindows* vfw) {
   window.set_auto_size(!a.window_given);
   // Fullscreen by default (ours): the desktop's size, the frame fitted in it
   // (sdl_fit.h). Checks and shots stay in a window.
-  window.set_fullscreen(!a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
+  window.set_fullscreen(a.borderless ||
+      (!a.windowed && !a.window_given && !a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty()));
   // FIX (B): a first start's mission at the desktop's size; checks and shots keep 640x480.
   window.set_first_start_desktop(!a.hidden && a.frames == 0 && a.chain.empty() && a.modes.empty());
   sdlfe::SdlZinHost zin_host(&input);
