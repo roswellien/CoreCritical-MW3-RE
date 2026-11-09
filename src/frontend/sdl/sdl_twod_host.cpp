@@ -32,6 +32,13 @@
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/app_engine.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace sdlfe {
 
 namespace {
@@ -40,9 +47,10 @@ std::string find_text_font(const std::string& filename) {
   auto mounted = zutl::find(filename.c_str());
   if (!mounted.empty()) return mounted;
 #ifdef _WIN32
-  const char* windows = SDL_getenv("WINDIR");
-  if (windows && *windows) {
-    const auto fonts = std::filesystem::u8path(windows) / "Fonts";
+  wchar_t windows[MAX_PATH];
+  const auto length = GetWindowsDirectoryW(windows, MAX_PATH);
+  if (length > 0 && length < MAX_PATH) {
+    const auto fonts = std::filesystem::path(windows) / L"Fonts";
     const auto installed = [&](const std::string& name) -> std::string {
       const auto path = fonts / name;
       std::error_code error;
