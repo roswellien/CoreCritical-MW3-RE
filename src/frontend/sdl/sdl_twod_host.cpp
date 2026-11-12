@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 
 #include "frontend/sdl/gdi_font_size.h"
@@ -31,9 +32,45 @@
 #include "gamez/zvideo/zvid_format.h"
 #include "mech3/app_engine.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace sdlfe {
 
 namespace {
+
+std::string find_text_font(const std::string& filename) {
+  auto mounted = zutl::find(filename.c_str());
+  if (!mounted.empty()) return mounted;
+#ifdef _WIN32
+  wchar_t windows[MAX_PATH];
+  const auto length = GetWindowsDirectoryW(windows, MAX_PATH);
+  if (length > 0 && length < MAX_PATH) {
+    const auto fonts = std::filesystem::path(windows) / L"Fonts";
+    const auto installed = [&](const std::string& name) -> std::string {
+      const auto path = fonts / name;
+      std::error_code error;
+      return std::filesystem::is_regular_file(path, error) ? path.u8string() : std::string{};
+    };
+    auto path = installed(filename);
+    if (!path.empty()) return path;
+    if (filename == "lucon.ttf") {
+      path = installed("consola.ttf");
+      return path.empty() ? installed("cour.ttf") : path;
+    }
+    if (filename == "impact.ttf") {
+      path = installed("arialbd.ttf");
+      return path.empty() ? installed("arial.ttf") : path;
+    }
+    if (filename == "arial.ttf") return installed("segoeui.ttf");
+  }
+#endif
+  return {};
+}
 
 constexpr uint32_t kCalcRect = 0x400, kWordBreak = 0x10, kCenter = 0x1, kRight = 0x2, kNoPrefix = 0x800,
                    kSingleLine = 0x20, kVCenter = 0x4, kBottom = 0x8;
@@ -420,9 +457,9 @@ SdlTwodHost::Dc* SdlTwodHost::dc(Handle h) {
 // (ascent + descent), 0 a default of 12 pixels.
 TTF_Font* SdlTwodHost::open_ttf(Font& f) {
   if (f.ttf || !ttf_ok_) return f.ttf;
-  const std::string path = zutl::find(font_file(f.face).c_str());
+  const std::string path = find_text_font(font_file(f.face));
   if (path.empty()) {
-    std::fprintf(stderr, "mw3: font %s (%s) not found in the game folder\n", f.face.c_str(),
+    std::fprintf(stderr, "mw3: font %s (%s) not found\n", f.face.c_str(),
                  font_file(f.face).c_str());
     return nullptr;
   }
@@ -728,7 +765,7 @@ std::shared_ptr<const platform::HudImage> SdlTwodHost::hud_text_image(const zimg
         for (const auto& old : hud_fonts_) TTF_CloseFont(old.second);
         hud_fonts_.clear();
       }
-      const auto path = zutl::find(font_file(line.face).c_str());
+      const auto path = find_text_font(font_file(line.face));
       TTF_Font* opened = path.empty() ? nullptr : TTF_OpenFont(path.c_str(), line.em * k);
       if (!opened) throw std::runtime_error("Cannot open the enhanced HUD font");
       TTF_SetFontHinting(opened, TTF_HINTING_LIGHT);
