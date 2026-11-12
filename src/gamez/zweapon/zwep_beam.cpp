@@ -43,7 +43,6 @@ void add_scaled(const Vec3f3& base, const Vec3f3& dir, float s, Vec3f3* out) {  
   zmth::add_scaled(v3(base), v3(dir), s, &o);
   *out = f3(o);
 }
-int32_t soil_of(Handle material) { return material && hit_hooks().soil ? hit_hooks().soil(material) : 0; }
 void set_active(Handle n, int32_t on) {
   if (rh().set_active) rh().set_active(n, on);
 }
@@ -224,7 +223,7 @@ int32_t beam_cast(WeaponDef* def, Beam* b, BeamSegment* s, const Vec3f3* to) {
       const float d = beam_damage(def, b);
       if (!eq0(d)) apply_damage(def, b->owner, &s->start, h, d, nullptr);
     }
-    sound(def, h, soil_of(h->material), 1.0f);
+    sound(def, h, soil_of(def, h->material), 1.0f);
     s->length = zmth::distance(v3(s->start), v3(h->point));
     return 1;
   }
@@ -333,7 +332,7 @@ void beam_update(WeaponDef* def) {
         if (pick(def, r, &g_list)) {
           HitRecord* rec = &g_list.rec[g_list.count];
           const int32_t cls = classify(def, rec, from, &s->start, &len, &bounce_len, &bounce_dir);
-          sound(def, rec, soil_of(rec->material), 1.0f);
+          sound(def, rec, soil_of(def, rec->material), 1.0f);
           acc = acc + len;
           if (cls == 0) {
             if (def->flags & kDesignate) {
@@ -357,14 +356,14 @@ void beam_update(WeaponDef* def) {
               if (!eq0(dmg)) apply_damage(def, b->owner, from, rec, dmg, nullptr);
             }
           } else {
-            const int32_t soil = soil_of(rec->material);
+            const int32_t soil = soil_of(def, rec->material);
             if (def->flags & kDesignate) {
               const float t = b->timer - dt;
               b->timer = t;
               if (!(t > 0.0f)) b->timer = 0;
               else sound_frequency(b->sound, t / def->detonation_distance_sq);
             } else {
-              if ((b->flags & 1) && def->impacts[soil].animation) play_at(def->impacts[soil].animation, rec->point);
+              if ((b->flags & 1) && def->impacts && def->impacts[soil].animation) play_at(def->impacts[soil].animation, rec->point);
               b->timer = dt + b->timer;
             }
           }

@@ -17,8 +17,6 @@ FireState g_fire;
 HitState g_hit;
 HitHooks g_hh;
 
-int32_t soil_of(Handle material) { return material && g_hh.soil ? g_hh.soil(material) : 0; }
-
 void play_at(Handle anim, const Vec3f3& p) {
   const float a[9] = {p.x, p.y, p.z, 0, 0, 0, 0, 0, 0};
   if (g_hh.effect) g_hh.effect(anim, a);
@@ -28,6 +26,16 @@ void play_at(Handle anim, const Vec3f3& p) {
 FireState& fire_state() { return g_fire; }
 HitState& hit_state() { return g_hit; }
 HitHooks& hit_hooks() { return g_hh; }
+
+int32_t checked_soil(const WeaponDef* def, int32_t soil) {
+  const int32_t limit = def ? def->impact_count : kSoilCount;
+  return (soil >= 0 && soil < limit) ? soil : kSoilDefault;
+}
+
+int32_t soil_of(const WeaponDef* def, Handle material) {
+  const int32_t raw = material && g_hh.soil ? g_hh.soil(material) : kSoilDefault;
+  return checked_soil(def, raw);
+}
 
 // Mech3.exe 1.2 @ 0x00583020: a beam's damage this frame. Short beams deal it
 // once a shot; it falls off as the cosine over the beam's reach, down to
@@ -322,7 +330,7 @@ uint32_t apply_damage(WeaponDef* def, Handle owner, const Vec3f3* from, HitRecor
     if (!(v > 0.0f)) v = 0.0f;
     p->health = v;
   } else if (g_hh.handler_live && g_hh.handler_live(h)) {
-    const int32_t soil = soil_of(hit->material);
+    const int32_t soil = soil_of(def, hit->material);
     if (g_hit.record_shot == 1) {
       g_hit.shot_from = *from;
       g_hit.shot_to = hit->point;
@@ -342,7 +350,7 @@ uint32_t apply_damage(WeaponDef* def, Handle owner, const Vec3f3* from, HitRecor
           break;
         }
       }
-    } else if ((def->flags & kBeam) && g_hit.beam_ground_fx && def->impacts[soil].animation) {
+    } else if ((def->flags & kBeam) && g_hit.beam_ground_fx && def->impacts && def->impacts[soil].animation) {
       play_at(def->impacts[soil].animation, hit->point);
     }
   }
@@ -354,7 +362,7 @@ uint32_t apply_damage(WeaponDef* def, Handle owner, const Vec3f3* from, HitRecor
 // damage, craters, the sound, animations and effect. The callback's bits skip
 // the sound (1), craters and effect (2), the animation (4).
 uint32_t impact(WeaponDef* def, HitRecord* rec, Projectile* p, Handle anim) {
-  const int32_t soil = soil_of(rec->material);
+  const int32_t soil = soil_of(def, rec->material);
   int32_t skip = 0;
   uint32_t flags = 0;
   if (def->callback) flags = def->callback(def, rec, p);
@@ -364,8 +372,8 @@ uint32_t impact(WeaponDef* def, HitRecord* rec, Projectile* p, Handle anim) {
     skip &= g_hh.crater ? g_hh.crater(def, rec, soil, p) : crater(def, rec, p);
   } else if ((def->flags & kQuicksand) && !(flags & 2)) {
     if (HitRecord* k = g_hit.killed_at) {
-      if (g_hh.quicksand) g_hh.quicksand(def, k, soil_of(k->material), p);
-      else quicksand(def, k, soil_of(k->material), p);
+      if (g_hh.quicksand) g_hh.quicksand(def, k, soil_of(def, k->material), p);
+      else quicksand(def, k, soil_of(def, k->material), p);
     } else if (g_hh.quicksand) {
       g_hh.quicksand(def, rec, soil, p);
     } else {
@@ -374,19 +382,19 @@ uint32_t impact(WeaponDef* def, HitRecord* rec, Projectile* p, Handle anim) {
   }
   // A kill makes its own crater where it fell.
   if (g_hit.killed && (def->flags & kCrater) && g_hit.killed_at && !(flags & 2)) {
-    if (g_hh.crater) g_hh.crater(def, g_hit.killed_at, soil_of(g_hit.killed_at->material), p);
+    if (g_hh.crater) g_hh.crater(def, g_hit.killed_at, soil_of(def, g_hit.killed_at->material), p);
     else crater(def, g_hit.killed_at, p);
   }
   if ((def->flags & kQuicksand) && g_hit.killed_at && !(flags & 2)) {
-    if (g_hh.quicksand) g_hh.quicksand(def, g_hit.killed_at, soil_of(g_hit.killed_at->material), p);
-    else quicksand(def, g_hit.killed_at, soil_of(g_hit.killed_at->material), p);
+    if (g_hh.quicksand) g_hh.quicksand(def, g_hit.killed_at, soil_of(def, g_hit.killed_at->material), p);
+    else quicksand(def, g_hit.killed_at, soil_of(def, g_hit.killed_at->material), p);
     return r;
   }
   if (!(flags & 1)) {
     if (g_hh.sound) g_hh.sound(def, rec, soil, 1.0f);
     else sound(def, rec, soil, 1.0f);  // 0x00582f60 (zwep_shot.cpp)
   }
-  if (!skip) {
+  if (!skip && def->impacts) {
     if (!(flags & 4) && r == 0) {
       if (Handle a = def->impacts[soil].animation) play_at(anim ? anim : a, rec->point);
     }
@@ -400,8 +408,10 @@ uint32_t impact(WeaponDef* def, HitRecord* rec, Projectile* p, Handle anim) {
       if (g_hh.effect) g_hh.effect(s, a);
     }
   }
-  if (const int32_t e = def->impacts[soil].effect; e && !(flags & 2) && g_hh.impact_effect)
-    g_hh.impact_effect(e, &rec->point);
+  if (def->impacts) {
+    if (const int32_t e = def->impacts[soil].effect; e && !(flags & 2) && g_hh.impact_effect)
+      g_hh.impact_effect(e, &rec->point);
+  }
   return r;
 }
 
@@ -458,8 +468,8 @@ void hit(WeaponDef* def, Projectile* p, HitRecord* rec) {
   }
   Handle anim = nullptr;
   if (min_range && p->travelled < def->range_min[0]) {
-    const int32_t soil = soil_of(rec->material);
-    if (Handle a = def->impacts[soil].animation_min_range) anim = a;
+    const int32_t soil = soil_of(def, rec->material);
+    if (def->impacts && def->impacts[soil].animation_min_range) anim = def->impacts[soil].animation_min_range;
     else if (def->destroy_animation) anim = def->destroy_animation;
     p->damage_scale = def->range_min[1] * p->damage_scale;
   }
@@ -500,7 +510,7 @@ void set_lock(int32_t* flag, LockRef* target) {
 
 // Mech3.exe 1.2 @ 0x00581f70: which FIRE sound the next shot plays, -1 none.
 bool set_fire_sound(WeaponDef* def, int32_t choice) {
-  if (!def || choice >= def->fire.sound_count) return false;
+  if (!def || choice < -1 || choice >= def->fire.sound_count || choice >= 4) return false;
   def->fire.sound_choice = choice;
   return true;
 }
